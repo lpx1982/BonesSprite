@@ -97,7 +97,7 @@ export function TopMenu() {
   };
 
   return (
-    <div ref={rootRef} className="relative" style={{ height: M.HEADER_HEIGHT }}>
+    <div ref={rootRef} className="relative flex items-center" style={{ height: M.HEADER_HEIGHT }}>
       {/* Logo + 版本徽章（点击区）
           - 关闭时显示 🩻 PixiBones + TRIAL
           - 打开时变成透明（宽度不变），让面板里的 logo 接管视觉效果 */}
@@ -130,6 +130,27 @@ export function TopMenu() {
           </>
         )}
       </button>
+
+      {/* 快捷按钮：打开 / 保存 / 撤消 / 重做（Spine 风格） */}
+      {!open && (
+        <div className="flex items-center" style={{ gap: 2, paddingLeft: 4 }}>
+          <QuickBtn title="打开项目…  (Cmd+O)" onClick={() => console.log('[QuickBtn] 打开项目')}>
+            <IconOpen />
+          </QuickBtn>
+          <QuickBtn title="保存项目 (Cmd+S) / Shift+点击 = 另存为" onClick={(e) => {
+            if (e.shiftKey) console.log('[QuickBtn] 另存为');
+            else console.log('[QuickBtn] 保存');
+          }}>
+            <IconSave />
+          </QuickBtn>
+          <QuickBtn title="撤消 (Cmd+Z)" onClick={() => console.log('[QuickBtn] 撤消（未实现）')}>
+            <IconUndo />
+          </QuickBtn>
+          <QuickBtn title="重做 (Cmd+Shift+Z)" onClick={() => console.log('[QuickBtn] 重做（未实现）')}>
+            <IconRedo />
+          </QuickBtn>
+        </div>
+      )}
 
       {/* 下拉菜单：从窗口最左上角弹出，盖住 header 和左侧 ruler */}
       {open && (
@@ -237,5 +258,86 @@ export function TopMenu() {
         </div>
       )}
     </div>
+  );
+}
+
+// =================================================================================
+//  快捷按钮 + inline SVG icons（打开 / 保存 / 撤消 / 重做）
+// =================================================================================
+const QUICK_BTN_SIZE = 24;
+
+function QuickBtn({
+  title, onClick, children,
+}: {
+  title: string;
+  onClick: (e: React.MouseEvent) => void;
+  children: React.ReactNode;
+}) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        width: QUICK_BTN_SIZE,
+        height: QUICK_BTN_SIZE,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: hover ? 'rgba(255, 255, 255, 0.08)' : 'transparent',
+        border: 'none',
+        borderRadius: 3,
+        cursor: 'pointer',
+        color: 'var(--spine-text-dim)',
+        padding: 0,
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+const ICON_BTN_PROPS = { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
+
+function IconOpen() {
+  // 文件夹 + 打开箭头
+  return (
+    <svg {...ICON_BTN_PROPS}>
+      <path d="M1.5 4 L6 4 L7.5 5.5 L14.5 5.5 L14.5 12 L1.5 12 Z" />
+      <path d="M4 9 L8 9" />
+      <path d="M6 7 L8 9 L6 11" />
+    </svg>
+  );
+}
+
+function IconSave() {
+  // 软盘
+  return (
+    <svg {...ICON_BTN_PROPS}>
+      <path d="M2.5 2.5 L10.5 2.5 L13.5 5.5 L13.5 13.5 L2.5 13.5 Z" />
+      <rect x="4.5" y="2.5" width="5" height="4" />
+      <rect x="4.5" y="9.5" width="7" height="4" />
+    </svg>
+  );
+}
+
+function IconUndo() {
+  // 左弯箭头
+  return (
+    <svg {...ICON_BTN_PROPS}>
+      <path d="M3.5 8 L6 5.5 M3.5 8 L6 10.5 M3.5 8 L9 8 A4 4 0 0 1 13 12" />
+    </svg>
+  );
+}
+
+function IconRedo() {
+  // 右弯箭头
+  return (
+    <svg {...ICON_BTN_PROPS}>
+      <path d="M12.5 8 L10 5.5 M12.5 8 L10 10.5 M12.5 8 L7 8 A4 4 0 0 0 3 12" />
+    </svg>
   );
 }
