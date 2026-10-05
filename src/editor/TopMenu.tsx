@@ -112,17 +112,16 @@ export function TopMenu() {
         title="主菜单"
       >
         <span style={{ fontSize: 14, fontWeight: 600 }}>🩻 PixiBones</span>
+        {/* header 平时态：只显示 Trial 缩写（不显示版本号数字） */}
         <span
           style={{
-            background: M.TRIAL_BG,
-            color: M.TRIAL_COLOR,
-            fontSize: 11,
-            fontWeight: 500,
-            padding: '2px 8px',
-            borderRadius: 3,
+            color: M.LOGO_COLOR,
+            fontSize: 12,
+            fontWeight: 600,
+            letterSpacing: 1,
           }}
         >
-          0.1.0 Trial
+          TRIAL
         </span>
       </button>
 
@@ -140,6 +139,32 @@ export function TopMenu() {
             padding: '4px 0',
           }}
         >
+          {/* 面板顶部：完整 logo + 完整版本号（仅展开时显示） */}
+          <div
+            className="flex items-center"
+            style={{
+              height: 36,
+              padding: '0 10px',
+              marginBottom: 4,
+              borderBottom: M.DIVIDER,
+            }}
+          >
+            <span style={{ fontSize: 14, fontWeight: 600, color: M.LOGO_COLOR, marginRight: 12 }}>
+              🩻 PixiBones
+            </span>
+            <span
+              style={{
+                background: M.TRIAL_BG,
+                color: M.TRIAL_COLOR,
+                fontSize: 11,
+                fontWeight: 500,
+                padding: '2px 8px',
+                borderRadius: 3,
+              }}
+            >
+              0.1.0 Trial
+            </span>
+          </div>
           {MENU_ITEMS.map((item, i) =>
             item.divider ? (
               <div key={`d-${i}`} style={{ height: 1, background: M.DIVIDER, margin: '4px 0' }} />
