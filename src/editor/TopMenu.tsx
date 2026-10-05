@@ -140,16 +140,26 @@ export function TopMenu() {
             transformOrigin: 'top left',
           }}
         >
-          {/* 面板顶部：仅显示版本徽章（logo 在 header 已显示，避免重复） */}
+          {/* 面板顶部：完整 logo + 完整版本徽章（Spine 风格面板头） */}
           <div
             className="flex items-center"
             style={{
-              height: 30,
+              height: 36,
               padding: '0 10px',
               marginBottom: 4,
               borderBottom: M.DIVIDER,
             }}
           >
+            <span
+              style={{
+                fontSize: 14,
+                fontWeight: 600,
+                color: M.LOGO_COLOR,
+                marginRight: 12,
+              }}
+            >
+              🩻 PixiBones
+            </span>
             <span
               style={{
                 background: M.TRIAL_BG,
