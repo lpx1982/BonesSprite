@@ -47,6 +47,7 @@ export interface PixiBonesState {
   // ---- UI state ----
   showLeftPanel: boolean;
   showRightPanel: boolean;
+  showRulers: boolean;
   editorMode: 'pose' | 'weights' | 'create';
   transformSpace: 'local' | 'world';
   viewport: { panX: number; panY: number; zoom: number };
@@ -67,6 +68,9 @@ export interface PixiBonesState {
 
   toggleLeftPanel: () => void;
   toggleRightPanel: () => void;
+  toggleRulers: () => void;
+  fitRequestId: number;
+  requestFitContent: () => void;
   setEditorMode: (m: 'pose' | 'weights' | 'create') => void;
   setTransformSpace: (s: 'local' | 'world') => void;
   setViewport: (v: { panX: number; panY: number; zoom: number }) => void;
@@ -150,6 +154,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set) => ({
 
   showLeftPanel: false,
   showRightPanel: false,
+  showRulers: true,
+  fitRequestId: 0,
   editorMode: 'pose',
   transformSpace: 'local',
   viewport: { panX: 0, panY: 0, zoom: 1 },
@@ -183,6 +189,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set) => ({
 
   toggleLeftPanel: () => set((s) => ({ showLeftPanel: !s.showLeftPanel })),
   toggleRightPanel: () => set((s) => ({ showRightPanel: !s.showRightPanel })),
+  toggleRulers: () => set((s) => ({ showRulers: !s.showRulers })),
+  requestFitContent: () => set((s) => ({ fitRequestId: s.fitRequestId + 1 })),
   setEditorMode: (m) => set({ editorMode: m }),
   setTransformSpace: (s) => set({ transformSpace: s }),
   setViewport: (v) => set({ viewport: v }),

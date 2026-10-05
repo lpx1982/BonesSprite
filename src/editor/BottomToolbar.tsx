@@ -1,5 +1,56 @@
 import { useMemo } from 'react';
 import { usePixiBonesStore, findBone, type BoneNode } from './store';
+import moveIcon from './icons/move.png';
+import rotateIcon from './icons/rotate.png';
+import scaleIcon from './icons/scale.png';
+import shearIcon from './icons/shear.png';
+import frameKeyIcon from './icons/frame_key.png';
+
+// =================================================================================
+//  尺寸常量 —— 集中在这里改，调一处全卡生效
+// ============================================================================
+//
+//  transform 卡片（旋转/移动/缩放/倾斜）排布参数：
+//    ROW_HEIGHT:       每行高度（px）
+//    LABEL_BOX_WIDTH:  左侧 icon+label 区域宽度
+//    LABEL_ICON_SIZE:  左侧 icon 大小
+//    ROW_H_PAD:        行左右内边距
+//    INPUT_HEIGHT:     中间输入框高度
+//    INPUT_FONT_SIZE:  输入框字号
+//    KEYFRAME_BTN_W:   右侧"关键帧"按钮宽度
+//    KEYFRAME_BTN_H:   右侧"关键帧"按钮高度
+//    ROW_RADIUS:       行圆角
+//    INPUT_RADIUS:     输入框圆角
+//
+const T = {
+  ROW_HEIGHT:        34,
+  LABEL_BOX_WIDTH:   80,
+  LABEL_BOX_PAD_L:   8,
+  LABEL_ICON_SIZE:   18,
+  ROW_H_PAD:         4,
+  INPUT_HEIGHT:      34,
+  INPUT_FONT_SIZE:   11,
+  INPUT_WIDTH:       60,                                          // 单个 input 框宽度（双 input 行每个用这个）
+  INPUT_GAP:         4,                                          // 双 input 之间的间距（保留备查；当前由 DIVIDER_WIDTH 替代）
+  DIVIDER_WIDTH:    1,                                          // 双 input 中间的分隔竖线宽度
+  // 单 input 行（旋转栏）的总宽 = 双 input 行（移动/缩放/倾斜）的总宽（两个 input + 中间竖线），保证对齐
+  SINGLE_INPUT_WIDTH: (60 + 60 + 1),                             // = INPUT_WIDTH * 2 + DIVIDER_WIDTH
+  KEYFRAME_BTN_W:    30,
+  KEYFRAME_BTN_H:    26,
+  ROW_RADIUS:        4,
+  INPUT_RADIUS:      0,
+  ROW_BG:            'rgba(255, 255, 255, 0.06)',
+  ROW_FONT_SIZE:     13,
+
+  // Card 卡片外壳（5 张卡片共用）尺寸
+  CARD_PADDING:      6,       // ← 卡片内边距（按钮到面板边缘的距离）
+  CARD_GAP:          4,       // ← 卡片内部按钮之间的间距
+  CARD_BG:           'rgba(35, 35, 38, 0.78)',     // ← 卡片背景色
+  CARD_BORDER:       '1px solid rgba(255, 255, 255, 0.08)', // ← 卡片边框
+  CARD_RADIUS:       6,       // ← 卡片圆角
+  // 卡片之间间距（外层容器 gap）
+  CARDS_GAP:         8,       // ← 5 张卡片之间的水平间距
+};
 
 /**
  * Day 3.5 · 底部工具栏（严格 Spine 风格）
@@ -37,7 +88,7 @@ export function BottomToolbar() {
     <div
       className="absolute bottom-3 left-0 right-0 z-10 flex justify-center pointer-events-none"
     >
-      <div className="flex items-end gap-2 pointer-events-auto">
+      <div className="flex items-start pointer-events-auto" style={{ gap: T.CARDS_GAP }}>
         {/* 卡片 1：mode 切换 */}
         <Card>
           <ModeButton
@@ -157,12 +208,13 @@ export function BottomToolbar() {
 function Card({ children }: { children: React.ReactNode }) {
   return (
     <div
-      className="flex flex-col rounded-md overflow-hidden self-end backdrop-blur-md"
+      className="flex flex-col rounded-md overflow-hidden self-end"
       style={{
-        // 更透明的半透明效果：让画布网格能透过来
-        background: 'rgba(45, 45, 48, 0.55)',
-        border: '1px solid rgba(255, 255, 255, 0.06)',
-        boxShadow: '0 4px 16px rgba(0, 0, 0, 0.45)',
+        background: T.CARD_BG,
+        border: T.CARD_BORDER,
+        padding: T.CARD_PADDING,
+        gap: T.CARD_GAP,
+        borderRadius: T.CARD_RADIUS,
       }}
     >
       {children}
@@ -190,10 +242,12 @@ function ModeButton({
         height: 26,
         minWidth: 80,
         padding: '0 10px',
-        background: active ? 'var(--spine-positive)' : 'transparent',
-        color: active ? 'white' : 'var(--spine-text)',
-        fontWeight: active ? 600 : 400,
+        // 暂时不做 active 高亮（功能未实现，避免误导用户）
+        background: 'rgba(255, 255, 255, 0.06)',
+        color: 'var(--spine-text)',
+        fontWeight: 400,
         fontSize: 12,
+        borderRadius: 4,
       }}
     >
       <span style={{ width: 16, height: 16, display: 'flex' }}>{icon}</span>
@@ -233,17 +287,20 @@ function TransformRow({
     <div
       className="flex items-center relative"
       style={{
-        height: 26,
-        background: active ? 'var(--spine-accent-dim)' : 'transparent',
-        color: active ? 'white' : 'var(--spine-text)',
-        fontSize: 13,
+        height: T.ROW_HEIGHT,
+        background: T.ROW_BG,
+        color: 'var(--spine-text)',
+        fontSize: T.ROW_FONT_SIZE,
+        borderRadius: T.ROW_RADIUS,
+        paddingLeft: T.ROW_H_PAD,
+        paddingRight: T.ROW_H_PAD,
       }}
     >
       <span
-        className="flex items-center gap-2 px-2 shrink-0"
-        style={{ width: 100 }}
+        className="flex items-center gap-2 shrink-0"
+        style={{ width: T.LABEL_BOX_WIDTH, paddingLeft: T.LABEL_BOX_PAD_L }}
       >
-        <span style={{ width: 16, height: 16, display: 'flex' }}>{icon}</span>
+        <span style={{ width: T.LABEL_ICON_SIZE, height: T.LABEL_ICON_SIZE, display: 'flex' }}>{icon}</span>
         <span>{label}</span>
       </span>
       {columns === 'two' && yValue !== undefined ? (
@@ -257,11 +314,22 @@ function TransformRow({
               border: 'none',
               color: 'inherit',
               fontFamily: 'monospace',
-              fontSize: 11,
-              height: 22,
-          outline: 'none',
-          width: 55,
-              minWidth: 0,
+              fontSize: T.INPUT_FONT_SIZE,
+              height: T.INPUT_HEIGHT,
+              outline: 'none',
+              flex: 'none',
+              width: T.INPUT_WIDTH,
+              borderRadius: 0,
+            }}
+          />
+          {/* 中间分隔竖线（与 input 等高） */}
+          <span
+            aria-hidden
+            style={{
+              width: T.DIVIDER_WIDTH,
+              height: T.INPUT_HEIGHT,
+              background: 'rgba(255, 255, 255, 0.12)',
+              flex: 'none',
             }}
           />
           <input
@@ -273,11 +341,12 @@ function TransformRow({
               border: 'none',
               color: 'inherit',
               fontFamily: 'monospace',
-              fontSize: 11,
-              height: 22,
-          outline: 'none',
-          width: 55,
-              minWidth: 0,
+              fontSize: T.INPUT_FONT_SIZE,
+              height: T.INPUT_HEIGHT,
+              outline: 'none',
+              flex: 'none',
+              width: T.INPUT_WIDTH,
+              borderRadius: 0,
             }}
           />
         </>
@@ -291,17 +360,18 @@ function TransformRow({
             border: 'none',
             color: 'inherit',
             fontFamily: 'monospace',
-            fontSize: 11,
-            height: 22,
+            fontSize: T.INPUT_FONT_SIZE,
+            height: T.INPUT_HEIGHT,
             outline: 'none',
-            width: 55,
-            minWidth: 0,
+            flex: 'none',
+            width: T.SINGLE_INPUT_WIDTH,
+            borderRadius: T.INPUT_RADIUS,
           }}
         />
       )}
       <span
         className="flex items-center justify-center shrink-0"
-        style={{ width: 18, height: 22, color: 'var(--spine-text-dim)' }}
+        style={{ width: T.KEYFRAME_BTN_W, height: T.KEYFRAME_BTN_H, color: 'var(--spine-text-dim)' }}
         title="link"
       >
         <IconLink />
@@ -326,10 +396,12 @@ function RadioButton({
         height: 26,
         minWidth: 80,
         padding: '0 10px',
-        background: active ? 'var(--spine-accent-dim)' : 'transparent',
-        color: active ? 'white' : 'var(--spine-text)',
-        fontWeight: active ? 600 : 400,
+        // 暂时不做 active 高亮（功能未实现，避免误导用户）
+        background: 'rgba(255, 255, 255, 0.06)',
+        color: 'var(--spine-text)',
+        fontWeight: 400,
         fontSize: 12,
+        borderRadius: 4,
       }}
     >
       <span style={{ width: 16, height: 16, display: 'flex' }}>{icon}</span>
@@ -369,9 +441,23 @@ function VisibilityTable({
 }
 
 // ============================================================
-//  inline SVG 图标（占位，16×16）
+//  图标
+//    PNG 资源统一放 src/editor/icons/，用 <ImgIcon> 渲染
+//    还没有 PNG 的占位仍用 inline SVG（保留 ICON_PROPS）
 // ============================================================
 const ICON_PROPS = { width: 16, height: 16, viewBox: '0 0 16 16', fill: 'currentColor' };
+
+function ImgIcon({ src, alt }: { src: string; alt: string }) {
+  return (
+    <img
+      src={src}
+      alt={alt}
+      width={T.LABEL_ICON_SIZE}
+      height={T.LABEL_ICON_SIZE}
+      style={{ display: 'block' }}
+    />
+  );
+}
 
 function IconPose() {
   return (
@@ -406,41 +492,19 @@ function IconCreate() {
 }
 
 function IconRotate() {
-  return (
-    <svg {...ICON_PROPS} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-      <path d="M3 8 A5 5 0 1 1 8 13" />
-      <path d="M3 8 L5.5 5.5 M3 8 L6 6" />
-      <text x="8" y="11" textAnchor="middle" fontSize="6" fill="currentColor" stroke="none" fontWeight="600">°</text>
-    </svg>
-  );
+  return <ImgIcon src={rotateIcon} alt="旋转" />;
 }
 
 function IconMove() {
-  return (
-    <svg {...ICON_PROPS} fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
-      <path d="M8 2 L8 14 M2 8 L14 8" />
-      <path d="M8 2 L5 5 L11 5 Z M8 14 L5 11 L11 11 Z" fill="currentColor" />
-      <path d="M2 8 L5 5 L5 11 Z M14 8 L11 5 L11 11 Z" fill="currentColor" />
-    </svg>
-  );
+  return <ImgIcon src={moveIcon} alt="移动" />;
 }
 
 function IconScale() {
-  return (
-    <svg {...ICON_PROPS} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-      <path d="M2 14 L14 2" />
-      <path d="M2 4 L4 2 L2 2 L2 4 Z M14 12 L12 14 L14 14 L14 12 Z" fill="currentColor" stroke="none" />
-    </svg>
-  );
+  return <ImgIcon src={scaleIcon} alt="缩放" />;
 }
 
 function IconShear() {
-  return (
-    <svg {...ICON_PROPS} fill="none" stroke="currentColor" strokeWidth="1.4">
-      <path d="M2 4 L9 4 L13 12 L6 12 Z" />
-      <path d="M11 2 L11 6 L14 4 Z" fill="currentColor" stroke="none" />
-    </svg>
-  );
+  return <ImgIcon src={shearIcon} alt="倾斜" />;
 }
 
 function IconLocal() {
@@ -505,13 +569,7 @@ function IconPixel() {
 }
 
 function IconLink() {
-  return (
-    <svg {...ICON_PROPS} fill="none" stroke="currentColor" strokeWidth="1.4">
-      <path d="M6 10 L10 6" strokeLinecap="round" />
-      <circle cx="5" cy="11" r="2" />
-      <circle cx="11" cy="5" r="2" />
-    </svg>
-  );
+  return <ImgIcon src={frameKeyIcon} alt="关键帧" />;
 }
 
 // ============================================================

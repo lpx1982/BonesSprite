@@ -14,6 +14,9 @@ export function CanvasOverlay() {
   const viewport = usePixiBonesStore((s) => s.viewport);
   const setViewport = usePixiBonesStore((s) => s.setViewport);
   const render = usePixiBonesStore((s) => s.render);
+  const showRulers = usePixiBonesStore((s) => s.showRulers);
+  const toggleRulers = usePixiBonesStore((s) => s.toggleRulers);
+  const requestFitContent = usePixiBonesStore((s) => s.requestFitContent);
 
   const [canvasSize, setCanvasSize] = useState({ width: 1000, height: 600 });
   useEffect(() => {
@@ -45,6 +48,7 @@ export function CanvasOverlay() {
   return (
     <div className="absolute inset-0 pointer-events-none">
       {/* 顶横标尺 —— Spine 风格：ruler 高度 22px，黑色背景 + 纯黑下边线 */}
+      {showRulers && (
       <div
         className="absolute top-0 left-0 right-0 h-[22px] pointer-events-none"
         style={{
@@ -62,8 +66,10 @@ export function CanvasOverlay() {
           />
         ))}
       </div>
+      )}
 
       {/* 左竖标尺 —— 跟顶横 ruler 统一：宽度 22px、同款深灰背景。完整到底。 */}
+      {showRulers && (
       <div
         className="absolute left-0 top-0 bottom-0 w-[22px] pointer-events-none"
         style={{
@@ -82,6 +88,7 @@ export function CanvasOverlay() {
           />
         ))}
       </div>
+      )}
 
       {/* 十字光标 — HTML 层，永远在 ruler 之上（之前在 PixiJS 画，被 rulers 遮住） */}
       {/* 左下角 zoom 控制条 —— 按 Spine 布局：[zoom in] → [slider] → [zoom out]，放大镜独立在最下面 */}
@@ -139,6 +146,47 @@ export function CanvasOverlay() {
           <line x1="3" y1="7" x2="13" y2="7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
         </IconButton>
       </div>
+
+    {/* ruler 开关 —— 最顶部。zoom 顶在 120px，每个按钮高 16px，间距 12px。
+        ruler: 120 + 16 + 12 + 16 + 12 = 176 */}
+    <div
+      className="absolute left-[33px] pointer-events-auto w-4"
+      style={{
+        bottom: 176,
+      }}
+    >
+      <IconButton
+        title={showRulers ? 'hide rulers' : 'show rulers'}
+        onClick={toggleRulers}
+      >
+        <rect x="1" y="3" width="14" height="9" rx="1" stroke="currentColor" strokeWidth="1.2" fill="none" />
+        <line x1="4" y1="3" x2="4" y2="6" stroke="currentColor" strokeWidth="1" />
+        <line x1="7" y1="3" x2="7" y2="6" stroke="currentColor" strokeWidth="1" />
+        <line x1="10" y1="3" x2="10" y2="6" stroke="currentColor" strokeWidth="1" />
+        <line x1="13" y1="3" x2="13" y2="6" stroke="currentColor" strokeWidth="1" />
+      </IconButton>
+    </div>
+
+    {/* fit to content 按钮 —— 中间。zoom 顶在 120px，间距 12px。
+        fit bottom = 120 + 16 + 12 = 148 */}
+    <div
+      className="absolute left-[33px] pointer-events-auto w-4"
+      style={{
+        bottom: 148,
+      }}
+    >
+      <IconButton
+        title="fit to content"
+        onClick={requestFitContent}
+      >
+        {/* fit-to-content 图标：四个箭头从中心向四角 —— 视觉宽度对齐 ruler (rect x=1 y=3 w=14 h=9) */}
+        <rect x="1" y="3" width="14" height="9" rx="1" stroke="currentColor" strokeWidth="1.2" fill="none" />
+        <path d="M2 6 L8 6 M2 6 L3 5 M2 6 L3 7" stroke="currentColor" strokeWidth="1" strokeLinecap="round" fill="none" />
+        <path d="M14 9 L8 9 M14 9 L13 8 M14 9 L13 10" stroke="currentColor" strokeWidth="1" strokeLinecap="round" fill="none" />
+        <path d="M14 6 L8 6 M14 6 L13 5 M14 6 L13 7" stroke="currentColor" strokeWidth="1" strokeLinecap="round" fill="none" />
+        <path d="M2 9 L8 9 M2 9 L3 8 M2 9 L3 10" stroke="currentColor" strokeWidth="1" strokeLinecap="round" fill="none" />
+      </IconButton>
+    </div>
     </div>
   );
 }
@@ -375,13 +423,16 @@ function niceNumber(base: number): number {
 function IconButton({
   children,
   title,
+  onClick,
 }: {
   children: React.ReactNode;
   title: string;
+  onClick?: () => void;
 }) {
   return (
     <button
       title={title}
+      onClick={onClick}
       className="flex items-center justify-center"
       style={{
         width: 16,

@@ -649,6 +649,50 @@ export function BoneEditor() {
           });
         }
         if (state.bones !== prev.bones) buildSkeleton(state.bones);
+// fit-to-content 请求：通过 setViewport 写入 vp.zoom/panX/panY，让 center() 自动重算 root
+        if (state.fitRequestId !== prev.fitRequestId) {
+          const b = root.getLocalBounds();
+          const psd = state.psd;
+          if (b.width > 0 && b.height > 0) {
+            const cssW = host.clientWidth;
+            const cssH = host.clientHeight;
+            const margin = 40;
+            const fitScale = Math.min(
+              (cssW - margin * 2) / b.width,
+              (cssH - margin * 2) / b.height,
+            );
+            const z = Math.max(0.05, Math.min(fitScale, 8));
+            // center 用 vp.zoom * baseFit 作为实际 scale
+            const psd = state.psd;
+            const baseFit = psd && psd.width > 0 && psd.height > 0
+              ? Math.min((cssW - margin * 2) / psd.width, (cssH - margin * 2) / psd.height)
+              : 1;
+            const targetVpZoom = z / baseFit;
+            // panX/panY：root.x = cssW/2 - psd.width*scale/2 + panX
+            // 要让 bbox.center 落在 cssW/2：
+            //   root.x + (b.x + b.width/2) * scale = cssW/2
+            //   cssW/2 - psd.width*scale/2 + panX + (b.x + b.width/2) * scale = cssW/2
+            //   panX = (psd.width/2 - b.x - b.width/2) * scale
+            const scale = z;
+            const panX = psd && psd.width > 0
+              ? (psd.width / 2 - b.x - b.width / 2) * scale
+              : -(b.x + b.width / 2) * scale;
+            const panY = psd && psd.height > 0
+              ? (psd.height - b.y - b.height / 2) * scale
+              : -(b.y + b.height / 2) * scale;
+            queueMicrotask(() => {
+              if (!destroyed) {
+                const curVp = usePixiBonesStore.getState().viewport;
+                setViewport({
+                  ...curVp,
+                  zoom: Math.max(0.05, Math.min(targetVpZoom, 8)),
+                  panX,
+                  panY,
+                });
+              }
+            });
+          }
+        }
         applyVisibility(state.psd, state.layerVisibility);
         drawHighlight(state.psd, state.selectedLayerId);
         drawBones(state.bones, state.selectedBoneId);
