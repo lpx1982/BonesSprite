@@ -1,0 +1,155 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Spine 风格配色 */
+  --spine-bg-base: #2D2D30;
+  --spine-bg-panel: #393939;
+  --spine-bg-panel-dark: #252526;
+  --spine-bg-toolbar: #1F1F1F;
+  --spine-bg-canvas-dark: #393939;
+  --spine-bg-canvas-light: #444446;
+  --spine-border: #1A1A1A;
+  --spine-text: #BBBBBB;
+  --spine-text-dim: #777777;
+  --spine-accent: #4FB8F8;
+  --spine-accent-dim: #1A6395;
+  --spine-bone: #E61E61;
+  --spine-bone-selected: #F0E020;
+  --spine-tree-line: #F0A020;
+  --spine-grid: #454548;
+  --spine-crosshair: #000000;
+  --spine-positive: #5BBE5D;
+  --spine-warning: #F0A020;
+  --spine-danger: #E61E1E;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  background: var(--spine-bg-base);
+  color: var(--spine-text);
+  overflow: hidden;
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--spine-bg-panel-dark); }
+::-webkit-scrollbar-thumb { background: var(--spine-bg-panel); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--spine-text-dim); }
+
+.spine-btn {
+  background: var(--spine-bg-panel);
+  border: 1px solid var(--spine-border);
+  color: var(--spine-text);
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: 2px;
+  transition: background 0.1s;
+}
+.spine-btn:hover { background: var(--spine-bg-panel-dark); }
+.spine-btn-primary {
+  background: var(--spine-accent-dim);
+  border-color: var(--spine-accent);
+  color: white;
+}
+.spine-btn-primary:hover { background: var(--spine-accent); }
+.spine-btn-active {
+  background: var(--spine-accent);
+  border-color: var(--spine-accent);
+  color: white;
+}
+
+.spine-input {
+  background: var(--spine-bg-panel-dark);
+  border: 1px solid var(--spine-border);
+  color: var(--spine-text);
+  padding: 3px 6px;
+  font-size: 11px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  border-radius: 2px;
+  outline: none;
+}
+.spine-input:focus { border-color: var(--spine-accent); }
+
+.spine-divider {
+  width: 1px;
+  background: var(--spine-border);
+  align-self: stretch;
+  margin: 0 4px;
+}
+
+.spine-tree-row {
+  display: flex; align-items: center; gap: 4px;
+  padding: 2px 4px; font-size: 11px;
+  color: var(--spine-text); cursor: pointer;
+  border-radius: 2px; user-select: none;
+}
+.spine-tree-row:hover { background: rgba(255, 255, 255, 0.05); }
+.spine-tree-row.selected { background: var(--spine-accent-dim); color: white; }
+
+.canvas-host {
+  background-color: var(--spine-bg-canvas-dark);
+  background-image:
+    linear-gradient(45deg, var(--spine-bg-canvas-light) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--spine-bg-canvas-light) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--spine-bg-canvas-light) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--spine-bg-canvas-light) 75%);
+  background-size: 20px 20px;
+  background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+  position: relative;
+  display: flex;
+}
+.canvas-host > canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  flex: 1 1 auto;
+}
+
+/* zoom slider：旋转的 range，隐藏浏览器默认 track（旋转后变成"波折线"端帽），
+   只保留 thumb 圆球 */
+.zoom-slider-track {
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  outline: none;
+}
+.zoom-slider-track::-webkit-slider-runnable-track {
+  background: transparent;
+  height: 4px;
+  border-radius: 2px;
+}
+.zoom-slider-track::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--spine-accent);
+  cursor: pointer;
+  border: 2px solid var(--spine-bg-toolbar);
+  margin-top: -5px; /* 让 thumb 居中到 track */
+}
+.zoom-slider-track::-moz-range-track {
+  background: transparent;
+  height: 4px;
+  border-radius: 2px;
+}
+.zoom-slider-track::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--spine-accent);
+  border: 2px solid var(--spine-bg-toolbar);
+  cursor: pointer;
+}
