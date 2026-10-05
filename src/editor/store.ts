@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { Skeleton } from '@engine/Skeleton';
 import type { Animation } from '@engine/Animation';
 import type { PixiBonesPsd, PixiBonesLayer } from '@psd/types';
+import type { Locale } from './i18n';
 
 export type ViewMode = 'editor' | 'demo';
 
@@ -53,6 +54,10 @@ export interface PixiBonesState {
   viewport: { panX: number; panY: number; zoom: number };
   /** BoneEditor 的实际渲染原点/缩放，用于标尺换算（世界 0,0 在屏幕的哪里） */
   render: { x: number; y: number; scale: number };
+
+  // ---- i18n ----
+  locale: Locale;
+  setLocale: (l: Locale) => void;
 
   // ---- Setters ----
   setSkeleton: (s: Skeleton) => void;
@@ -160,6 +165,9 @@ export const usePixiBonesStore = create<PixiBonesState>((set) => ({
   transformSpace: 'local',
   viewport: { panX: 0, panY: 0, zoom: 1 },
   render: { x: 0, y: 0, scale: 1 },
+
+  locale: 'zh',
+  setLocale: (l) => set({ locale: l }),
 
   // Day 1 setters
   setSkeleton: (s) => set({ skeleton: s }),

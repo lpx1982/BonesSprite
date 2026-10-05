@@ -1,16 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { usePixiBonesStore } from './store';
+import { useT, type Locale } from './i18n';
 
 // =================================================================================
 //  尺寸 & 样式常量
 // =================================================================================
 const M = {
-  HEADER_HEIGHT:    48,                    // 顶部 logo 区域高度
-  ITEM_HEIGHT:      26,                    // 每个菜单项高度
+  HEADER_HEIGHT:    48,
+  ITEM_HEIGHT:      26,
   ITEM_FONT:        12,
   SHORTCUT_FONT:    11,
   ITEM_ICON_SIZE:   16,
   MENU_MIN_WIDTH:   280,
+  SUBMENU_OFFSET:   6,                       // 子菜单相对主菜单右移
   MENU_BG:          '#2a2a2eff',
   MENU_BORDER:      '1px solid rgba(255, 255, 255, 0.08)',
   MENU_RADIUS:      4,
@@ -24,63 +26,71 @@ const M = {
 };
 
 // =================================================================================
-//  菜单项定义（按 Spine Trial 截图复刻）
-//  - label:    显示文字
-//  - shortcut: 右侧快捷键（macOS 风格：Cmd / Shift / 字母）
-//  - divider:  在该项上方画一条分隔线
-//  - icon:     左侧 16×16 占位 emoji（之后可换 PNG）
-//  - action:   点击执行（占位：alert 提示；后续接功能）
+//  菜单项定义（label 用 i18n key，运行时按 locale 取真实字符串）
 // =================================================================================
 type MenuItem = {
-  label: string;
-  shortcut?: string;
+  labelKey: import('./i18n').I18nKey;
+  shortcutKey?: import('./i18n').I18nKey;
   divider?: boolean;
   icon?: React.ReactNode;
+  /** true 表示该行 hover 弹语言子菜单，不在主菜单里触发 action */
+  isLanguageSubmenu?: boolean;
   action?: () => void;
 };
 
 const MENU_ITEMS: MenuItem[] = [
-  { icon: '📄', label: '新建项目',   shortcut: 'Cmd+Shift+N' },
-  { icon: '📁', label: '打开项目…',   shortcut: 'Cmd+O' },
-  { icon: '🕘', label: '最近的项目', shortcut: '▸' },
+  { icon: '📄', labelKey: 'menu.new_project',     shortcutKey: 'shortcut.cmd_shift_n' },
+  { icon: '📁', labelKey: 'menu.open_project',    shortcutKey: 'shortcut.cmd_o' },
+  { icon: '🕘', labelKey: 'menu.recent',          shortcutKey: 'shortcut.arrow_right' },
   { divider: true } as MenuItem,
-  { icon: '💾', label: '保存项目',   shortcut: 'Cmd+S' },
-  { icon: '📝', label: '项目另存为…', shortcut: 'Cmd+Shift+S' },
-  { icon: '📦', label: '打包项目…' },
+  { icon: '💾', labelKey: 'menu.save',            shortcutKey: 'shortcut.cmd_s' },
+  { icon: '📝', labelKey: 'menu.save_as',         shortcutKey: 'shortcut.cmd_shift_s' },
+  { icon: '📦', labelKey: 'menu.pack' },
   { divider: true } as MenuItem,
-  { icon: '🦴', label: '新建骨架',   shortcut: 'Cmd+N' },
+  { icon: '🦴', labelKey: 'menu.new_skeleton',    shortcutKey: 'shortcut.cmd_n' },
   { divider: true } as MenuItem,
-  { icon: '📥', label: '导入项目…' },
-  { icon: '📊', label: '导入数据…' },
-  { icon: '🖼', label: '导入PSD…' },
-  { icon: '📤', label: '导出…',     shortcut: 'Cmd+E' },
+  { icon: '📥', labelKey: 'menu.import_project' },
+  { icon: '📊', labelKey: 'menu.import_data' },
+  { icon: '🖼', labelKey: 'menu.import_psd' },
+  { icon: '📤', labelKey: 'menu.export',          shortcutKey: 'shortcut.cmd_e' },
   { divider: true } as MenuItem,
-  { icon: '🧩', label: '纹理打包器…', shortcut: 'Cmd+P' },
-  { icon: '🔓', label: '纹理解包器…' },
+  { icon: '🧩', labelKey: 'menu.texture_packer',  shortcutKey: 'shortcut.cmd_p' },
+  { icon: '🔓', labelKey: 'menu.texture_unpacker' },
   { divider: true } as MenuItem,
-  { icon: '⚙', label: '设置…',     shortcut: 'F12' },
+  // 设置… 点击后弹出语言子菜单（isLanguageSubmenu=true）
+  { icon: '⚙', labelKey: 'menu.settings', shortcutKey: 'shortcut.f12', isLanguageSubmenu: true },
 ];
 
 /**
  * 顶部 logo + 版本徽章 + 点击弹下拉菜单（Spine Trial 风格）
  *   - 点击 logo：toggle 菜单
- *   - 点击菜单项：执行 action 后关闭（action 占位 alert）
+ *   - 点击菜单项：执行 action 后关闭（action 占位 console.log）
+ *   - 设置…项 hover 弹出语言子菜单
  *   - 点击菜单外部 / Esc：关闭
  */
 export function TopMenu() {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const { t, locale } = useT();
+  const setLocale = usePixiBonesStore((s) => s.setLocale);
+  const [hoverSettings, setHoverSettings] = useState(false);
+  const [settingsRowRect, setY] = useState<{ top: number; left: number } | null>(null);
+  const settingsRowRef = useRef<HTMLButtonElement>(null);
 
-  // 点击外部关闭
+  // 点击外部关闭（仅关闭主菜单，不干扰子菜单 hover）
   useEffect(() => {
     if (!open) return;
     const onDocDown = (e: MouseEvent) => {
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
         setOpen(false);
+        setHoverSettings(false);
       }
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
+      if (e.key === 'Escape') {
+        setOpen(false);
+        setHoverSettings(false);
+      }
     };
     document.addEventListener('mousedown', onDocDown);
     document.addEventListener('keydown', onKey);
@@ -90,10 +100,20 @@ export function TopMenu() {
     };
   }, [open]);
 
+  // 计算子菜单位置（紧贴 Settings 行右边）
+  useEffect(() => {
+    if (hoverSettings && settingsRowRef.current) {
+      const r = settingsRowRef.current.getBoundingClientRect();
+      setY({ top: r.top, left: r.right });
+    }
+  }, [hoverSettings, open]);
+
   const onItemClick = (item: MenuItem) => {
+    if (item.isLanguageSubmenu) return; // 设置项只弹子菜单，不关闭
     if (item.action) item.action();
-    else console.log(`[TopMenu] 点击: ${item.label}（功能未实现）`);
+    else console.log(`[TopMenu] ${t(item.labelKey)} (功能未实现)`);
     setOpen(false);
+    setHoverSettings(false);
   };
 
   return (
@@ -111,12 +131,11 @@ export function TopMenu() {
           border: 'none',
           cursor: 'pointer',
         }}
-        title="主菜单"
+        title={t('header.main_menu')}
       >
         {!open && (
           <>
             <span style={{ fontSize: 14, fontWeight: 600 }}>🩻 PixiBones</span>
-            {/* header 平时态：只显示 Trial 缩写（不显示版本号数字） */}
             <span
               style={{
                 color: M.LOGO_COLOR,
@@ -125,7 +144,7 @@ export function TopMenu() {
                 letterSpacing: 1,
               }}
             >
-              TRIAL
+              {t('header.trial_short')}
             </span>
           </>
         )}
@@ -134,25 +153,25 @@ export function TopMenu() {
       {/* 快捷按钮：打开 / 保存 / 撤消 / 重做（Spine 风格） */}
       {!open && (
         <div className="flex items-center" style={{ gap: 2, paddingLeft: 4 }}>
-          <QuickBtn title="打开项目…  (Cmd+O)" onClick={() => console.log('[QuickBtn] 打开项目')}>
+          <QuickBtn title={t('quickbtn.open_tip')} onClick={() => console.log(t('quickbtn.open_console'))}>
             <IconOpen />
           </QuickBtn>
-          <QuickBtn title="保存项目 (Cmd+S) / Shift+点击 = 另存为" onClick={(e) => {
-            if (e.shiftKey) console.log('[QuickBtn] 另存为');
-            else console.log('[QuickBtn] 保存');
+          <QuickBtn title={t('quickbtn.save_tip')} onClick={(e) => {
+            if (e.shiftKey) console.log(t('quickbtn.save_as_console'));
+            else console.log(t('quickbtn.save_console'));
           }}>
             <IconSave />
           </QuickBtn>
-          <QuickBtn title="撤消 (Cmd+Z)" onClick={() => console.log('[QuickBtn] 撤消（未实现）')}>
+          <QuickBtn title={t('quickbtn.undo_tip')} onClick={() => console.log(t('quickbtn.undo_console'))}>
             <IconUndo />
           </QuickBtn>
-          <QuickBtn title="重做 (Cmd+Shift+Z)" onClick={() => console.log('[QuickBtn] 重做（未实现）')}>
+          <QuickBtn title={t('quickbtn.redo_tip')} onClick={() => console.log(t('quickbtn.redo_console'))}>
             <IconRedo />
           </QuickBtn>
         </div>
       )}
 
-      {/* 下拉菜单：从窗口最左上角弹出，盖住 header 和左侧 ruler */}
+      {/* 下拉菜单：从窗口最左上角弹出 */}
       {open && (
         <div
           className="fixed z-50 shadow-2xl topmenu-dropdown"
@@ -167,7 +186,7 @@ export function TopMenu() {
             transformOrigin: 'top left',
           }}
         >
-          {/* 面板顶部：完整 logo + 完整版本徽章（Spine 风格面板头） */}
+          {/* 面板顶部：完整 logo + 完整版本徽章 */}
           <div
             className="flex items-center"
             style={{
@@ -197,18 +216,22 @@ export function TopMenu() {
                 borderRadius: 3,
               }}
             >
-              0.1.0 Trial
+              {t('header.trial_long')}
             </span>
           </div>
+
           {MENU_ITEMS.map((item, i) =>
             item.divider ? (
               <div key={`d-${i}`} style={{ height: 1, background: M.DIVIDER, margin: '4px 0' }} />
             ) : (
               <button
                 key={`i-${i}`}
+                ref={item.isLanguageSubmenu ? settingsRowRef : undefined}
                 type="button"
                 onClick={() => onItemClick(item)}
-                className="w-full flex items-center"
+                onMouseEnter={() => item.isLanguageSubmenu && setHoverSettings(true)}
+                onMouseLeave={() => item.isLanguageSubmenu && setHoverSettings(false)}
+                className="w-full flex items-center relative"
                 style={{
                   height: M.ITEM_HEIGHT,
                   padding: '0 10px',
@@ -218,12 +241,6 @@ export function TopMenu() {
                   fontSize: M.ITEM_FONT,
                   cursor: 'pointer',
                   textAlign: 'left',
-                }}
-                onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLElement).style.background = M.ITEM_HOVER_BG;
-                }}
-                onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLElement).style.background = 'transparent';
                 }}
               >
                 <span
@@ -239,8 +256,8 @@ export function TopMenu() {
                 >
                   {item.icon}
                 </span>
-                <span style={{ flex: 1 }}>{item.label}</span>
-                {item.shortcut && (
+                <span style={{ flex: 1 }}>{t(item.labelKey)}</span>
+                {item.shortcutKey && (
                   <span
                     style={{
                       color: M.SHORTCUT_COLOR,
@@ -249,7 +266,7 @@ export function TopMenu() {
                       marginLeft: 16,
                     }}
                   >
-                    {item.shortcut}
+                    {t(item.shortcutKey)}
                   </span>
                 )}
               </button>
@@ -257,6 +274,93 @@ export function TopMenu() {
           )}
         </div>
       )}
+
+      {/* 语言子菜单：hover Settings 行时弹出，紧贴该行右侧 */}
+      {open && hoverSettings && settingsRowRect && (
+        <LanguageSubmenu
+          top={settingsRowRect.top}
+          left={settingsRowRect.left + M.SUBMENU_OFFSET}
+          currentLocale={locale}
+          onPick={(l) => {
+            setLocale(l);
+            setHoverSettings(false);
+            setOpen(false);
+          }}
+          onMouseEnter={() => setHoverSettings(true)}
+          onMouseLeave={() => setHoverSettings(false)}
+          t={t}
+        />
+      )}
+    </div>
+  );
+}
+
+// =================================================================================
+//  语言子菜单（hover Settings 行触发）
+// =================================================================================
+function LanguageSubmenu({
+  top, left, currentLocale, onPick, onMouseEnter, onMouseLeave, t,
+}: {
+  top: number;
+  left: number;
+  currentLocale: Locale;
+  onPick: (l: Locale) => void;
+  onMouseEnter: () => void;
+  onMouseLeave: () => void;
+  t: (k: import('./i18n').I18nKey) => string;
+}) {
+  const options: Array<{ value: Locale; labelKey: import('./i18n').I18nKey }> = [
+    { value: 'zh', labelKey: 'menu.language_zh' },
+    { value: 'en', labelKey: 'menu.language_en' },
+  ];
+  return (
+    <div
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      className="fixed z-50 shadow-2xl"
+      style={{
+        top,
+        left,
+        minWidth: 140,
+        background: M.MENU_BG,
+        border: M.MENU_BORDER,
+        borderRadius: M.MENU_RADIUS,
+        padding: '4px 0',
+      }}
+    >
+      {options.map((opt) => {
+        const active = opt.value === currentLocale;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => onPick(opt.value)}
+            className="w-full flex items-center"
+            style={{
+              height: M.ITEM_HEIGHT,
+              padding: '0 10px',
+              background: 'transparent',
+              border: 'none',
+              color: M.ITEM_COLOR,
+              fontSize: M.ITEM_FONT,
+              cursor: 'pointer',
+              textAlign: 'left',
+              fontWeight: active ? 600 : 400,
+            }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLElement).style.background = M.ITEM_HOVER_BG;
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLElement).style.background = 'transparent';
+            }}
+          >
+            <span style={{ flex: 1 }}>{t(opt.labelKey)}</span>
+            {active && (
+              <span style={{ color: M.SHORTCUT_COLOR, fontSize: M.SHORTCUT_FONT, marginLeft: 8 }}>✓</span>
+            )}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -303,7 +407,6 @@ function QuickBtn({
 const ICON_BTN_PROPS = { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
 
 function IconOpen() {
-  // 文件夹 + 打开箭头
   return (
     <svg {...ICON_BTN_PROPS}>
       <path d="M1.5 4 L6 4 L7.5 5.5 L14.5 5.5 L14.5 12 L1.5 12 Z" />
@@ -314,7 +417,6 @@ function IconOpen() {
 }
 
 function IconSave() {
-  // 软盘
   return (
     <svg {...ICON_BTN_PROPS}>
       <path d="M2.5 2.5 L10.5 2.5 L13.5 5.5 L13.5 13.5 L2.5 13.5 Z" />
@@ -325,7 +427,6 @@ function IconSave() {
 }
 
 function IconUndo() {
-  // 左弯箭头
   return (
     <svg {...ICON_BTN_PROPS}>
       <path d="M3.5 8 L6 5.5 M3.5 8 L6 10.5 M3.5 8 L9 8 A4 4 0 0 1 13 12" />
@@ -334,7 +435,6 @@ function IconUndo() {
 }
 
 function IconRedo() {
-  // 右弯箭头
   return (
     <svg {...ICON_BTN_PROPS}>
       <path d="M12.5 8 L10 5.5 M12.5 8 L10 10.5 M12.5 8 L7 8 A4 4 0 0 0 3 12" />

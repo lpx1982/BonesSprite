@@ -4,6 +4,7 @@ import { PropertyPanel } from './PropertyPanel';
 import { BoneEditor } from './BoneEditor';
 import { BottomToolbar } from './BottomToolbar';
 import { TopMenu } from './TopMenu';
+import { useT } from './i18n';
 
 /**
  * Day 3.5 · Spine 风格主编辑器
@@ -21,6 +22,7 @@ export function Editor() {
   const toggleRightPanel = usePixiBonesStore((s) => s.toggleRightPanel);
   const psd = usePixiBonesStore((s) => s.psd);
   const bones = usePixiBonesStore((s) => s.bones);
+  const { t } = useT();
 
   return (
     <div className="flex flex-col h-screen" style={{ background: 'var(--spine-bg-base)' }}>
@@ -31,36 +33,36 @@ export function Editor() {
         <TopMenu />
 
         <span className="text-xs ml-1" style={{ color: 'var(--spine-text-dim)' }}>
-          {psd ? `*${psd.layers.length}L · ${bones.length}B` : '(未命名)'}
+          {psd ? `*${psd.layers.length}L · ${bones.length}B` : t('header.project_unnamed')}
         </span>
 
         <div className="ml-auto flex items-center gap-1">
           <button
             className={'spine-btn ' + (showLeftPanel ? 'spine-btn-active' : '')}
             onClick={toggleLeftPanel}
-            title="切换图层面板"
+            title={t('header.layer_panel_tip')}
           >
-            🗂 图层
+            {t('header.layer_panel')}
           </button>
           <button
             className={'spine-btn ' + (showRightPanel ? 'spine-btn-active' : '')}
             onClick={toggleRightPanel}
-            title="切换属性面板"
+            title={t('header.props_panel_tip')}
           >
-            ⚙ 属性
+            {t('header.props_panel')}
           </button>
           <div className="w-px h-5 mx-1" style={{ background: 'var(--spine-border)' }} />
           <button
             className={'spine-btn ' + (viewMode === 'editor' ? 'spine-btn-active' : '')}
             onClick={() => setViewMode('editor')}
           >
-            🦴 编辑器
+            {t('header.view_editor')}
           </button>
           <button
             className={'spine-btn ' + (viewMode === 'demo' ? 'spine-btn-active' : '')}
             onClick={() => setViewMode('demo')}
           >
-            🎬 Demo
+            {t('header.view_demo')}
           </button>
         </div>
       </header>
