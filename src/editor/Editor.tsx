@@ -14,12 +14,8 @@ import { useT } from './i18n';
  *   - 导入 PSD 走画布拖拽 / 顶部菜单（不再在 header 放按钮）
  */
 export function Editor() {
-  const viewMode = usePixiBonesStore((s) => s.viewMode);
-  const setViewMode = usePixiBonesStore((s) => s.setViewMode);
   const showLeftPanel = usePixiBonesStore((s) => s.showLeftPanel);
   const showRightPanel = usePixiBonesStore((s) => s.showRightPanel);
-  const toggleLeftPanel = usePixiBonesStore((s) => s.toggleLeftPanel);
-  const toggleRightPanel = usePixiBonesStore((s) => s.toggleRightPanel);
   const psd = usePixiBonesStore((s) => s.psd);
   const bones = usePixiBonesStore((s) => s.bones);
   const { t } = useT();
@@ -36,37 +32,8 @@ export function Editor() {
           {psd ? `*${psd.layers.length}L · ${bones.length}B` : t('header.project_unnamed')}
         </span>
 
+        {/* header 右上角占位 icon：视图（眼睛）/ 设置（齿轮）—— 后续接功能 */}
         <div className="ml-auto flex items-center gap-1">
-          <button
-            className={'spine-btn ' + (showLeftPanel ? 'spine-btn-active' : '')}
-            onClick={toggleLeftPanel}
-            title={t('header.layer_panel_tip')}
-          >
-            {t('header.layer_panel')}
-          </button>
-          <button
-            className={'spine-btn ' + (showRightPanel ? 'spine-btn-active' : '')}
-            onClick={toggleRightPanel}
-            title={t('header.props_panel_tip')}
-          >
-            {t('header.props_panel')}
-          </button>
-          <div className="w-px h-5 mx-1" style={{ background: 'var(--spine-border)' }} />
-          <button
-            className={'spine-btn ' + (viewMode === 'editor' ? 'spine-btn-active' : '')}
-            onClick={() => setViewMode('editor')}
-          >
-            {t('header.view_editor')}
-          </button>
-          <button
-            className={'spine-btn ' + (viewMode === 'demo' ? 'spine-btn-active' : '')}
-            onClick={() => setViewMode('demo')}
-          >
-            {t('header.view_demo')}
-          </button>
-
-          {/* header 右上角占位 icon：视图（眼睛）/ 设置（齿轮）—— 后续接功能 */}
-          <div className="w-px h-5 mx-1" style={{ background: 'var(--spine-border)' }} />
           <button
             className="spine-btn-icon"
             onClick={() => console.log('[Header] 视图（占位）')}
