@@ -98,7 +98,9 @@ export function TopMenu() {
 
   return (
     <div ref={rootRef} className="relative" style={{ height: M.HEADER_HEIGHT }}>
-      {/* Logo + 版本徽章（点击区） */}
+      {/* Logo + 版本徽章（点击区）
+          - 关闭时显示 🩻 PixiBones + TRIAL
+          - 打开时变成透明（宽度不变），让面板里的 logo 接管视觉效果 */}
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -111,26 +113,30 @@ export function TopMenu() {
         }}
         title="主菜单"
       >
-        <span style={{ fontSize: 14, fontWeight: 600 }}>🩻 PixiBones</span>
-        {/* header 平时态：只显示 Trial 缩写（不显示版本号数字） */}
-        <span
-          style={{
-            color: M.LOGO_COLOR,
-            fontSize: 12,
-            fontWeight: 600,
-            letterSpacing: 1,
-          }}
-        >
-          TRIAL
-        </span>
+        {!open && (
+          <>
+            <span style={{ fontSize: 14, fontWeight: 600 }}>🩻 PixiBones</span>
+            {/* header 平时态：只显示 Trial 缩写（不显示版本号数字） */}
+            <span
+              style={{
+                color: M.LOGO_COLOR,
+                fontSize: 12,
+                fontWeight: 600,
+                letterSpacing: 1,
+              }}
+            >
+              TRIAL
+            </span>
+          </>
+        )}
       </button>
 
-      {/* 下拉菜单 */}
+      {/* 下拉菜单：从窗口最左上角弹出，盖住 header 和左侧 ruler */}
       {open && (
         <div
-          className="absolute z-50 shadow-2xl topmenu-dropdown"
+          className="fixed z-50 shadow-2xl topmenu-dropdown"
           style={{
-            top: M.HEADER_HEIGHT - 2,
+            top: 0,
             left: 0,
             minWidth: M.MENU_MIN_WIDTH,
             background: M.MENU_BG,
