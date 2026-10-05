@@ -4,6 +4,7 @@ import { PsdPanel } from './PsdPanel';
 import { PropertyPanel } from './PropertyPanel';
 import { BoneEditor } from './BoneEditor';
 import { BottomToolbar } from './BottomToolbar';
+import { TopMenu } from './TopMenu';
 import { parsePsd } from '@psd/index';
 
 /**
@@ -35,9 +36,7 @@ export function Editor() {
         className="flex items-center gap-2 px-3 h-9 shrink-0 border-b"
         style={{ background: 'var(--spine-bg-toolbar)', borderColor: 'var(--spine-border)' }}
       >
-        <span className="text-sm font-semibold" style={{ color: 'var(--spine-accent)' }}>
-          🩻 PixiBones
-        </span>
+        <TopMenu />
         <span className="text-xs" style={{ color: 'var(--spine-text-dim)' }}>
           {psd ? `*${psd.layers.length}L · ${bones.length}B` : '(未命名)'}
         </span>
