@@ -128,7 +128,7 @@ export function TopMenu() {
       {/* 下拉菜单 */}
       {open && (
         <div
-          className="absolute z-50 shadow-2xl"
+          className="absolute z-50 shadow-2xl topmenu-dropdown"
           style={{
             top: M.HEADER_HEIGHT - 2,
             left: 0,
@@ -137,21 +137,19 @@ export function TopMenu() {
             border: M.MENU_BORDER,
             borderRadius: M.MENU_RADIUS,
             padding: '4px 0',
+            transformOrigin: 'top left',
           }}
         >
-          {/* 面板顶部：完整 logo + 完整版本号（仅展开时显示） */}
+          {/* 面板顶部：仅显示版本徽章（logo 在 header 已显示，避免重复） */}
           <div
             className="flex items-center"
             style={{
-              height: 36,
+              height: 30,
               padding: '0 10px',
               marginBottom: 4,
               borderBottom: M.DIVIDER,
             }}
           >
-            <span style={{ fontSize: 14, fontWeight: 600, color: M.LOGO_COLOR, marginRight: 12 }}>
-              🩻 PixiBones
-            </span>
             <span
               style={{
                 background: M.TRIAL_BG,
