@@ -57,6 +57,23 @@ html, body, #root {
   transition: background 0.1s;
 }
 .spine-btn:hover { background: var(--spine-bg-panel-dark); }
+.spine-btn-icon {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--spine-text-dim);
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background 0.1s, color 0.1s;
+}
+.spine-btn-icon:hover {
+  background: var(--spine-bg-panel);
+  color: var(--spine-text);
+}
 .spine-btn-primary {
   background: var(--spine-accent-dim);
   border-color: var(--spine-accent);

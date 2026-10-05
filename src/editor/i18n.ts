@@ -23,6 +23,8 @@ const dict = {
     props_panel_tip:    { zh: '切换属性面板',       en: 'Toggle Properties Panel' },
     view_editor:        { zh: '🦴 编辑器',         en: '🦴 Editor' },
     view_demo:          { zh: '🎬 Demo',          en: '🎬 Demo' },
+    view_tip:           { zh: '视图',              en: 'View' },
+    settings_tip:       { zh: '设置',              en: 'Settings' },
   },
 
   // ===== 主菜单项 =====
