@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { usePixiBonesStore, findBone, type BoneNode } from './store';
+import { useT } from './i18n';
 import moveIcon from './icons/move.png';
 import rotateIcon from './icons/rotate.png';
 import scaleIcon from './icons/scale.png';
@@ -74,6 +75,7 @@ export function BottomToolbar() {
   const bones = usePixiBonesStore((s) => s.bones);
   const selectedBoneId = usePixiBonesStore((s) => s.selectedBoneId);
   const selectBone = usePixiBonesStore((s) => s.selectBone);
+  const { t } = useT();
 
   const selected = selectedBoneId ? findBone(bones, selectedBoneId) : null;
   const breadcrumb = useMemo(() => buildPath(bones, selectedBoneId), [bones, selectedBoneId]);
@@ -93,20 +95,20 @@ export function BottomToolbar() {
         <Card>
           <ModeButton
             icon={<IconPose />}
-            label="姿势"
+            label={t('toolbar.mode_pose')}
             active={editorMode === 'pose'}
             onClick={() => setEditorMode('pose')}
           />
           <ModeButton
             icon={<IconWeights />}
-            label="权重"
+            label={t('toolbar.mode_weights')}
             badge="PRO"
             active={editorMode === 'weights'}
             onClick={() => setEditorMode('weights')}
           />
           <ModeButton
             icon={<IconCreate />}
-            label="创建"
+            label={t('toolbar.mode_create')}
             active={editorMode === 'create'}
             onClick={() => setEditorMode('create')}
           />
@@ -115,14 +117,14 @@ export function BottomToolbar() {
         <Card>
           <TransformRow
             icon={<IconRotate />}
-            label="旋转"
+            label={t('toolbar.tx_rotate')}
             xValue="0.0"
             active={activeTransform === 'rotate'}
             columns="one"
           />
           <TransformRow
             icon={<IconMove />}
-            label="移动"
+            label={t('toolbar.tx_move')}
             xValue={selected ? selected.x.toFixed(1) : '0.0'}
             yValue={selected ? selected.y.toFixed(1) : '0.0'}
             active={activeTransform === 'move'}
@@ -130,7 +132,7 @@ export function BottomToolbar() {
           />
           <TransformRow
             icon={<IconScale />}
-            label="缩放"
+            label={t('toolbar.tx_scale')}
             xValue={selected ? selected.scaleX.toFixed(2) : '1.00'}
             yValue={selected ? selected.scaleY.toFixed(2) : '1.00'}
             active={activeTransform === 'scale'}
@@ -138,7 +140,7 @@ export function BottomToolbar() {
           />
           <TransformRow
             icon={<IconShear />}
-            label="倾斜"
+            label={t('toolbar.tx_shear')}
             xValue="0.0"
             yValue="0.0"
             active={activeTransform === 'shear'}
@@ -149,19 +151,19 @@ export function BottomToolbar() {
         <Card>
           <RadioButton
             icon={<IconLocal />}
-            label="本地"
+            label={t('toolbar.space_local')}
             active={activeSpace === 'local'}
             onClick={() => setTransformSpace('local')}
           />
           <RadioButton
             icon={<IconParent />}
-            label="父级"
+            label={t('toolbar.space_parent')}
             active={activeSpace === 'parent'}
             onClick={() => setTransformSpace('local')}
           />
           <RadioButton
             icon={<IconWorld />}
-            label="世界"
+            label={t('toolbar.space_world')}
             active={activeSpace === 'world'}
             onClick={() => setTransformSpace('world')}
           />
@@ -170,19 +172,19 @@ export function BottomToolbar() {
         <Card>
           <RadioButton
             icon={<IconBone />}
-            label="骨骼"
+            label={t('toolbar.ref_bone')}
             active={activeRef === 'bone'}
             onClick={() => {}}
           />
           <RadioButton
             icon={<IconImage />}
-            label="图片"
+            label={t('toolbar.ref_image')}
             active={activeRef === 'image'}
             onClick={() => {}}
           />
           <RadioButton
             icon={<IconPixel />}
-            label="像素"
+            label={t('toolbar.ref_pixel')}
             active={activeRef === 'pixel'}
             onClick={() => {}}
           />
@@ -191,9 +193,9 @@ export function BottomToolbar() {
         <Card>
           <VisibilityTable
             rows={[
-              { label: '骨骼', eyes: [true, false, false] },
-              { label: '图片', eyes: [true, false, false] },
-              { label: '其他', eyes: [false, false, false] },
+              { label: t('toolbar.vis_bone'),  eyes: [true, false, false] },
+              { label: t('toolbar.vis_image'), eyes: [true, false, false] },
+              { label: t('toolbar.vis_other'), eyes: [false, false, false] },
             ]}
           />
         </Card>

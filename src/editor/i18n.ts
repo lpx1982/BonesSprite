@@ -71,6 +71,31 @@ const dict = {
     undo_console:       { zh: '[QuickBtn] 撤消（未实现）',                          en: '[QuickBtn] Undo (not implemented)' },
     redo_console:       { zh: '[QuickBtn] 重做（未实现）',                          en: '[QuickBtn] Redo (not implemented)' },
   },
+
+  // ===== 底部 5 张卡片 =====
+  toolbar: {
+    // 卡片 1：mode
+    mode_pose:          { zh: '姿势',          en: 'Pose' },
+    mode_weights:       { zh: '权重',          en: 'Weights' },
+    mode_create:        { zh: '创建',          en: 'Create' },
+    // 卡片 2：transform
+    tx_rotate:          { zh: '旋转',          en: 'Rotate' },
+    tx_move:            { zh: '移动',          en: 'Move' },
+    tx_scale:           { zh: '缩放',          en: 'Scale' },
+    tx_shear:           { zh: '倾斜',          en: 'Shear' },
+    // 卡片 3：space
+    space_local:        { zh: '本地',          en: 'Local' },
+    space_parent:       { zh: '父级',          en: 'Parent' },
+    space_world:        { zh: '世界',          en: 'World' },
+    // 卡片 4：reference
+    ref_bone:           { zh: '骨骼',          en: 'Bones' },
+    ref_image:          { zh: '图片',          en: 'Images' },
+    ref_pixel:          { zh: '像素',          en: 'P' },
+    // 卡片 5：visibility
+    vis_bone:           { zh: '骨骼',          en: 'B' },
+    vis_image:          { zh: '图片',          en: 'I' },
+    vis_other:          { zh: '其他',          en: 'O' },
+  },
 } as const;
 
 // =================================================================================
