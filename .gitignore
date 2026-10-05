@@ -10,3 +10,6 @@ dist-ssr
 .env
 .env.*
 !.env.example
+
+# IDE 编辑临时文件（Trae/VSCode 等）
+.!*
