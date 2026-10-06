@@ -168,7 +168,7 @@ export function BottomToolbar() {
         <button
           type="button"
           onClick={toggleToolbarLocked}
-          onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
           className="absolute pointer-events-auto"
           title={toolbarLocked ? t('toolbar.lock_unlock') : t('toolbar.lock_lock')}
           style={{
