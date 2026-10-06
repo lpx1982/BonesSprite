@@ -20,6 +20,7 @@ export function Editor() {
   const editorTab = usePixiBonesStore((s) => s.editorTab);
   const psd = usePixiBonesStore((s) => s.psd);
   const bones = usePixiBonesStore((s) => s.bones);
+  const projectName = usePixiBonesStore((s) => s.projectName);
   const { t } = useT();
 
   return (
@@ -31,7 +32,7 @@ export function Editor() {
         <TopMenu />
 
         <span className="text-xs ml-1" style={{ color: 'var(--spine-text-dim)' }}>
-          {psd ? `*${psd.layers.length}L · ${bones.length}B` : t('header.project_unnamed')}
+          {projectName}
         </span>
 
         {/* header 右上角占位 icon：视图（眼睛）/ 设置（齿轮）—— 后续接功能 */}

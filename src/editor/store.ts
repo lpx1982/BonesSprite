@@ -52,6 +52,9 @@ export interface PixiBonesState {
   showRulers: boolean;
   editorMode: 'pose' | 'weights' | 'create';
   transformSpace: 'local' | 'world';
+  /** 当前项目名（默认 raptor-pro，可被 setProjectName 覆盖，如导入 PSD 后用文件名） */
+  projectName: string;
+  setProjectName: (name: string) => void;
   viewport: { panX: number; panY: number; zoom: number };
   /** BoneEditor 的实际渲染原点/缩放，用于标尺换算（世界 0,0 在屏幕的哪里） */
   render: { x: number; y: number; scale: number };
@@ -184,6 +187,9 @@ export const usePixiBonesStore = create<PixiBonesState>((set) => ({
 
   editorTab: 'setup',
   setEditorTab: (t) => set({ editorTab: t }),
+
+  projectName: 'raptor-pro',
+  setProjectName: (name) => set({ projectName: name }),
 
   timelineHeight: 240,
   setTimelineHeight: (h) => set({ timelineHeight: h }),
