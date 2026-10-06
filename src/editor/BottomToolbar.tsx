@@ -1,4 +1,4 @@
-import { useMemo, useRef, useEffect } from 'react';
+import { useMemo, useRef, useEffect, useState } from 'react';
 import { usePixiBonesStore, findBone, type BoneNode } from './store';
 import { useT } from './i18n';
 import moveIcon from './icons/move.png';
@@ -347,15 +347,23 @@ function ModeButton({
   active: boolean;
   onClick: () => void;
 }) {
+  const [hover, setHover] = useState(false);
   return (
     <button
       onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
       className="flex items-center gap-2 px-3 relative transition-colors"
       style={{
         height: 26,
         minWidth: 80,
         padding: '0 10px',
-        background: active ? 'var(--spine-accent)' : 'rgba(255, 255, 255, 0.06)',
+        // active 优先级最高 > hover > 默认
+        background: active
+          ? 'var(--spine-accent)'
+          : hover
+            ? 'rgba(255, 255, 255, 0.14)'
+            : 'rgba(255, 255, 255, 0.06)',
         color: active ? '#fff' : 'var(--spine-text)',
         fontWeight: active ? 600 : 400,
         fontSize: 12,
