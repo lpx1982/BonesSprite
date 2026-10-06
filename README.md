@@ -1,5 +1,7 @@
 # PixiBones
 
+<img src="./public/logo.svg" alt="PixiBones" width="320" />
+
 > 轻量开源的 Web 端 **2D / 2.5D 骨骼绑定与动画工具**，对标 Spine，但完全免费开源。
 
 PixiBones 专为 **Cocos Creator / Unity / WebGL 游戏开发者** 设计：

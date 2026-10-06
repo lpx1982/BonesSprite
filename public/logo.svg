@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 120" width="320" height="120">
+  <defs>
+    <linearGradient id="bfinal" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#E61E61"/>
+      <stop offset="100%" stop-color="#A872D9"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 透明背景 -->
+
+  <!-- ====== 左侧大 B（含椎骨堆）====== -->
+  <g transform="translate(8, 12)">
+    <!-- 5 个椎骨横向片（椎骨堆：38→30 渐窄）-->
+    <g fill="url(#bfinal)">
+      <rect x="18"  y="0"   width="38" height="16" rx="8"/>
+      <rect x="19"  y="22"  width="36" height="16" rx="8"/>
+      <rect x="20"  y="44"  width="34" height="16" rx="8"/>
+      <rect x="21"  y="66"  width="32" height="16" rx="8"/>
+      <rect x="22"  y="88"  width="30" height="16" rx="8"/>
+    </g>
+
+    <!-- B 的右弧 -->
+    <g fill="none" stroke="url(#bfinal)" stroke-width="16"
+       stroke-linecap="round" stroke-linejoin="round">
+      <path d="M 56 8  Q 138 8  138 30  Q 138 64  56 64"/>
+      <path d="M 56 64 Q 136 64 136 84  Q 136 96  56 96"/>
+    </g>
+
+    <!-- 椎间盘点 -->
+    <g fill="#FFFFFF" opacity="0.7">
+      <circle cx="70"  cy="14"  r="2.5"/>
+      <circle cx="70"  cy="36"  r="2.5"/>
+      <circle cx="70"  cy="58"  r="2.5"/>
+      <circle cx="70"  cy="80"  r="2.5"/>
+    </g>
+
+    <!-- 弧线节点 -->
+    <g fill="#FFFFFF">
+      <circle cx="138" cy="22"  r="4"/>
+      <circle cx="136" cy="84"  r="4"/>
+    </g>
+  </g>
+
+  <!-- ====== 右侧白色文字 "PixiBones" ====== -->
+  <text x="170" y="78"
+        font-family="ui-sans-serif, -apple-system, 'Inter', 'Segoe UI', sans-serif"
+        font-size="50" font-weight="800" fill="#FFFFFF" letter-spacing="-1">
+    PixiBones
+  </text>
+
+  <!-- 副标 -->
+  <text x="170" y="100"
+        font-family="ui-monospace, 'JetBrains Mono', monospace"
+        font-size="10" font-weight="500" fill="#BBBBBB" letter-spacing="3">
+    2D SKELETAL · ANIMATION
+  </text>
+</svg>
