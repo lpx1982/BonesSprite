@@ -94,6 +94,7 @@ export function BoneEditor() {
 
       // 十字光标插在 grid 之后、PSD 之前（被 PSD sprites 盖住）
       const crosshairLayer = new Gfx();
+      crosshairLayer.eventMode = 'none';   // 纯视觉装饰，不响应事件
       a.stage.addChild(crosshairLayer);
 // 紧贴 grid 上方（z-index 在 PSD 之下）
 
@@ -101,6 +102,7 @@ export function BoneEditor() {
       a.stage.addChild(root);
 
       const bonesLayer = new Gfx();
+      bonesLayer.eventMode = 'none';      // 纯视觉装饰（绘制骨骼线/十字）
       a.stage.addChild(bonesLayer);
 
       const handlesLayer = new Container();
@@ -402,31 +404,72 @@ export function BoneEditor() {
         const ox = root.x;
         const oy = root.y;
 
-        const BONE_COLOR = 0xE61E61;
-        const SELECTED_COLOR = 0xF0E020;
+        const BONE_COLOR = 0x9ca3af;     // 未选中：灰色
+        const SELECTED_COLOR = 0xF0E020;   // 选中：黄色
+        const sAvg = (Math.abs(sx) + Math.abs(sy)) / 2;  // 平均缩放
 
-        const visit = (bone: EngineBone, isSelected: boolean) => {
+        const visit = (bone: EngineBone, isSelected: boolean, length: number) => {
           const p0 = skeletonRef!.getWorldPosition(bone);
           const p1 = skeletonRef!.getWorldTip(bone);
-          bonesLayer
-            .moveTo(ox + p0.x * sx, oy + p0.y * sy)
-            .lineTo(ox + p1.x * sx, oy + p1.y * sy)
-            .stroke({ width: 4, color: isSelected ? SELECTED_COLOR : BONE_COLOR });
-          bonesLayer
-            .circle(ox + p0.x * sx, oy + p0.y * sy, 6)
-            .fill({ color: 0xffffff });
-          if (isSelected) {
+          if (length === 0) {
+            // 0 长度骨骼 = 根骨骼图标（Spine 风格：4 条灰色矩形十字臂 + 中心双圆环）
+            const cx = ox + p0.x * sx;
+            const cy = oy + p0.y * sy;
+            const color = isSelected ? SELECTED_COLOR : BONE_COLOR;
+            // 图标基准 446x335，整体按 baseSize 缩放；保持原比例
+            const baseSize = 96 * sAvg;
+            const ratio = 335 / 446;
+            const W = baseSize;
+            const H = baseSize * ratio;
+            // 中心点（原始图标中心 (167, 163) → 归一化 (167/446, 163/335) = (0.375, 0.487)）
+            // 我们的锚点在 cx,cy，对齐到原图中心
+            const ox0 = cx - W * (167 / 446);
+            const oy0 = cy - H * (163 / 335);
+            // 4 条矩形臂（粗 20px 归一化 → 20/446 ≈ 0.045）
+            const armW = W * 0.045;
+            // 上
+            bonesLayer.rect(ox0 + W * 0.345, oy0, armW, H * 0.275).fill({ color });
+            // 下
+            bonesLayer.rect(ox0 + W * 0.345, oy0 + H * 0.725, armW, H * 0.275).fill({ color });
+            // 左
+            bonesLayer.rect(ox0, oy0 + H * 0.45, W * 0.205, armW).fill({ color });
+            // 右
+            bonesLayer.rect(ox0 + W * 0.56, oy0 + H * 0.45, W * 0.44, armW).fill({ color });
+            // 中心大圆环（外圆）
             bonesLayer
-              .circle(ox + p0.x * sx, oy + p0.y * sy, 10)
-              .stroke({ width: 1.5, color: 0x4FB8F8, alpha: 0.9 });
+              .circle(cx, cy, 28 * sAvg)
+              .stroke({ width: 8 * sAvg, color });
+            // 中心小圆环（内圆）
+            bonesLayer
+              .circle(cx, cy, 11 * sAvg)
+              .stroke({ width: 5 * sAvg, color });
+            // 选中态：加蓝色高亮圈
+            if (isSelected) {
+              bonesLayer
+                .circle(cx, cy, 38 * sAvg)
+                .stroke({ width: 1.5, color: 0x4FB8F8, alpha: 0.9 });
+            }
+          } else {
+            bonesLayer
+              .moveTo(ox + p0.x * sx, oy + p0.y * sy)
+              .lineTo(ox + p1.x * sx, oy + p1.y * sy)
+              .stroke({ width: 4 * sAvg, color: isSelected ? SELECTED_COLOR : BONE_COLOR });
+            bonesLayer
+              .circle(ox + p0.x * sx, oy + p0.y * sy, 6 * sAvg)
+              .fill({ color: 0xffffff });
+            if (isSelected) {
+              bonesLayer
+                .circle(ox + p0.x * sx, oy + p0.y * sy, 10)
+                .stroke({ width: 1.5, color: 0x4FB8F8, alpha: 0.9 });
+            }
           }
           for (const c of bone.children) {
             const sel = (c as unknown as { _id?: string })._id === selectedBoneId;
-            visit(c, sel);
+            visit(c, sel, c.length);
           }
         };
         const rootSelected = (skeletonRef.root as unknown as { _id?: string })._id === selectedBoneId;
-        visit(skeletonRef.root, rootSelected);
+        visit(skeletonRef.root, rootSelected, skeletonRef.root.length);
 
         for (const node of nodes) {
           const b = boneById.get(node.id);
@@ -437,8 +480,10 @@ export function BoneEditor() {
           const oX = ox + origin.x * sx;
           const oY = oy + origin.y * sy;
           const jointHit = new Gfx();
+          // hit area：0 长度骨骼用大圆覆盖整个图标范围
+          const hitR = node.length === 0 ? 24 : 16;
           jointHit
-            .circle(0, 0, 12)
+            .circle(0, 0, hitR)
             .fill({ color: 0xffffff, alpha: 0.001 });
           jointHit.x = oX;
           jointHit.y = oY;
