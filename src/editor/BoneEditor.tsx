@@ -480,11 +480,9 @@ export function BoneEditor() {
             const mode = usePixiBonesStore.getState().editorMode;
             if (mode === 'create') {
               // Create 模式：启动"从父骨骼拖出子骨骼"模式
-              // 起点是父骨骼关节的世界坐标
               const origin = skeletonRef!.getWorldPosition(b);
               const startWorld = { x: origin.x, y: origin.y };
               const startScreen = { x: ev.global.x, y: ev.global.y };
-              // 预览线：从父骨骼关节 → 当前鼠标位置（每帧更新）
               const preview = new Gfx();
               preview.eventMode = 'none';
               a.stage.addChild(preview);
@@ -496,7 +494,14 @@ export function BoneEditor() {
                 preview,
               };
             } else {
+              // Pose 模式（或其他）：选中骨骼，并启动拖动 = 平移该骨骼
               usePixiBonesStore.getState().selectBone(node.id);
+              dragState = {
+                kind: 'tip',
+                boneId: node.id,
+                startLocal: { x: node.x, y: node.y },
+                startScreen: { x: ev.global.x, y: ev.global.y },
+              };
             }
           });
           handlesLayer.addChild(jointHit);
@@ -537,10 +542,23 @@ export function BoneEditor() {
           const dyScreen = ev.global.y - dragState.startScreen.y;
           const sx = root.scale.x;
           const sy = root.scale.y;
+          // 屏幕 delta → 世界 delta
+          const dxWorld = sx !== 0 ? dxScreen / sx : 0;
+          const dyWorld = sy !== 0 ? dyScreen / sy : 0;
+          // 世界 delta → 父骨骼 local delta（反旋转父骨骼的 rotation）
+          const dragNode = findBone(st.bones, dragState.boneId);
+          const parentRotDeg = dragNode && dragNode.parentId !== null
+            ? (findBone(st.bones, dragNode.parentId)?.rotation ?? 0)
+            : 0;
+          const parentRotRad = parentRotDeg * (Math.PI / 180);
+          const cos = Math.cos(-parentRotRad);
+          const sin = Math.sin(-parentRotRad);
+          const localDx = dxWorld * cos - dyWorld * sin;
+          const localDy = dxWorld * sin + dyWorld * cos;
           st.moveBone(
             dragState.boneId,
-            dragState.startLocal.x + (sx !== 0 ? dxScreen / sx : 0),
-            dragState.startLocal.y + (sy !== 0 ? dyScreen / sy : 0),
+            dragState.startLocal.x + localDx,
+            dragState.startLocal.y + localDy,
           );
         } else if (dragState.kind === 'rotate') {
           const node = findBone(st.bones, dragState.boneId);
