@@ -46,6 +46,29 @@ export function Editor() {
     if (s.viewPreview)    s.toggleViewPreview();
   }, [viewAllHidden]);
 
+  // 全局键盘快捷键：Cmd+Z / Ctrl+Z 撤销，Cmd+Shift+Z / Ctrl+Y 重做
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // 焦点在输入控件上时让浏览器原生行为走（输入框里的字也要能撤销）
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement | null)?.isContentEditable) {
+        return;
+      }
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod) return;
+      const key = e.key.toLowerCase();
+      if (key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        usePixiBonesStore.getState().undo();
+      } else if ((key === 'z' && e.shiftKey) || key === 'y') {
+        e.preventDefault();
+        usePixiBonesStore.getState().redo();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   return (
     <div className="flex flex-col h-screen" style={{ background: 'var(--spine-bg-base)' }}>
       <header

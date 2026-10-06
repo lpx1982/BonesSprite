@@ -497,6 +497,9 @@ export function BoneEditor() {
             } else {
               // Pose 模式（或其他）：选中骨骼，并启动拖动 = 平移该骨骼
               usePixiBonesStore.getState().selectBone(node.id);
+              // 拖动开始前先快照一次 history（撤销能回到拖之前的位置）
+              // pointermove 期间直接改 state 不入栈，避免一次拖出 N 条 history
+              usePixiBonesStore.getState().pushHistory();
               dragState = {
                 kind: 'tip',
                 boneId: node.id,
@@ -526,6 +529,8 @@ export function BoneEditor() {
             const parentRotDeg = node.parentId
               ? (findBone(usePixiBonesStore.getState().bones, node.parentId)?.rotation ?? 0)
               : 0;
+            // 拖动开始前快照一次 history（pointermove 期间不入栈）
+            usePixiBonesStore.getState().pushHistory();
             dragState = {
               kind: 'tip-resize',
               boneId: node.id,
@@ -567,11 +572,13 @@ export function BoneEditor() {
           const sin = Math.sin(-parentRotRad);
           const localDx = dxWorld * cos - dyWorld * sin;
           const localDy = dxWorld * sin + dyWorld * cos;
-          st.moveBone(
-            dragState.boneId,
-            dragState.startLocal.x + localDx,
-            dragState.startLocal.y + localDy,
-          );
+          // 拖动期间直接写 state，不走 moveBone（moveBone 会入栈 history，导致一次拖出 N 条）
+          const boneId = dragState.boneId;
+          const newX = dragState.startLocal.x + localDx;
+          const newY = dragState.startLocal.y + localDy;
+          usePixiBonesStore.setState((s) => ({
+            bones: s.bones.map((n) => (n.id === boneId ? { ...n, x: newX, y: newY } : n)),
+          }));
         } else if (dragState.kind === 'tip-resize') {
           // 拖 tip = 根据鼠标相对父骨骼的角度/距离改变 rotation/length
           const sx = root.scale.x;
@@ -606,7 +613,12 @@ export function BoneEditor() {
           const oyS = root.y + origin.y * root.scale.y;
           const startAngle = Math.atan2(dragState.startScreen.y - oyS, dragState.startScreen.x - oxS);
           const nowAngle = Math.atan2(ev.global.y - oyS, ev.global.x - oxS);
-          st.setBoneRotation(dragState.boneId, dragState.startRot + (nowAngle - startAngle));
+          const newRot = dragState.startRot + (nowAngle - startAngle);
+          // 直接写 state，不入栈（避免每次 mousemove 都产生一条 history）
+          const boneId = dragState.boneId;
+          usePixiBonesStore.setState((s) => ({
+            bones: s.bones.map((n) => (n.id === boneId ? { ...n, rotation: newRot } : n)),
+          }));
         } else if (dragState.kind === 'pan') {
           const newPanX = dragState.startPan.x + (ev.global.x - dragState.startScreen.x);
           const newPanY = dragState.startPan.y + (ev.global.y - dragState.startScreen.y);

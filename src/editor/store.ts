@@ -74,6 +74,14 @@ export interface PixiBonesState {
   /** 最近工程列表（按打开时间倒序，最多 8 个，localStorage 持久化） */
   recentProjects: Array<{ id: string; name: string; openedAt: number }>;
   pushRecentProject: (id: string, name: string) => void;
+  // ===== Undo/Redo 撤销重做（仅记录 bones 的快照） =====
+  /** 历史快照栈（最多 50 步），每项是 bones + selectedBoneId 的快照 */
+  historyPast:  Array<{ bones: BoneNode[]; selectedBoneId: string | null }>;
+  historyFuture: Array<{ bones: BoneNode[]; selectedBoneId: string | null }>;
+  /** 把当前 bones 快照推入 past（结构性变化前调用） */
+  pushHistory: () => void;
+  undo: () => void;
+  redo: () => void;
   viewport: { panX: number; panY: number; zoom: number };
   /** BoneEditor 的实际渲染原点/缩放，用于标尺换算（世界 0,0 在屏幕的哪里） */
   render: { x: number; y: number; scale: number };
@@ -261,6 +269,46 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     try { localStorage.setItem('pixibones.recent', JSON.stringify(trimmed)); } catch {}
   },
 
+  // ===== Undo / Redo（快照 bones + selectedBoneId）=====
+  historyPast:  [],
+  historyFuture: [],
+  pushHistory: () => {
+    const s = get();
+    // 深拷贝当前 bones 快照
+    const snap = { bones: JSON.parse(JSON.stringify(s.bones)), selectedBoneId: s.selectedBoneId };
+    const past = [...s.historyPast, snap].slice(-50);  // 最多 50 步
+    set({ historyPast: past, historyFuture: [] });
+  },
+  undo: () => {
+    const s = get();
+    if (s.historyPast.length === 0) return;
+    const past = [...s.historyPast];
+    const prev = past.pop()!;
+    // 当前状态推到 future
+    const currentSnap = { bones: JSON.parse(JSON.stringify(s.bones)), selectedBoneId: s.selectedBoneId };
+    const future = [currentSnap, ...s.historyFuture];
+    set({
+      historyPast: past,
+      historyFuture: future,
+      bones: prev.bones,
+      selectedBoneId: prev.selectedBoneId,
+    });
+  },
+  redo: () => {
+    const s = get();
+    if (s.historyFuture.length === 0) return;
+    const [next, ...rest] = s.historyFuture;
+    // 当前状态推到 past
+    const currentSnap = { bones: JSON.parse(JSON.stringify(s.bones)), selectedBoneId: s.selectedBoneId };
+    const past = [...s.historyPast, currentSnap];
+    set({
+      historyPast: past,
+      historyFuture: rest,
+      bones: next.bones,
+      selectedBoneId: next.selectedBoneId,
+    });
+  },
+
   timelineHeight: 240,
   setTimelineHeight: (h) => set({ timelineHeight: h }),
 
@@ -310,7 +358,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   setRender: (r) => set({ render: r }),
 
   // Day 3 setters
-  addBone: (parentId, partial = {}) =>
+  addBone: (parentId, partial = {}) => {
+    get().pushHistory();
     set((state) => {
       const newBone: BoneNode = {
         id: genBoneId(),
@@ -328,31 +377,40 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
         bones: [...state.bones, newBone],
         selectedBoneId: newBone.id,
       };
-    }),
+    });
+  },
 
-  removeBone: (id) =>
+  removeBone: (id) => {
+    get().pushHistory();
     set((state) => {
       const toRemove = collectDescendants(state.bones, id);
       return {
         bones: state.bones.filter((n) => !toRemove.has(n.id)),
         selectedBoneId: toRemove.has(state.selectedBoneId ?? '') ? null : state.selectedBoneId,
       };
-    }),
+    });
+  },
 
-  moveBone: (id, x, y) =>
+  moveBone: (id, x, y) => {
+    get().pushHistory();
     set((state) => ({
       bones: state.bones.map((n) => (n.id === id ? { ...n, x, y } : n)),
-    })),
+    }));
+  },
 
-  setBoneRotation: (id, rotation) =>
+  setBoneRotation: (id, rotation) => {
+    get().pushHistory();
     set((state) => ({
       bones: state.bones.map((n) => (n.id === id ? { ...n, rotation } : n)),
-    })),
+    }));
+  },
 
-  setBoneLength: (id, length) =>
+  setBoneLength: (id, length) => {
+    get().pushHistory();
     set((state) => ({
       bones: state.bones.map((n) => (n.id === id ? { ...n, length: Math.max(1, length) } : n)),
-    })),
+    }));
+  },
 
   setBoneParent: (id, parentId) =>
     set((state) => {

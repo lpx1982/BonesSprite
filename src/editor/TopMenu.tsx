@@ -187,10 +187,10 @@ export function TopMenu() {
           }}>
             <img src={saveIcon} alt="保存" width={M.ICON_GRP.ICON_SIZE} height={M.ICON_GRP.ICON_SIZE} style={{ display: 'block' }} />
           </QuickBtn>
-          <QuickBtn title={t('quickbtn.undo_tip')} onClick={() => console.log(t('quickbtn.undo_console'))}>
+          <QuickBtn title={t('quickbtn.undo_tip')} onClick={() => usePixiBonesStore.getState().undo()}>
             <img src={replyIcon} alt="撤消" width={M.ICON_GRP.ICON_SIZE} height={M.ICON_GRP.ICON_SIZE} style={{ display: 'block' }} />
           </QuickBtn>
-          <QuickBtn title={t('quickbtn.redo_tip')} onClick={() => console.log(t('quickbtn.redo_console'))}>
+          <QuickBtn title={t('quickbtn.redo_tip')} onClick={() => usePixiBonesStore.getState().redo()}>
             <img src={forwardIcon} alt="重做" width={M.ICON_GRP.ICON_SIZE} height={M.ICON_GRP.ICON_SIZE} style={{ display: 'block' }} />
           </QuickBtn>
         </div>
