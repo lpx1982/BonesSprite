@@ -107,16 +107,8 @@ export function Editor() {
           />
         </div>
 
-        {/* header 右上角：hideviews（隐藏所有视图） / views（视图菜单） —— 视图菜单 ViewMenu 组件 */}
+        {/* header 右上角：属性面板 toggle / hideviews / views 视图菜单 */}
         <div className="ml-auto flex items-center gap-1">
-          <button
-            className="spine-btn-icon"
-            onClick={() => usePixiBonesStore.getState().toggleLeftPanel()}
-            title={t('header.layer_panel_tip')}
-            style={{ opacity: showLeftPanel ? 1 : 0.5 }}
-          >
-            <span style={{ fontSize: 14 }}>{t('header.layer_panel')}</span>
-          </button>
           <button
             className="spine-btn-icon"
             onClick={() => usePixiBonesStore.getState().toggleRightPanel()}
