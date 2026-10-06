@@ -29,7 +29,7 @@ const M = {
   // ===== 4 个 quickbtn 整组配置（打开/保存/撤消/重做）=====
   // 改这里一处即可同时控制所有按钮的容器 + 按钮框 + 图标位置/尺寸
   ICON_GRP: {
-    TOP:           8,    // 整组距离 header 顶部的距离（控制垂直基线对齐 logo）
+    BOTTOM:        200,    // 整组距离 header 底部的距离（控制垂直基线对齐 logo）
     LEFT:          4,    // 整组距离 logo 的左边距
     GAP:           2,    // 4 个按钮之间的间距
     BTN_SIZE:      24,   // 按钮框尺寸（24×24）
@@ -171,9 +171,9 @@ export function TopMenu() {
         <div
           className="flex items-center"
           style={{
-            gap:        M.ICON_GRP.GAP,
-            paddingLeft: M.ICON_GRP.LEFT,
-            paddingTop:  M.ICON_GRP.TOP,
+            gap:           M.ICON_GRP.GAP,
+            paddingLeft:    M.ICON_GRP.LEFT,
+            paddingBottom:  M.ICON_GRP.BOTTOM,
           }}
         >
           <QuickBtn title={t('quickbtn.open_tip')} onClick={() => console.log(t('quickbtn.open_console'))}>
