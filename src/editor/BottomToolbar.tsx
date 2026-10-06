@@ -217,9 +217,9 @@ export function BottomToolbar() {
         className="relative flex items-start pointer-events-auto"
         style={{
           gap: T.CARDS_GAP,
-          // 解锁状态下卡片组跟随 toolbarOffsetX 横向偏移
-          transform: toolbarLocked ? 'translateX(0)' : `translateX(${toolbarOffsetX}px)`,
-          transition: toolbarLocked ? 'transform 0.15s' : 'none',
+          // 卡片组始终跟随 toolbarOffsetX 横向偏移（锁定/解锁都保留位置）
+          transform: `translateX(${toolbarOffsetX}px)`,
+          transition: 'transform 0.15s',
           cursor: toolbarLocked ? 'default' : 'ew-resize',
         }}
       >
