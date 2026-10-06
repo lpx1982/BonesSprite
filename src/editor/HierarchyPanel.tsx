@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
 import { usePixiBonesStore, findBone, type BoneNode } from './store';
 
 /**
@@ -37,6 +37,27 @@ export function HierarchyPanel() {
   const [search, setSearch] = useState('');
   const [showTree, setShowTree] = useState(true);  // 🔼 折叠 / 展开树
   const [hideNonSelected, setHideNonSelected] = useState(false);  // 仅显示选中骨及其后代
+  const [popoverOpen, setPopoverOpen] = useState(false);  // ≡ 按钮的小弹层
+  const popoverWrapRef = useRef<HTMLDivElement>(null);
+
+  // 点 popover 外面关闭
+  useEffect(() => {
+    if (!popoverOpen) return;
+    const onDocDown = (e: MouseEvent) => {
+      if (popoverWrapRef.current && !popoverWrapRef.current.contains(e.target as Node)) {
+        setPopoverOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocDown);
+    return () => document.removeEventListener('mousedown', onDocDown);
+  }, [popoverOpen]);
+
+  // 关闭整个层级树面板（由 popover "关闭" 项触发）
+  const closePanel = () => {
+    usePixiBonesStore.getState().toggleRightPanel();
+    usePixiBonesStore.getState().toggleViewHierarchy();
+    setPopoverOpen(false);
+  };
 
   const childMap = useMemo(() => buildChildMap(bones), [bones]);
   const rootNodes = childMap.get(null) ?? [];
@@ -116,9 +137,83 @@ export function HierarchyPanel() {
           <span>层级树</span>
           <span style={{ color: C.dim, fontSize: 10, marginLeft: 4 }}>{bones.length} 骨</span>
         </button>
-        <div className="ml-auto flex items-center gap-1" style={{ color: C.dim }}>
-          <button style={{ color: C.dim, background: 'transparent', border: 'none', padding: '0 4px', cursor: 'pointer' }} onMouseEnter={(e) => (e.currentTarget.style.color = '#fff')} onMouseLeave={(e) => (e.currentTarget.style.color = C.dim)} title="全部展开">✕</button>
-          <button style={{ color: C.dim, background: 'transparent', border: 'none', padding: '0 4px', cursor: 'pointer' }} onMouseEnter={(e) => (e.currentTarget.style.color = '#fff')} onMouseLeave={(e) => (e.currentTarget.style.color = C.dim)} title="排序">≡</button>
+        <div className="ml-auto flex items-center gap-1" style={{ color: C.dim, position: 'relative' }} ref={popoverWrapRef}>
+          {/* ✕ 全部展开（占位，目前点开树） */}
+          <button
+            style={{ color: C.dim, background: 'transparent', border: 'none', padding: '0 4px', cursor: 'pointer' }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = '#fff')}
+            onMouseLeave={(e) => (e.currentTarget.style.color = C.dim)}
+            title="全部展开"
+            onClick={() => setShowTree(true)}
+          >✕</button>
+          {/* ≡ 弹层：最小化 / 关闭 */}
+          <button
+            style={{ color: popoverOpen ? '#fff' : C.dim, background: 'transparent', border: 'none', padding: '0 4px', cursor: 'pointer' }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = '#fff')}
+            onMouseLeave={(e) => { if (!popoverOpen) e.currentTarget.style.color = C.dim; }}
+            title="面板选项"
+            onClick={() => setPopoverOpen((v) => !v)}
+          >≡</button>
+          {/* 弹层（最小化 / 关闭） */}
+          {popoverOpen && (
+            <div
+              className="absolute z-50 shadow-xl"
+              style={{
+                top: '100%',
+                right: 0,
+                marginTop: 4,
+                minWidth: 180,
+                background: C.panel,
+                border: '1px solid ' + C.border,
+                borderRadius: 4,
+                padding: '2px 0',
+              }}
+            >
+              {/* 最小化（高亮蓝） */}
+              <button
+                className="w-full flex items-center justify-between"
+                style={{
+                  height: 22,
+                  padding: '0 10px',
+                  background: 'transparent',
+                  border: 'none',
+                  color: C.text,
+                  fontSize: 12,
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.05)')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                onClick={() => {
+                  setShowTree(false);
+                  setPopoverOpen(false);
+                }}
+              >
+                <span style={{ color: C.accent, fontWeight: 600 }}>最小化</span>
+                <span style={{ color: C.dim, fontSize: 11 }}>右键单击</span>
+              </button>
+              {/* 关闭 */}
+              <button
+                className="w-full flex items-center justify-between"
+                style={{
+                  height: 22,
+                  padding: '0 10px',
+                  background: 'transparent',
+                  border: 'none',
+                  color: C.text,
+                  fontSize: 12,
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.05)')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                onClick={closePanel}
+              >
+                <span>关闭</span>
+                <span style={{ color: C.dim, fontSize: 11 }}>双击</span>
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
