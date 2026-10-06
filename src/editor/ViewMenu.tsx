@@ -111,7 +111,7 @@ export function ViewMenu() {
     DIVIDER: '1px solid rgba(255, 255, 255, 0.06)',
     TEXT:    'var(--spine-text)',
     DIM:     'var(--spine-text-dim)',
-    ROW_H:   26,
+    ROW_H:   23,
     FONT:    12,
     SC_FONT: 11,
     ICON:    16,
