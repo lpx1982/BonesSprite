@@ -81,6 +81,7 @@ export function BottomToolbar() {
   const toggleToolbarLocked = usePixiBonesStore((s) => s.toggleToolbarLocked);
   const toolbarOffsetX = usePixiBonesStore((s) => s.toolbarOffsetX);
   const setToolbarOffsetX = usePixiBonesStore((s) => s.setToolbarOffsetX);
+  const showRightPanel = usePixiBonesStore((s) => s.showRightPanel);
   const { t } = useT();
 
   // 卡片组横向拖动：pointer events + setPointerCapture（在卡片下方同一目标下）
@@ -154,11 +155,13 @@ export function BottomToolbar() {
 
   return (
     <div
-      className="absolute left-0 right-0 z-10 flex justify-center pointer-events-none"
+      className="absolute left-0 z-10 flex justify-center pointer-events-none"
       style={{
         // 动画 tab 时贴在时间轴（store.timelineHeight）上方 + 12px 间距
         // 装配 tab 时正常贴底 12px
         bottom: editorTab === 'animate' ? timelineHeight + 12 : 12,
+        // 右侧层级树面板打开时，把 right 也让出来，卡片组就不会跟右面板重叠
+        right: showRightPanel ? 288 /* 18rem = w-72 = 288px */ + 12 : 0,
       }}
     >
       {/* 锁按钮：作为 wrapper 的第一个子元素，跟随 wrapper translateX 自动跟随
