@@ -131,7 +131,8 @@ export function BottomToolbar() {
       if (!wrapper.contains(target)) return;
       activePointerId = e.pointerId;
       startX = e.clientX;
-      startOffset = toolbarOffsetX;
+      // 用 ref 读最新 toolbarOffsetX，避免 useEffect 依赖导致重挂
+      startOffset = usePixiBonesStore.getState().toolbarOffsetX;
       document.body.style.cursor = 'ew-resize';
       document.body.style.userSelect = 'none';
     };
@@ -146,17 +147,21 @@ export function BottomToolbar() {
       document.body.style.userSelect = '';
     };
 
-    document.addEventListener('pointerdown', onDown);
-    document.addEventListener('pointermove', onMove);
-    document.addEventListener('pointerup', onUp);
-    document.addEventListener('pointercancel', onUp);
+    // 用 capture phase 第一时间捕获，不受 Card 内 button 拦截
+    document.addEventListener('pointerdown', onDown, { capture: true });
+    document.addEventListener('pointermove', onMove, { capture: true });
+    document.addEventListener('pointerup', onUp, { capture: true });
+    document.addEventListener('pointercancel', onUp, { capture: true });
     return () => {
-      document.removeEventListener('pointerdown', onDown);
-      document.removeEventListener('pointermove', onMove);
-      document.removeEventListener('pointerup', onUp);
-      document.removeEventListener('pointercancel', onUp);
+      document.removeEventListener('pointerdown', onDown, { capture: true });
+      document.removeEventListener('pointermove', onMove, { capture: true });
+      document.removeEventListener('pointerup', onUp, { capture: true });
+      document.removeEventListener('pointercancel', onUp, { capture: true });
     };
-  }, [toolbarLocked, toolbarOffsetX, setToolbarOffsetX]);
+    // 依赖里只有 toolbarLocked（锁定状态变化时重挂）
+    // toolbarOffsetX 变化时不重挂（用 getState 读最新值）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [toolbarLocked]);
 
   const selected = selectedBoneId ? findBone(bones, selectedBoneId) : null;
   const breadcrumb = useMemo(() => buildPath(bones, selectedBoneId), [bones, selectedBoneId]);
