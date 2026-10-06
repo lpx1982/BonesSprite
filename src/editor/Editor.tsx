@@ -46,15 +46,6 @@ export function Editor() {
     if (s.viewPreview)    s.toggleViewPreview();
   }, [viewAllHidden]);
 
-  // 同步：showRightPanel ↔ viewHierarchy（header 按钮 / ViewMenu 都要一致）
-  useEffect(() => {
-    const s = usePixiBonesStore.getState();
-    if (showRightPanel && !s.viewHierarchy) s.toggleViewHierarchy();
-    if (!showRightPanel && s.viewHierarchy) s.toggleViewHierarchy();
-    // 只在 showRightPanel 变化时跑
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showRightPanel]);
-
   // 全局键盘快捷键：Cmd+Z / Ctrl+Z 撤销，Cmd+Shift+Z / Ctrl+Y 重做
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -115,16 +106,8 @@ export function Editor() {
           />
         </div>
 
-        {/* header 右上角：属性面板 toggle / hideviews / views 视图菜单 */}
+        {/* header 右上角：hideviews / views 视图菜单（层级树面板由 views 菜单控制） */}
         <div className="ml-auto flex items-center gap-1">
-          <button
-            className="spine-btn-icon"
-            onClick={() => usePixiBonesStore.getState().toggleRightPanel()}
-            title={t('header.hierarchy_panel_tip')}
-            style={{ opacity: showRightPanel ? 1 : 0.5 }}
-          >
-            <span style={{ fontSize: 14 }}>{t('header.hierarchy_panel')}</span>
-          </button>
           <button
             className="spine-btn-icon"
             onClick={toggleAll}
