@@ -116,7 +116,7 @@ export function ViewMenu() {
     SC_FONT: 11,
     ICON:    16,
     PAD_X:   10,
-    MIN_W:   200,
+    MIN_W:   160,
     TOP_OFFSET: 4,  // 菜单顶部距离按钮底部的距离
   };
 
