@@ -122,14 +122,14 @@ export function TopMenu() {
   };
 
   return (
-    <div ref={rootRef} className="relative flex items-end" style={{ height: M.HEADER_HEIGHT }}>
+    <div ref={rootRef} className="relative flex items-center" style={{ height: M.HEADER_HEIGHT }}>
       {/* Logo + 版本徽章（点击区）
           - 关闭时显示 PixiBones logo
           - 打开时变成透明（宽度不变），让面板里的 logo 接管视觉效果 */}
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex items-end gap-2 h-full px-2"
+        className="flex items-center gap-2 h-full px-2"
         style={{
           background: open ? 'rgba(255, 255, 255, 0.05)' : 'transparent',
           color: M.LOGO_COLOR,
@@ -153,7 +153,7 @@ export function TopMenu() {
 
       {/* 快捷按钮：打开 / 保存 / 撤消 / 重做（Spine 风格） */}
       {!open && (
-        <div className="flex items-end" style={{ gap: 2, paddingLeft: 4 }}>
+        <div className="flex items-center" style={{ gap: 2, paddingLeft: 4 }}>
           <QuickBtn title={t('quickbtn.open_tip')} onClick={() => console.log(t('quickbtn.open_console'))}>
             <img src={folderIcon} alt="打开" width={14} height={14} style={{ display: 'block' }} />
           </QuickBtn>
