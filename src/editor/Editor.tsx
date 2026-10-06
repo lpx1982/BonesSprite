@@ -20,7 +20,7 @@ export function Editor() {
   const editorTab = usePixiBonesStore((s) => s.editorTab);
   const psd = usePixiBonesStore((s) => s.psd);
   const bones = usePixiBonesStore((s) => s.bones);
-  const projectName = usePixiBonesStore((s) => s.projectName);
+  const projectName = usePixiBonesStore((s) => s.projectName); // 当前仅供旧版引用，新版由 TopMenu 内部渲染
   const { t } = useT();
 
   return (
@@ -30,10 +30,6 @@ export function Editor() {
         style={{ background: 'var(--spine-bg-toolbar)', borderColor: 'var(--spine-border)' }}
       >
         <TopMenu />
-
-        <span className="text-xs ml-1" style={{ color: 'var(--spine-text-dim)' }}>
-          {projectName}
-        </span>
 
         {/* header 右上角占位 icon：视图（眼睛）/ 设置（齿轮）—— 后续接功能 */}
         <div className="ml-auto flex items-center gap-1">

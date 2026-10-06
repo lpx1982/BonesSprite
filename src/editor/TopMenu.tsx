@@ -91,6 +91,7 @@ export function TopMenu() {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const { t, locale } = useT();
+  const projectName = usePixiBonesStore((s) => s.projectName);
   const setLocale = usePixiBonesStore((s) => s.setLocale);
   const [hoverSettings, setHoverSettings] = useState(false);
   const [settingsRowRect, setY] = useState<{ top: number; left: number } | null>(null);
@@ -191,6 +192,19 @@ export function TopMenu() {
             <img src={forwardIcon} alt="重做" width={M.ICON_GRP.ICON_SIZE} height={M.ICON_GRP.ICON_SIZE} style={{ display: 'block' }} />
           </QuickBtn>
         </div>
+      )}
+
+      {/* 项目名称（跟 4 个按钮堆栈同组，受 M.ICON_GRP 控制） */}
+      {!open && (
+        <span
+          className="text-xs"
+          style={{
+            color: 'var(--spine-text-dim)',
+            paddingLeft: M.ICON_GRP.GAP * 2,  // 跟 4 个按钮之间同样的间距
+          }}
+        >
+          {projectName}
+        </span>
       )}
 
       {/* 下拉菜单：从窗口最左上角弹出 */}
