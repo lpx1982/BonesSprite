@@ -227,8 +227,25 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   openProject:      (id, name) => {
     set({ currentProjectId: id, projectName: name });
     get().pushRecentProject(id, name);
+    // Spine 风格：新工程自动创建根骨骼（length=0 = 十字图标）
+    if (get().bones.length === 0) {
+      const rootId = genBoneId();
+      set(() => ({
+        bones: [{
+          id: rootId,
+          name: 'root',
+          parentId: null,
+          x: 0, y: 0,
+          rotation: 0,
+          scaleX: 1, scaleY: 1,
+          length: 0,
+          layerId: null,
+        }],
+        selectedBoneId: rootId,
+      }));
+    }
   },
-  closeProject:     () => set({ currentProjectId: null }),
+  closeProject:     () => set({ currentProjectId: null, selectedBoneId: null }),
   // 从 localStorage 加载最近工程
   recentProjects: (() => {
     try {
