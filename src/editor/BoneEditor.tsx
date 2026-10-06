@@ -633,8 +633,46 @@ export function BoneEditor() {
 
       a.stage.on('pointerdown', (ev: FederatedPointerEvent) => {
         if (ev.target === a.stage && ev.button === 0) {
-          usePixiBonesStore.getState().selectLayer(null);
-          usePixiBonesStore.getState().selectBone(null);
+          const mode = usePixiBonesStore.getState().editorMode;
+          if (mode === 'create') {
+            // Create 模式：点空白 = 在点击位置创建新骨骼
+            // 父骨骼 = 当前选中骨骼（没有则选根）
+            const sx = root.scale.x;
+            const sy = root.scale.y;
+            const ox = root.x;
+            const oy = root.y;
+            // 屏幕 → 世界坐标
+            const worldX = (ev.global.x - ox) / (sx || 1);
+            const worldY = (ev.global.y - oy) / (sy || 1);
+            // 找父骨骼：当前选中骨骼（无选中则根骨骼）
+            const state = usePixiBonesStore.getState();
+            const rootBone = state.bones.find((b) => b.parentId === null);
+            const parentId = state.selectedBoneId || (rootBone ? rootBone.id : null);
+            if (!parentId) return;
+            // 子骨骼的世界坐标 = 鼠标位置
+            // 子骨骼相对父骨骼的 local 坐标 = (worldX - parentWorldX, worldY - parentWorldY)
+            // 需要先拿到父骨骼的世界坐标
+            const parentBone = boneById.get(parentId);
+            if (!parentBone) return;
+            // 在父骨骼 local frame 下：先旋转 -parentRot，再平移 -parentPos
+            const parentNode = state.bones.find((b) => b.id === parentId);
+            const parentRotDeg = parentNode ? parentNode.rotation : 0;
+            const parentRotRad = parentRotDeg * (Math.PI / 180);
+            const parentWorld = skeletonRef!.getWorldPosition(parentBone);
+            const dx = worldX - parentWorld.x;
+            const dy = worldY - parentWorld.y;
+            // 反旋转到父骨骼 local frame
+            const cos = Math.cos(-parentRotRad);
+            const sin = Math.sin(-parentRotRad);
+            const localX = dx * cos - dy * sin;
+            const localY = dx * sin + dy * cos;
+            // length = 子骨骼长度（先默认 100）
+            // rotation = 0（朝父骨骼 +X 方向）
+            state.addBone(parentId, { x: localX, y: localY, length: 100, rotation: 0 });
+          } else {
+            usePixiBonesStore.getState().selectLayer(null);
+            usePixiBonesStore.getState().selectBone(null);
+          }
         }
       });
 
