@@ -3,6 +3,7 @@ import { usePixiBonesStore } from './store';
 import { useT, type Locale } from './i18n';
 import logoImg from '/logo.png';
 import folderIcon from './icons/folder.png';
+import saveIcon from './icons/save.png';
 import forwardIcon from './icons/forward.png';
 import replyIcon from './icons/reply.png';
 
@@ -160,7 +161,7 @@ export function TopMenu() {
             if (e.shiftKey) console.log(t('quickbtn.save_as_console'));
             else console.log(t('quickbtn.save_console'));
           }}>
-            <IconSave />
+            <img src={saveIcon} alt="保存" width={14} height={14} style={{ display: 'block' }} />
           </QuickBtn>
           <QuickBtn title={t('quickbtn.undo_tip')} onClick={() => console.log(t('quickbtn.undo_console'))}>
             <img src={replyIcon} alt="撤消" width={14} height={14} style={{ display: 'block' }} />
