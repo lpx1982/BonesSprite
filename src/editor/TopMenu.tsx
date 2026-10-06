@@ -25,6 +25,7 @@ const M = {
   ITEM_COLOR:       'var(--spine-text)',
   SHORTCUT_COLOR:   'var(--spine-text-dim)',
   DIVIDER:          '1px solid rgba(255, 255, 255, 0.06)',
+  ICON_GRP_TOP:      6,                       // 4 个 quickbtn 整组距离 header 顶部的距离（控制垂直基线对齐 logo）
   // 早期版本有 TRIAL 徽章（spine trial 风格），现版本作为正式完整版发布，徽章已移除
   // 保留字段位置占位以便未来扩展
   LOGO_COLOR:       'var(--spine-accent)',
@@ -153,7 +154,14 @@ export function TopMenu() {
 
       {/* 快捷按钮：打开 / 保存 / 撤消 / 重做（Spine 风格） */}
       {!open && (
-        <div className="flex items-center" style={{ gap: 2, paddingLeft: 4 }}>
+        <div
+          className="flex items-center"
+          style={{
+            gap: 2,                 // 4 个按钮之间的间距
+            paddingLeft: 4,         // 整组按钮离 logo 的左边距
+            paddingTop: M.ICON_GRP_TOP,  // 整组按钮距 header 顶部的距离（控制垂直基线）
+          }}
+        >
           <QuickBtn title={t('quickbtn.open_tip')} onClick={() => console.log(t('quickbtn.open_console'))}>
             <img src={folderIcon} alt="打开" width={14} height={14} style={{ display: 'block' }} />
           </QuickBtn>
