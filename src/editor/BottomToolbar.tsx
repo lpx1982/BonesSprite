@@ -106,12 +106,28 @@ export function BottomToolbar() {
     };
   }, [toolbarLocked, setToolbarOffsetX]);
 
+  // 不用了，留着以防需要
+
   const onGroupDragStart = (e: React.MouseEvent) => {
     if (toolbarLocked) return;
+    if (e.button !== 0) return;
     dragRef.current = { startX: e.clientX, startOffset: toolbarOffsetX };
     document.body.style.cursor = 'ew-resize';
     document.body.style.userSelect = 'none';
-    e.preventDefault();
+  };
+
+  // 兜底：如果 Card 内 input/button 吞掉 mousedown，wrapper 上仍能拿到冒泡
+  const onGroupMouseMove = (e: React.MouseEvent) => {
+    const d = dragRef.current;
+    if (!d) return;
+    setToolbarOffsetX(d.startOffset + (e.clientX - d.startX));
+  };
+
+  const onGroupMouseUp = () => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
   };
 
   const selected = selectedBoneId ? findBone(bones, selectedBoneId) : null;
@@ -142,6 +158,9 @@ export function BottomToolbar() {
           cursor: toolbarLocked ? 'default' : 'ew-resize',
         }}
         onMouseDown={onGroupDragStart}
+        onMouseMove={onGroupMouseMove}
+        onMouseUp={onGroupMouseUp}
+        onMouseLeave={onGroupMouseUp}
       >
         {/* 左下角锁按钮（贴在卡片组左下角，跟随 wrapper 的 translateX 一起走） */}
         <button
