@@ -45,6 +45,11 @@ export interface PixiBonesState {
   // ---- Day 3 ----
   bones: BoneNode[];
   selectedBoneId: string | null;
+  /** 多选（Shift / 框选）。为兼容旧的 selectBone(id)，单独成 Set。
+   *  - 单选：selectedBoneIds = [id]，selectedBoneId = id
+   *  - 多选：selectedBoneIds = [a,b,c]，selectedBoneId = 第一个（兼容旧代码）
+   */
+  selectedBoneIds: string[];
 
   // ---- UI state ----
   showLeftPanel: boolean;
@@ -129,8 +134,11 @@ export interface PixiBonesState {
   moveBone: (id: string, x: number, y: number) => void;
   setBoneRotation: (id: string, rotation: number) => void;
   setBoneLength: (id: string, length: number) => void;
-  setBoneParent: (id: string, parentId: string | null) => void;
+  /** 单选：替换整个多选集 */
   selectBone: (id: string | null) => void;
+  /** 多选（Shift+点击 / 框选）。传入 true = 增量，false = 替换 */
+  selectBones: (ids: string[], additive?: boolean) => void;
+  setBoneParent: (id: string, parentId: string | null) => void;
 }
 
 // ---- id 自增（不变量：一次会话内稳定）----
@@ -199,6 +207,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
 
   bones: [],
   selectedBoneId: null,
+  selectedBoneIds: [],
 
   showLeftPanel: false,
   showRightPanel: true,   // 默认显示右侧属性+层级树（Spine setup 模式）
@@ -250,10 +259,11 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
           layerId: null,
         }],
         selectedBoneId: rootId,
+        selectedBoneIds: [rootId],
       }));
     }
   },
-  closeProject:     () => set({ currentProjectId: null, selectedBoneId: null }),
+  closeProject:     () => set({ currentProjectId: null, selectedBoneId: null, selectedBoneIds: [] }),
   // 从 localStorage 加载最近工程
   recentProjects: (() => {
     try {
@@ -337,6 +347,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       selectedLayerId: null,
       bones: [],          // 切 PSD 时骨全清
       selectedBoneId: null,
+      selectedBoneIds: [],
     }),
   toggleLayerVisibility: (id) =>
     set((state) => {
@@ -376,6 +387,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       return {
         bones: [...state.bones, newBone],
         selectedBoneId: newBone.id,
+        selectedBoneIds: [newBone.id],
       };
     });
   },
@@ -384,9 +396,11 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     get().pushHistory();
     set((state) => {
       const toRemove = collectDescendants(state.bones, id);
+      const removedSel = state.selectedBoneId && toRemove.has(state.selectedBoneId);
       return {
         bones: state.bones.filter((n) => !toRemove.has(n.id)),
-        selectedBoneId: toRemove.has(state.selectedBoneId ?? '') ? null : state.selectedBoneId,
+        selectedBoneId: removedSel ? null : state.selectedBoneId,
+        selectedBoneIds: removedSel ? [] : state.selectedBoneIds.filter((bid) => !toRemove.has(bid)),
       };
     });
   },
@@ -420,7 +434,27 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       };
     }),
 
-  selectBone: (id) => set({ selectedBoneId: id, selectedLayerId: null }),
+  selectBone: (id) => set({
+    selectedBoneId: id,
+    selectedBoneIds: id ? [id] : [],
+    selectedLayerId: null,
+  }),
+  // 多选：additive=true 增量追加，false 替换
+  selectBones: (ids, additive = false) => set((s) => {
+    if (additive) {
+      const next = Array.from(new Set([...s.selectedBoneIds, ...ids]));
+      return {
+        selectedBoneIds: next,
+        selectedBoneId: next[0] ?? null,
+        selectedLayerId: null,
+      };
+    }
+    return {
+      selectedBoneIds: ids,
+      selectedBoneId: ids[0] ?? null,
+      selectedLayerId: null,
+    };
+  }),
 }));
 
 // 兼容：导出供 store 外的消费者复用

@@ -51,6 +51,7 @@ export function BoneEditor() {
       | { kind: 'rotate'; boneId: string; startRot: number; startScreen: { x: number; y: number } }
       | { kind: 'pan'; startScreen: { x: number; y: number }; startPan: { x: number; y: number } }
       | { kind: 'create-from'; parentId: string; startWorld: { x: number; y: number }; startScreen: { x: number; y: number }; preview: Gfx }
+      | { kind: 'marquee'; additive: boolean; startScreen: { x: number; y: number }; nowScreen: { x: number; y: number }; rect: Gfx; prevSelIds: string[] }
       | null;
     let dragState: DragState = null;
 
@@ -393,7 +394,7 @@ export function BoneEditor() {
         skeletonRef = skel;
       };
 
-      const drawBones = (nodes: BoneNode[], selectedBoneId: string | null) => {
+      const drawBones = (nodes: BoneNode[], selectedBoneId: string | null, selectedBoneIds?: string[]) => {
         bonesLayer.clear();
         while (handlesLayer.children.length > 0) {
           const c = handlesLayer.children[0];
@@ -401,6 +402,10 @@ export function BoneEditor() {
           c.destroy();
         }
         if (!skeletonRef || nodes.length === 0) return;
+
+        // 多选判定：传入 selectedBoneIds 则用其，否则 fallback 到单选 id
+        const isMultiSel = (id: string | undefined) =>
+          id !== undefined && (selectedBoneIds ? selectedBoneIds.includes(id) : id === selectedBoneId);
 
         const sx = root.scale.x;
         const sy = root.scale.y;
@@ -451,11 +456,11 @@ export function BoneEditor() {
               .fill({ color: 0xffffff });
           }
           for (const c of bone.children) {
-            const sel = (c as unknown as { _id?: string })._id === selectedBoneId;
+            const sel = isMultiSel((c as unknown as { _id?: string })._id);
             visit(c, sel, c.length);
           }
         };
-        const rootSelected = (skeletonRef.root as unknown as { _id?: string })._id === selectedBoneId;
+        const rootSelected = isMultiSel((skeletonRef.root as unknown as { _id?: string })._id);
         visit(skeletonRef.root, rootSelected, skeletonRef.root.length);
 
         for (const node of nodes) {
@@ -495,11 +500,23 @@ export function BoneEditor() {
                 preview,
               };
             } else {
-              // Pose 模式（或其他）：选中骨骼，并启动拖动 = 平移该骨骼
-              usePixiBonesStore.getState().selectBone(node.id);
+              // Pose 模式（或其他）：单击选中 / Shift+点击多选 / 拖动平移
+              const store = usePixiBonesStore.getState();
+              const additive = ev.shiftKey;
+              if (additive) {
+                // Shift 多选：已在选 → 取消；未选 → 加入
+                const cur = store.selectedBoneIds;
+                if (cur.includes(node.id)) {
+                  store.selectBones(cur.filter((id) => id !== node.id), false);
+                } else {
+                  store.selectBones([...cur, node.id], false);
+                }
+              } else {
+                store.selectBone(node.id);
+              }
               // 拖动开始前先快照一次 history（撤销能回到拖之前的位置）
               // pointermove 期间直接改 state 不入栈，避免一次拖出 N 条 history
-              usePixiBonesStore.getState().pushHistory();
+              store.pushHistory();
               dragState = {
                 kind: 'tip',
                 boneId: node.id,
@@ -629,7 +646,19 @@ export function BoneEditor() {
           center(s.psd);
           drawGrid(s.psd);
           drawHighlight(s.psd, s.selectedLayerId);
-          drawBones(s.bones, s.selectedBoneId);
+          drawBones(s.bones, s.selectedBoneId, s.selectedBoneIds);
+        } else if (dragState.kind === 'marquee') {
+          // 框选：实时画蓝色矩形 + 命中检测
+          dragState.nowScreen = { x: ev.global.x, y: ev.global.y };
+          const { startScreen, nowScreen, rect } = dragState;
+          const x = Math.min(startScreen.x, nowScreen.x);
+          const y = Math.min(startScreen.y, nowScreen.y);
+          const w = Math.abs(nowScreen.x - startScreen.x);
+          const h = Math.abs(nowScreen.y - startScreen.y);
+          rect.clear();
+          rect.rect(x, y, w, h)
+              .stroke({ width: 1, color: 0x4FB8F8, alpha: 0.8 })
+              .fill({ color: 0x4FB8F8, alpha: 0.12 });
         } else if (dragState.kind === 'create-from') {
           // 更新预览线：从父骨骼关节 → 鼠标位置（世界坐标）
           const sx = root.scale.x;
@@ -686,6 +715,37 @@ export function BoneEditor() {
           // 清理预览
           a.stage.removeChild(dragState.preview);
           dragState.preview.destroy();
+        } else if (dragState.kind === 'marquee') {
+          // 框选提交：计算框内骨 → setState
+          const { startScreen, nowScreen, rect, additive, prevSelIds } = dragState;
+          const xMin = Math.min(startScreen.x, nowScreen.x);
+          const xMax = Math.max(startScreen.x, nowScreen.x);
+          const yMin = Math.min(startScreen.y, nowScreen.y);
+          const yMax = Math.max(startScreen.y, nowScreen.y);
+          const hit: string[] = [];
+          if (skeletonRef) {
+            for (const n of usePixiBonesStore.getState().bones) {
+              const bone = boneById.get(n.id);
+              if (!bone) continue;
+              const p = skeletonRef.getWorldPosition(bone);
+              // 骨根 world → screen
+              const sx = root.x + p.x * root.scale.x;
+              const sy = root.y + p.y * root.scale.y;
+              if (sx >= xMin && sx <= xMax && sy >= yMin && sy <= yMax) {
+                hit.push(n.id);
+              }
+            }
+          }
+          if (additive) {
+            // 增量：保留之前选 + 加入框选
+            const merged = Array.from(new Set([...prevSelIds, ...hit]));
+            usePixiBonesStore.getState().selectBones(merged, false);
+          } else {
+            usePixiBonesStore.getState().selectBones(hit, false);
+          }
+          // 清理框选矩形
+          a.stage.removeChild(rect);
+          rect.destroy();
         }
         dragState = null;
         a.canvas.style.cursor = 'default';
@@ -736,8 +796,25 @@ export function BoneEditor() {
             // rotation = 0（朝父骨骼 +X 方向）
             state.addBone(parentId, { x: localX, y: localY, length: 100, rotation: 0 });
           } else {
-            usePixiBonesStore.getState().selectLayer(null);
-            usePixiBonesStore.getState().selectBone(null);
+            // Pose 模式：点空白 = 启动框选 + 清空选中
+            // 按住 Shift = 增量框选（不清空已有）
+            const additive = ev.shiftKey;
+            const rect = new Gfx();
+            rect.eventMode = 'none';
+            a.stage.addChild(rect);
+            const store = usePixiBonesStore.getState();
+            if (!additive) {
+              // 单击空白且未拖动 = 清空选中
+              store.selectBone(null);
+            }
+            dragState = {
+              kind: 'marquee',
+              additive,
+              startScreen: { x: ev.global.x, y: ev.global.y },
+              nowScreen: { x: ev.global.x, y: ev.global.y },
+              rect,
+              prevSelIds: store.selectedBoneIds,
+            };
           }
         }
       });
@@ -790,7 +867,7 @@ export function BoneEditor() {
         }
         drawGrid(s.psd);
         drawHighlight(s.psd, s.selectedLayerId);
-        drawBones(s.bones, s.selectedBoneId);
+        drawBones(s.bones, s.selectedBoneId, s.selectedBoneIds);
         drawCrosshair(s.psd);
       };
       a.canvas.addEventListener('wheel', wheelHandler, { passive: false });
@@ -885,7 +962,7 @@ export function BoneEditor() {
         center(s.psd);
         drawGrid(s.psd);
         drawHighlight(s.psd, s.selectedLayerId);
-        drawBones(s.bones, s.selectedBoneId);
+        drawBones(s.bones, s.selectedBoneId, s.selectedBoneIds);
       });
       resizeObs.observe(host);
     })();
