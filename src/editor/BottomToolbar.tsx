@@ -108,26 +108,28 @@ export function BottomToolbar() {
 
   // 不用了，留着以防需要
 
-  const onGroupDragStart = (e: React.MouseEvent) => {
+  const onGroupDragStart = (e: React.PointerEvent) => {
     if (toolbarLocked) return;
     if (e.button !== 0) return;
     dragRef.current = { startX: e.clientX, startOffset: toolbarOffsetX };
     document.body.style.cursor = 'ew-resize';
     document.body.style.userSelect = 'none';
+    // 强制捕获 pointer，让 mousemove 即使移出 wrapper 也能继续触发
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   };
 
-  // 兜底：如果 Card 内 input/button 吞掉 mousedown，wrapper 上仍能拿到冒泡
-  const onGroupMouseMove = (e: React.MouseEvent) => {
+  const onGroupMouseMove = (e: React.PointerEvent) => {
     const d = dragRef.current;
     if (!d) return;
     setToolbarOffsetX(d.startOffset + (e.clientX - d.startX));
   };
 
-  const onGroupMouseUp = () => {
+  const onGroupMouseUp = (e: React.PointerEvent) => {
     if (!dragRef.current) return;
     dragRef.current = null;
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
+    try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
   };
 
   const selected = selectedBoneId ? findBone(bones, selectedBoneId) : null;
@@ -157,10 +159,10 @@ export function BottomToolbar() {
           transition: dragRef.current ? 'none' : 'transform 0.15s',
           cursor: toolbarLocked ? 'default' : 'ew-resize',
         }}
-        onMouseDown={onGroupDragStart}
-        onMouseMove={onGroupMouseMove}
-        onMouseUp={onGroupMouseUp}
-        onMouseLeave={onGroupMouseUp}
+        onPointerDown={onGroupDragStart}
+        onPointerMove={onGroupMouseMove}
+        onPointerUp={onGroupMouseUp}
+        onPointerCancel={onGroupMouseUp}
       >
         {/* 左下角锁按钮（贴在卡片组左下角，跟随 wrapper 的 translateX 一起走） */}
         <button
