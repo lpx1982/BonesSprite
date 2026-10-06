@@ -67,6 +67,13 @@ export interface PixiBonesState {
   /** 当前项目名（默认 raptor-pro，可被 setProjectName 覆盖，如导入 PSD 后用文件名） */
   projectName: string;
   setProjectName: (name: string) => void;
+  /** 当前打开的工程 id。null = 在欢迎页（未进入编辑器） */
+  currentProjectId: string | null;
+  openProject:    (id: string, name: string) => void;
+  closeProject:   () => void;
+  /** 最近工程列表（按打开时间倒序，最多 8 个，localStorage 持久化） */
+  recentProjects: Array<{ id: string; name: string; openedAt: number }>;
+  pushRecentProject: (id: string, name: string) => void;
   viewport: { panX: number; panY: number; zoom: number };
   /** BoneEditor 的实际渲染原点/缩放，用于标尺换算（世界 0,0 在屏幕的哪里） */
   render: { x: number; y: number; scale: number };
@@ -170,7 +177,7 @@ function findLayer(psd: PixiBonesPsd | null, id: string): PixiBonesLayer | null 
 
 export { findLayer };
 
-export const usePixiBonesStore = create<PixiBonesState>((set) => ({
+export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   skeleton: null,
   animations: [],
   currentTime: 0,
@@ -215,6 +222,27 @@ export const usePixiBonesStore = create<PixiBonesState>((set) => ({
 
   projectName: 'raptor-pro',
   setProjectName: (name) => set({ projectName: name }),
+  // 工程路由状态（欢迎页 ↔ 编辑器）
+  currentProjectId: null,
+  openProject:      (id, name) => {
+    set({ currentProjectId: id, projectName: name });
+    get().pushRecentProject(id, name);
+  },
+  closeProject:     () => set({ currentProjectId: null }),
+  // 从 localStorage 加载最近工程
+  recentProjects: (() => {
+    try {
+      const raw = localStorage.getItem('pixibones.recent');
+      return raw ? JSON.parse(raw) : [];
+    } catch { return []; }
+  })(),
+  pushRecentProject: (id, name) => {
+    const list = get().recentProjects.filter((p) => p.id !== id);
+    list.unshift({ id, name, openedAt: Date.now() });
+    const trimmed = list.slice(0, 8);
+    set({ recentProjects: trimmed });
+    try { localStorage.setItem('pixibones.recent', JSON.stringify(trimmed)); } catch {}
+  },
 
   timelineHeight: 240,
   setTimelineHeight: (h) => set({ timelineHeight: h }),

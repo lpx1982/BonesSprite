@@ -24,6 +24,7 @@ export function Editor() {
   const psd = usePixiBonesStore((s) => s.psd);
   const bones = usePixiBonesStore((s) => s.bones);
   const { t } = useT();
+  const projectName = usePixiBonesStore((s) => s.projectName);
   const viewAllHidden   = usePixiBonesStore((s) => s.viewAllHidden);
   const setViewAllHidden= usePixiBonesStore((s) => s.setViewAllHidden);
   // hideviews 总开关：开启时把 10 个单项 toggle 全部关掉
@@ -52,6 +53,35 @@ export function Editor() {
         style={{ background: 'var(--spine-bg-toolbar)', borderColor: 'var(--spine-border)' }}
       >
         <TopMenu />
+
+        {/* 项目名称（header 中央 / 偏左；右上角的 ml-auto 会把它推到左边） */}
+        <div
+          className="flex items-center gap-2 ml-6"
+          style={{ color: '#fff' }}
+        >
+          <span
+            style={{
+              fontSize: 15,
+              fontWeight: 500,
+              maxWidth: 320,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              color: '#fff',
+            }}
+            title={projectName}
+          >
+            {projectName}
+          </span>
+          {/* 未保存指示点（占位：以后接 unsaved 状态） */}
+          <span
+            style={{
+              width: 6, height: 6, borderRadius: 3,
+              background: '#fff',
+              opacity: 0.5,
+            }}
+          />
+        </div>
 
         {/* header 右上角：hideviews（隐藏所有视图） / views（视图菜单） —— 视图菜单 ViewMenu 组件 */}
         <div className="ml-auto flex items-center gap-1">

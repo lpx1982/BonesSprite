@@ -59,6 +59,8 @@ type MenuItem = {
 
 const MENU_ITEMS: MenuItem[] = [
   { icon: '📄', labelKey: 'menu.new_project',     shortcutKey: 'shortcut.cmd_shift_n' },
+  // 关闭工程返回欢迎页（快捷键 Cmd+W）
+  { icon: '🔙', labelKey: 'menu.close_project',   shortcutKey: 'shortcut.cmd_w', action: () => usePixiBonesStore.getState().closeProject() },
   { icon: '📁', labelKey: 'menu.open_project',    shortcutKey: 'shortcut.cmd_o' },
   { icon: '🕘', labelKey: 'menu.recent',          shortcutKey: 'shortcut.arrow_right' },
   { divider: true } as MenuItem,
@@ -90,6 +92,7 @@ const MENU_ITEMS: MenuItem[] = [
 export function TopMenu() {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const closeProject = usePixiBonesStore((s) => s.closeProject);
   const { t, locale } = useT();
   const setLocale = usePixiBonesStore((s) => s.setLocale);
   const [hoverSettings, setHoverSettings] = useState(false);

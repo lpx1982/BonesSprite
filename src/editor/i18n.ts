@@ -50,9 +50,25 @@ const dict = {
     timeline_phot:     { zh: '摄影表',            en: 'Dopesheet' },
   },
 
+  // ===== 欢迎页 =====
+  welcome: {
+    subtitle:         { zh: '骨骼动画编辑器',                en: 'Skeleton Animation Editor' },
+    new:              { zh: '新建工程',                      en: 'New Project' },
+    new_desc:         { zh: '从空白开始',                    en: 'Start from scratch' },
+    open:             { zh: '打开工程',                      en: 'Open Project' },
+    open_desc:        { zh: '从 .pbs / .json 加载',          en: 'Load .pbs / .json' },
+    import_psd:       { zh: '导入 PSD',                      en: 'Import PSD' },
+    import_psd_desc:  { zh: '从 Photoshop 图层创建骨骼',      en: 'Create bones from Photoshop layers' },
+    recent:           { zh: '最近打开的工程',                en: 'Recent Projects' },
+    name_placeholder: { zh: '工程名称（留空使用 untitled）',  en: 'Project name (blank = untitled)' },
+    cancel:           { zh: '取消',                          en: 'Cancel' },
+    confirm:          { zh: '确定',                          en: 'Confirm' },
+  },
+
   // ===== 主菜单项 =====
   menu: {
     new_project:        { zh: '新建项目',          en: 'New Project' },
+    close_project:      { zh: '关闭工程',          en: 'Close Project' },
     open_project:       { zh: '打开项目…',         en: 'Open Project…' },
     recent:             { zh: '最近的项目',        en: 'Recent Projects' },
     save:               { zh: '保存项目',          en: 'Save Project' },
@@ -74,6 +90,7 @@ const dict = {
   // ===== 快捷键显示（macOS 风格，键名以英文为主）=====
   shortcut: {
     cmd_shift_n:        { zh: 'Cmd+Shift+N', en: 'Cmd+Shift+N' },
+    cmd_w:              { zh: 'Cmd+W',       en: 'Cmd+W' },
     cmd_o:              { zh: 'Cmd+O',       en: 'Cmd+O' },
     arrow_right:        { zh: '▸',          en: '▸' },
     cmd_s:              { zh: 'Cmd+S',       en: 'Cmd+S' },
