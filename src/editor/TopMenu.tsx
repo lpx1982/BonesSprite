@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { usePixiBonesStore } from './store';
 import { useT, type Locale } from './i18n';
 import logoImg from '/logo.png';
+import folderIcon from './icons/folder.png';
 
 // =================================================================================
 //  尺寸 & 样式常量
@@ -151,7 +152,7 @@ export function TopMenu() {
       {!open && (
         <div className="flex items-center" style={{ gap: 2, paddingLeft: 4 }}>
           <QuickBtn title={t('quickbtn.open_tip')} onClick={() => console.log(t('quickbtn.open_console'))}>
-            <IconOpen />
+            <img src={folderIcon} alt="打开" width={14} height={14} style={{ display: 'block' }} />
           </QuickBtn>
           <QuickBtn title={t('quickbtn.save_tip')} onClick={(e) => {
             if (e.shiftKey) console.log(t('quickbtn.save_as_console'));
