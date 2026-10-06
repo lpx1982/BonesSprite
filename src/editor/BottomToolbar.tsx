@@ -138,20 +138,24 @@ export function BottomToolbar() {
         style={{
           // 卡片组居中（justify-center），卡片组宽度 ~470px，所以左下角锁按钮约在 calc(50% - 235px)
           // 解锁态跟随 toolbarOffsetX 横向偏移（让锁按钮跟着卡片组移动）
-          left: toolbarLocked ? 'calc(50% - 235px)' : `calc(50% - 235px + ${toolbarOffsetX}px)`,
-          // bottom 跟 wrapper 一样（对齐卡片组底边）
+          // 再往左 22px 让锁按钮在 mode 卡左外侧
+          left: toolbarLocked
+            ? 'calc(50% - 235px - 22px)'
+            : `calc(50% - 235px - 22px + ${toolbarOffsetX}px)`,
+          // 跟 wrapper 一样贴底，跟 mode 卡底边对齐
           bottom: 0,
           width: 18,
           height: 18,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          background: 'transparent',
+          background: 'rgba(255, 0, 0, 0.4)',  // DEBUG：红色背景，方便确认位置
           border: 'none',
           cursor: 'pointer',
           color: 'var(--spine-text-dim)',
           fontSize: 13,
           padding: 0,
+          zIndex: 11,  // 高于 wrapper(zIndex:10) 确保不被卡片遮住
         }}
       >
         {toolbarLocked ? <IconLock /> : <IconUnlockArrows />}
