@@ -25,7 +25,20 @@ const M = {
   ITEM_COLOR:       'var(--spine-text)',
   SHORTCUT_COLOR:   'var(--spine-text-dim)',
   DIVIDER:          '1px solid rgba(255, 255, 255, 0.06)',
-  ICON_GRP_TOP:      6,                       // 4 个 quickbtn 整组距离 header 顶部的距离（控制垂直基线对齐 logo）
+
+  // ===== 4 个 quickbtn 整组配置（打开/保存/撤消/重做）=====
+  // 改这里一处即可同时控制所有按钮的容器 + 按钮框 + 图标位置/尺寸
+  ICON_GRP: {
+    TOP:           8,    // 整组距离 header 顶部的距离（控制垂直基线对齐 logo）
+    LEFT:          4,    // 整组距离 logo 的左边距
+    GAP:           2,    // 4 个按钮之间的间距
+    BTN_SIZE:      24,   // 按钮框尺寸（24×24）
+    ICON_SIZE:     14,   // 按钮内 PNG 图标尺寸（14×14）
+    HOVER_BG:      'rgba(255, 255, 255, 0.08)',
+    RADIUS:        3,
+    COLOR:         'var(--spine-text-dim)',
+  },
+
   // 早期版本有 TRIAL 徽章（spine trial 风格），现版本作为正式完整版发布，徽章已移除
   // 保留字段位置占位以便未来扩展
   LOGO_COLOR:       'var(--spine-accent)',
@@ -157,25 +170,25 @@ export function TopMenu() {
         <div
           className="flex items-center"
           style={{
-            gap: 2,                 // 4 个按钮之间的间距
-            paddingLeft: 4,         // 整组按钮离 logo 的左边距
-            paddingTop: M.ICON_GRP_TOP,  // 整组按钮距 header 顶部的距离（控制垂直基线）
+            gap:        M.ICON_GRP.GAP,
+            paddingLeft: M.ICON_GRP.LEFT,
+            paddingTop:  M.ICON_GRP.TOP,
           }}
         >
           <QuickBtn title={t('quickbtn.open_tip')} onClick={() => console.log(t('quickbtn.open_console'))}>
-            <img src={folderIcon} alt="打开" width={14} height={14} style={{ display: 'block' }} />
+            <img src={folderIcon} alt="打开" width={M.ICON_GRP.ICON_SIZE} height={M.ICON_GRP.ICON_SIZE} style={{ display: 'block' }} />
           </QuickBtn>
           <QuickBtn title={t('quickbtn.save_tip')} onClick={(e) => {
             if (e.shiftKey) console.log(t('quickbtn.save_as_console'));
             else console.log(t('quickbtn.save_console'));
           }}>
-            <img src={saveIcon} alt="保存" width={14} height={14} style={{ display: 'block' }} />
+            <img src={saveIcon} alt="保存" width={M.ICON_GRP.ICON_SIZE} height={M.ICON_GRP.ICON_SIZE} style={{ display: 'block' }} />
           </QuickBtn>
           <QuickBtn title={t('quickbtn.undo_tip')} onClick={() => console.log(t('quickbtn.undo_console'))}>
-            <img src={replyIcon} alt="撤消" width={14} height={14} style={{ display: 'block' }} />
+            <img src={replyIcon} alt="撤消" width={M.ICON_GRP.ICON_SIZE} height={M.ICON_GRP.ICON_SIZE} style={{ display: 'block' }} />
           </QuickBtn>
           <QuickBtn title={t('quickbtn.redo_tip')} onClick={() => console.log(t('quickbtn.redo_console'))}>
-            <img src={forwardIcon} alt="重做" width={14} height={14} style={{ display: 'block' }} />
+            <img src={forwardIcon} alt="重做" width={M.ICON_GRP.ICON_SIZE} height={M.ICON_GRP.ICON_SIZE} style={{ display: 'block' }} />
           </QuickBtn>
         </div>
       )}
@@ -364,7 +377,7 @@ function LanguageSubmenu({
 // =================================================================================
 //  快捷按钮 + inline SVG icons（打开 / 保存 / 撤消 / 重做）
 // =================================================================================
-const QUICK_BTN_SIZE = 24;
+// 样式参数全部来自 M.ICON_GRP（全局集中控制）
 
 function QuickBtn({
   title, onClick, children,
@@ -382,16 +395,16 @@ function QuickBtn({
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
-        width: QUICK_BTN_SIZE,
-        height: QUICK_BTN_SIZE,
+        width: M.ICON_GRP.BTN_SIZE,
+        height: M.ICON_GRP.BTN_SIZE,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: hover ? 'rgba(255, 255, 255, 0.08)' : 'transparent',
+        background: hover ? M.ICON_GRP.HOVER_BG : 'transparent',
         border: 'none',
-        borderRadius: 3,
+        borderRadius: M.ICON_GRP.RADIUS,
         cursor: 'pointer',
-        color: 'var(--spine-text-dim)',
+        color: M.ICON_GRP.COLOR,
         padding: 0,
       }}
     >
