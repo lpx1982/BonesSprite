@@ -1,4 +1,4 @@
-import { useMemo, useEffect, useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import { usePixiBonesStore, findBone, type BoneNode } from './store';
 import { useT } from './i18n';
 import moveIcon from './icons/move.png';
@@ -83,30 +83,9 @@ export function BottomToolbar() {
   const setToolbarOffsetX = usePixiBonesStore((s) => s.setToolbarOffsetX);
   const { t } = useT();
 
-  // 卡片组横向拖动：mousedown 在卡片组的 drag-handle 上（解锁状态），window 上监听 mousemove/mouseup
+  // 卡片组横向拖动：pointer events + setPointerCapture（在卡片下方同一目标下）
+// 不需要 window listener —— pointer capture 让 pointermove 即使移出 wrapper 也能继续触发到 wrapper
   const dragRef = useRef<{ startX: number; startOffset: number } | null>(null);
-  useEffect(() => {
-    if (toolbarLocked) return;
-    const onMove = (e: MouseEvent) => {
-      const d = dragRef.current;
-      if (!d) return;
-      const delta = e.clientX - d.startX;
-      setToolbarOffsetX(d.startOffset + delta);
-    };
-    const onUp = () => {
-      dragRef.current = null;
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-  }, [toolbarLocked, setToolbarOffsetX]);
-
-  // 不用了，留着以防需要
 
   const onGroupDragStart = (e: React.PointerEvent) => {
     if (toolbarLocked) return;
@@ -114,7 +93,7 @@ export function BottomToolbar() {
     dragRef.current = { startX: e.clientX, startOffset: toolbarOffsetX };
     document.body.style.cursor = 'ew-resize';
     document.body.style.userSelect = 'none';
-    // 强制捕获 pointer，让 mousemove 即使移出 wrapper 也能继续触发
+    // 强制捕获 pointer，让 pointermove 即使移出 wrapper 也能继续触发
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   };
 
@@ -150,6 +129,34 @@ export function BottomToolbar() {
         bottom: editorTab === 'animate' ? timelineHeight + 12 : 12,
       }}
     >
+      {/* 锁按钮：放在外层，pointer events 独立，不被 wrapper 的 setPointerCapture 劫持 */}
+      <button
+        type="button"
+        onClick={toggleToolbarLocked}
+        className="absolute pointer-events-auto"
+        title={toolbarLocked ? t('toolbar.lock_unlock') : t('toolbar.lock_lock')}
+        style={{
+          // 卡片组居中（justify-center），卡片组宽度 ~470px，所以左下角锁按钮约在 calc(50% - 235px)
+          // 解锁态跟随 toolbarOffsetX 横向偏移（让锁按钮跟着卡片组移动）
+          left: toolbarLocked ? 'calc(50% - 235px)' : `calc(50% - 235px + ${toolbarOffsetX}px)`,
+          // bottom 跟 wrapper 一样（对齐卡片组底边）
+          bottom: 0,
+          width: 18,
+          height: 18,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'transparent',
+          border: 'none',
+          cursor: 'pointer',
+          color: 'var(--spine-text-dim)',
+          fontSize: 13,
+          padding: 0,
+        }}
+      >
+        {toolbarLocked ? <IconLock /> : <IconUnlockArrows />}
+      </button>
+
       <div
         className="relative flex items-start pointer-events-auto"
         style={{
@@ -164,32 +171,6 @@ export function BottomToolbar() {
         onPointerUp={onGroupMouseUp}
         onPointerCancel={onGroupMouseUp}
       >
-        {/* 左下角锁按钮（贴在卡片组左下角，跟随 wrapper 的 translateX 一起走） */}
-        <button
-          type="button"
-          onClick={toggleToolbarLocked}
-          onPointerDown={(e) => e.stopPropagation()}
-          className="absolute pointer-events-auto"
-          title={toolbarLocked ? t('toolbar.lock_unlock') : t('toolbar.lock_lock')}
-          style={{
-            // 贴在 wrapper 左下角偏外（mode卡片左下方）
-            left: -22,
-            bottom: -2,
-            width: 18,
-            height: 18,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: 'transparent',
-            border: 'none',
-            cursor: 'pointer',
-            color: 'var(--spine-text-dim)',
-            fontSize: 13,
-            padding: 0,
-          }}
-        >
-          {toolbarLocked ? <IconLock /> : <IconUnlockArrows />}
-        </button>
         {/* 卡片 1：mode 切换 */}
         <Card>
           <ModeButton

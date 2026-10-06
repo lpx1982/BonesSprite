@@ -190,7 +190,11 @@ export const usePixiBonesStore = create<PixiBonesState>((set) => ({
 
   toolbarLocked: true,
   toggleToolbarLocked: () =>
-    set((s) => ({ toolbarLocked: !s.toolbarLocked, toolbarOffsetX: !s.toolbarLocked ? 0 : s.toolbarOffsetX })),
+    set((s) => ({
+      toolbarLocked: !s.toolbarLocked,
+      // 解锁→锁定 时重置为 0（卡片组回到中央）；锁定→解锁 时保留
+      toolbarOffsetX: s.toolbarLocked ? 0 : s.toolbarOffsetX,
+    })),
   toolbarOffsetX: 0,
   setToolbarOffsetX: (n) => set({ toolbarOffsetX: n }),
 
