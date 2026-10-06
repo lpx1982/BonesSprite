@@ -350,17 +350,17 @@ function ModeButton({
   return (
     <button
       onClick={onClick}
-      className="flex items-center gap-2 px-3 relative"
+      className="flex items-center gap-2 px-3 relative transition-colors"
       style={{
         height: 26,
         minWidth: 80,
         padding: '0 10px',
-        // 暂时不做 active 高亮（功能未实现，避免误导用户）
-        background: 'rgba(255, 255, 255, 0.06)',
-        color: 'var(--spine-text)',
-        fontWeight: 400,
+        background: active ? 'var(--spine-accent)' : 'rgba(255, 255, 255, 0.06)',
+        color: active ? '#fff' : 'var(--spine-text)',
+        fontWeight: active ? 600 : 400,
         fontSize: 12,
         borderRadius: 4,
+        border: active ? 'none' : '1px solid transparent',
       }}
     >
       <span style={{ width: 16, height: 16, display: 'flex' }}>{icon}</span>
