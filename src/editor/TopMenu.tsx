@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { usePixiBonesStore } from './store';
 import { useT, type Locale } from './i18n';
+import logoSvg from '/logo.svg?url';
 
 // =================================================================================
 //  尺寸 & 样式常量
@@ -29,8 +30,8 @@ const M = {
 //  菜单项定义（label 用 i18n key，运行时按 locale 取真实字符串）
 // =================================================================================
 type MenuItem = {
-  labelKey: import('./i18n').I18nKey;
-  shortcutKey?: import('./i18n').I18nKey;
+  labelKey: string;
+  shortcutKey?: string;
   divider?: boolean;
   icon?: React.ReactNode;
   /** true 表示该行 hover 弹语言子菜单，不在主菜单里触发 action */
@@ -135,7 +136,15 @@ export function TopMenu() {
       >
         {!open && (
           <>
-            <span style={{ fontSize: 14, fontWeight: 600 }}>🩻 PixiBones</span>
+            <img
+              src={logoSvg}
+              alt="PixiBones"
+              style={{
+                height: 22,
+                width: 'auto',
+                display: 'block',
+              }}
+            />
             <span
               style={{
                 color: M.LOGO_COLOR,
@@ -196,16 +205,16 @@ export function TopMenu() {
               borderBottom: M.DIVIDER,
             }}
           >
-            <span
+            <img
+              src={logoSvg}
+              alt="PixiBones"
               style={{
-                fontSize: 14,
-                fontWeight: 600,
-                color: M.LOGO_COLOR,
+                height: 22,
+                width: 'auto',
+                display: 'block',
                 marginRight: 12,
               }}
-            >
-              🩻 PixiBones
-            </span>
+            />
             <span
               style={{
                 background: M.TRIAL_BG,
@@ -307,9 +316,9 @@ function LanguageSubmenu({
   onPick: (l: Locale) => void;
   onMouseEnter: () => void;
   onMouseLeave: () => void;
-  t: (k: import('./i18n').I18nKey) => string;
-}) {
-  const options: Array<{ value: Locale; labelKey: import('./i18n').I18nKey }> = [
+  t: (k: string) => string;
+  }) {
+  const options: Array<{ value: Locale; labelKey: string }> = [
     { value: 'zh', labelKey: 'menu.language_zh' },
     { value: 'en', labelKey: 'menu.language_en' },
   ];
