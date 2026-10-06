@@ -132,38 +132,8 @@ export function BottomToolbar() {
         bottom: editorTab === 'animate' ? timelineHeight + 12 : 12,
       }}
     >
-      {/* 左下角锁按钮（解锁时显示双箭头表示可拖动） */}
-      <button
-        type="button"
-        onClick={toggleToolbarLocked}
-        onMouseDown={(e) => e.stopPropagation()}
-        className="absolute pointer-events-auto"
-        title={toolbarLocked ? t('toolbar.lock_unlock') : t('toolbar.lock_lock')}
-        style={{
-          // 锁按钮贴在卡片组左下角
-          left: 'calc(50% - 130px)',
-          bottom: 0,
-          transform: toolbarLocked
-            ? 'translateX(0)'
-            : `translateX(${toolbarOffsetX}px)`,
-          width: 18,
-          height: 18,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          background: 'transparent',
-          border: 'none',
-          cursor: 'pointer',
-          color: 'var(--spine-text-dim)',
-          fontSize: 13,
-          padding: 0,
-        }}
-      >
-        {toolbarLocked ? <IconLock /> : <IconUnlockArrows />}
-      </button>
-
       <div
-        className="flex items-start pointer-events-auto"
+        className="relative flex items-start pointer-events-auto"
         style={{
           gap: T.CARDS_GAP,
           // 解锁状态下卡片组跟随 toolbarOffsetX 横向偏移
@@ -173,6 +143,32 @@ export function BottomToolbar() {
         }}
         onMouseDown={onGroupDragStart}
       >
+        {/* 左下角锁按钮（贴在卡片组左下角，跟随 wrapper 的 translateX 一起走） */}
+        <button
+          type="button"
+          onClick={toggleToolbarLocked}
+          onMouseDown={(e) => e.stopPropagation()}
+          className="absolute pointer-events-auto"
+          title={toolbarLocked ? t('toolbar.lock_unlock') : t('toolbar.lock_lock')}
+          style={{
+            // 贴在 wrapper 左下角偏外（mode卡片左下方）
+            left: -22,
+            bottom: -2,
+            width: 18,
+            height: 18,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'transparent',
+            border: 'none',
+            cursor: 'pointer',
+            color: 'var(--spine-text-dim)',
+            fontSize: 13,
+            padding: 0,
+          }}
+        >
+          {toolbarLocked ? <IconLock /> : <IconUnlockArrows />}
+        </button>
         {/* 卡片 1：mode 切换 */}
         <Card>
           <ModeButton
