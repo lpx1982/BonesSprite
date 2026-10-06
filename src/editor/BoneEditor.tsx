@@ -413,42 +413,35 @@ export function BoneEditor() {
           const p0 = skeletonRef!.getWorldPosition(bone);
           const p1 = skeletonRef!.getWorldTip(bone);
           if (length === 0) {
-            // 0 长度骨骼 = 根骨骼图标（Spine 风格：4 条灰色矩形十字臂 + 中心双圆环）
+            // 0 长度骨骼 = 根骨骼图标（精确按用户 SVG 比例：446x335 viewBox）
+            // SVG 中心 (167, 163)，4 条 20px 宽矩形臂 + 中心双圆环
+            // 右臂比左/上/下臂长（指向骨骼默认 +X 方向）
             const cx = ox + p0.x * sx;
             const cy = oy + p0.y * sy;
             const color = isSelected ? SELECTED_COLOR : BONE_COLOR;
-            // 图标基准 446x335，整体按 baseSize 缩放；保持原比例
-            const baseSize = 96 * sAvg;
-            const ratio = 335 / 446;
-            const W = baseSize;
-            const H = baseSize * ratio;
-            // 中心点（原始图标中心 (167, 163) → 归一化 (167/446, 163/335) = (0.375, 0.487)）
-            // 我们的锚点在 cx,cy，对齐到原图中心
-            const ox0 = cx - W * (167 / 446);
-            const oy0 = cy - H * (163 / 335);
-            // 4 条矩形臂（粗 20px 归一化 → 20/446 ≈ 0.045）
-            const armW = W * 0.045;
-            // 上
-            bonesLayer.rect(ox0 + W * 0.345, oy0, armW, H * 0.275).fill({ color });
-            // 下
-            bonesLayer.rect(ox0 + W * 0.345, oy0 + H * 0.725, armW, H * 0.275).fill({ color });
-            // 左
-            bonesLayer.rect(ox0, oy0 + H * 0.45, W * 0.205, armW).fill({ color });
-            // 右
-            bonesLayer.rect(ox0 + W * 0.56, oy0 + H * 0.45, W * 0.44, armW).fill({ color });
-            // 中心大圆环（外圆）
-            bonesLayer
-              .circle(cx, cy, 28 * sAvg)
-              .stroke({ width: 8 * sAvg, color });
-            // 中心小圆环（内圆）
-            bonesLayer
-              .circle(cx, cy, 11 * sAvg)
-              .stroke({ width: 5 * sAvg, color });
+            // 整体缩放：基准 446x335 缩放到视觉宽度 W
+            const W = 120 * sAvg;
+            const H = W * (335 / 446);
+            // 图标左上角（中心点对齐到 SVG 中心 (167,163)）
+            const ix = cx - W * (167 / 446);
+            const iy = cy - H * (163 / 335);
+            // 4 条臂（20px 粗，原始坐标 → 归一化）
+            const armW = W * (20 / 446);
+            // 上臂：(157,14)→(177,95)，81 长
+            bonesLayer.rect(ix + W * (157 / 446), iy + H * (14 / 335), armW, H * (81 / 335)).fill({ color });
+            // 下臂：(157,231)→(177,312)，81 长
+            bonesLayer.rect(ix + W * (157 / 446), iy + H * (231 / 335), armW, H * (81 / 335)).fill({ color });
+            // 左臂：(18,153)→(99,173)，81 长
+            bonesLayer.rect(ix + W * (18 / 446), iy + H * (153 / 335), W * (81 / 446), armW).fill({ color });
+            // 右臂：(234,153)→(427,173)，193 长（最长，指向 +X）
+            bonesLayer.rect(ix + W * (234 / 446), iy + H * (153 / 335), W * (193 / 446), armW).fill({ color });
+            // 中心大圆环（外圆，半径 ~28 in 446 viewBox）
+            bonesLayer.circle(cx, cy, W * (28 / 446)).stroke({ width: W * (8 / 446), color });
+            // 中心小圆环（内圆，半径 ~11）
+            bonesLayer.circle(cx, cy, W * (11 / 446)).stroke({ width: W * (5 / 446), color });
             // 选中态：加蓝色高亮圈
             if (isSelected) {
-              bonesLayer
-                .circle(cx, cy, 38 * sAvg)
-                .stroke({ width: 1.5, color: 0x4FB8F8, alpha: 0.9 });
+              bonesLayer.circle(cx, cy, W * (38 / 446)).stroke({ width: 1.5, color: 0x4FB8F8, alpha: 0.9 });
             }
           } else {
             bonesLayer
@@ -481,8 +474,8 @@ export function BoneEditor() {
           const oX = ox + origin.x * sx;
           const oY = oy + origin.y * sy;
           const jointHit = new Gfx();
-          // hit area：0 长度骨骼用大圆覆盖整个图标范围
-          const hitR = node.length === 0 ? 24 : 16;
+          // hit area：0 长度骨骼用大圆覆盖整个图标范围（图标最大半径约 30px）
+          const hitR = node.length === 0 ? 32 : 16;
           jointHit
             .circle(0, 0, hitR)
             .fill({ color: 0xffffff, alpha: 0.001 });
