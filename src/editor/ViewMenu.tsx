@@ -202,14 +202,14 @@ export function ViewMenu() {
                   {item.icon}
                 </span>
                 {/* 标签 */}
-                <span style={{ flex: 1 }}>{t(`header.view_menu.${item.labelKey}`)}</span>
-                {/* 快捷键 */}
+                <span style={{ minWidth: 70 }}>{t(`header.view_menu.${item.labelKey}`)}</span>
+                {/* 快捷键：固定在右侧（不依赖名字长度） */}
                 <span
                   style={{
                     color: M.DIM,
                     fontSize: M.SC_FONT,
                     fontFamily: 'monospace',
-                    marginLeft: 8,
+                    flex: 'none',
                   }}
                 >
                   {item.shortcut}
