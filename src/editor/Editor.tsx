@@ -1,7 +1,6 @@
 import { useEffect } from 'react';
 import { usePixiBonesStore } from './store';
 import { PsdPanel } from './PsdPanel';
-import { PropertyPanel } from './PropertyPanel';
 import { HierarchyPanel } from './HierarchyPanel';
 import { BoneEditor } from './BoneEditor';
 import { BottomToolbar } from './BottomToolbar';
@@ -112,10 +111,10 @@ export function Editor() {
           <button
             className="spine-btn-icon"
             onClick={() => usePixiBonesStore.getState().toggleRightPanel()}
-            title={t('header.props_panel_tip')}
+            title={t('header.hierarchy_panel_tip')}
             style={{ opacity: showRightPanel ? 1 : 0.5 }}
           >
-            <span style={{ fontSize: 14 }}>{t('header.props_panel')}</span>
+            <span style={{ fontSize: 14 }}>{t('header.hierarchy_panel')}</span>
           </button>
           <button
             className="spine-btn-icon"
@@ -132,12 +131,7 @@ export function Editor() {
       <main className="flex-1 relative flex overflow-hidden">
         {showLeftPanel && <PsdPanel />}
         <BoneEditor />
-        {showRightPanel && (
-          <div className="w-72 bg-gray-800 text-white flex flex-col overflow-hidden">
-            <HierarchyPanel />
-          </div>
-        )}
-        {showRightPanel && <PropertyPanel />}
+        {showRightPanel && <HierarchyPanel />}
         <BottomToolbar />
         {/* 动画 tab 时显示底部时间轴（占位 UI） */}
         {editorTab === 'animate' && <AnimationTimeline />}

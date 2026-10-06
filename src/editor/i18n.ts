@@ -21,6 +21,8 @@ const dict = {
     layer_panel_tip:    { zh: '切换图层面板',       en: 'Toggle Layers Panel' },
     props_panel:        { zh: '⚙ 属性',           en: '⚙ Properties' },
     props_panel_tip:    { zh: '切换属性面板',       en: 'Toggle Properties Panel' },
+    hierarchy_panel:    { zh: '🗂 层级树',         en: '🗂 Hierarchy' },
+    hierarchy_panel_tip:{ zh: '切换层级树面板',     en: 'Toggle Hierarchy Panel' },
     view_editor:        { zh: '🦴 编辑器',         en: '🦴 Editor' },
     view_demo:          { zh: '🎬 Demo',          en: '🎬 Demo' },
     view_tip:           { zh: '视图',              en: 'View' },
