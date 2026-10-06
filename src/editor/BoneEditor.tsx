@@ -510,38 +510,6 @@ export function BoneEditor() {
             tipHandle.cursor = 'grabbing';
           });
           handlesLayer.addChild(tipHandle);
-
-          if (isSelected) {
-            const gxLocal = 30;
-            const gyLocal = 0;
-            const wx = b.worldMatrix.elements[0] * gxLocal + b.worldMatrix.elements[3] * gyLocal + b.worldMatrix.elements[6];
-            const wy = b.worldMatrix.elements[1] * gxLocal + b.worldMatrix.elements[4] * gyLocal + b.worldMatrix.elements[7];
-            const stageGx = ox + wx * sx;
-            const stageGy = oy + wy * sy;
-
-            const gizmo = new Gfx();
-            gizmo
-              .circle(0, 0, 5)
-              .fill({ color: 0x4FB8F8 })
-              .stroke({ width: 1.5, color: 0xffffff });
-            gizmo.moveTo(oX, oY).lineTo(stageGx, stageGy)
-              .stroke({ width: 1, color: 0x4FB8F8, alpha: 0.6 });
-            gizmo.x = stageGx;
-            gizmo.y = stageGy;
-            gizmo.eventMode = 'static';
-            gizmo.cursor = 'grab';
-            gizmo.on('pointerdown', (ev: FederatedPointerEvent) => {
-              ev.stopPropagation();
-              dragState = {
-                kind: 'rotate',
-                boneId: node.id,
-                startRot: node.rotation,
-                startScreen: { x: ev.global.x, y: ev.global.y },
-              };
-              gizmo.cursor = 'grabbing';
-            });
-            handlesLayer.addChild(gizmo);
-          }
         }
       };
 
