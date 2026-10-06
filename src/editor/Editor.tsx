@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { usePixiBonesStore } from './store';
 import { PsdPanel } from './PsdPanel';
 import { PropertyPanel } from './PropertyPanel';
@@ -6,6 +7,8 @@ import { BottomToolbar } from './BottomToolbar';
 import { TopMenu } from './TopMenu';
 import { AnimationTimeline } from './AnimationTimeline';
 import { useT } from './i18n';
+import { ViewMenu } from './ViewMenu';
+import hideViewsIcon from './icons/hideviews.png';
 
 /**
  * Day 3.5 · Spine 风格主编辑器
@@ -20,8 +23,27 @@ export function Editor() {
   const editorTab = usePixiBonesStore((s) => s.editorTab);
   const psd = usePixiBonesStore((s) => s.psd);
   const bones = usePixiBonesStore((s) => s.bones);
-  const projectName = usePixiBonesStore((s) => s.projectName); // 当前仅供旧版引用，新版由 TopMenu 内部渲染
   const { t } = useT();
+  const viewAllHidden   = usePixiBonesStore((s) => s.viewAllHidden);
+  const setViewAllHidden= usePixiBonesStore((s) => s.setViewAllHidden);
+  // hideviews 总开关：开启时把 10 个单项 toggle 全部关掉
+  const toggleAll = () => setViewAllHidden(!viewAllHidden);
+
+  // 当 viewAllHidden 从 false→true 时，自动关掉所有单项
+  useEffect(() => {
+    if (!viewAllHidden) return;
+    const s = usePixiBonesStore.getState();
+    if (s.viewWeights)    s.toggleViewWeights();
+    if (s.viewSkin)       s.toggleViewSkin();
+    if (s.viewGridTool)   s.toggleViewGridTool();
+    if (s.viewColor)      s.toggleViewColor();
+    if (s.viewAnimation)  s.toggleViewAnimation();
+    if (s.viewHierarchy)  s.toggleViewHierarchy();
+    if (s.viewIndicators) s.toggleViewIndicators();
+    if (s.viewOutline)    s.toggleViewOutline();
+    if (s.viewIssues)     s.toggleViewIssues();
+    if (s.viewPreview)    s.toggleViewPreview();
+  }, [viewAllHidden]);
 
   return (
     <div className="flex flex-col h-screen" style={{ background: 'var(--spine-bg-base)' }}>
@@ -31,22 +53,17 @@ export function Editor() {
       >
         <TopMenu />
 
-        {/* header 右上角占位 icon：视图（眼睛）/ 设置（齿轮）—— 后续接功能 */}
+        {/* header 右上角：hideviews（隐藏所有视图） / views（视图菜单） —— 视图菜单 ViewMenu 组件 */}
         <div className="ml-auto flex items-center gap-1">
           <button
             className="spine-btn-icon"
-            onClick={() => console.log('[Header] 视图（占位）')}
-            title={t('header.view_tip')}
+            onClick={toggleAll}
+            title={t('header.hide_views_tip')}
+            style={{ opacity: viewAllHidden ? 0.5 : 1 }}
           >
-            <IconEye />
+            <img src={hideViewsIcon} alt="隐藏视图" width={14} height={14} style={{ display: 'block' }} />
           </button>
-          <button
-            className="spine-btn-icon"
-            onClick={() => console.log('[Header] 设置（占位）')}
-            title={t('header.settings_tip')}
-          >
-            <IconGear />
-          </button>
+          <ViewMenu />
         </div>
       </header>
 
@@ -61,24 +78,7 @@ export function Editor() {
     </div>
   );
 }
-
 // =================================================================================
-//  header 右上角占位 icon（视图 / 设置）—— 功能后续接
+//  header 右上角：hideviews.png（隐藏所有视图）+ ViewMenu 组件（11 项 toggle）
+//  旧的 views.png / IconEye / IconGear svg 已删除
 // =================================================================================
-function IconEye() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M1.5 8 C3.5 4, 12.5 4, 14.5 8 C12.5 12, 3.5 12, 1.5 8 Z" />
-      <circle cx="8" cy="8" r="2" fill="currentColor" stroke="none" />
-    </svg>
-  );
-}
-
-function IconGear() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="8" cy="8" r="2.4" />
-      <path d="M8 1.5 L8 3.5 M8 12.5 L8 14.5 M1.5 8 L3.5 8 M12.5 8 L14.5 8 M3.4 3.4 L4.8 4.8 M11.2 11.2 L12.6 12.6 M3.4 12.6 L4.8 11.2 M11.2 4.8 L12.6 3.4" />
-    </svg>
-  );
-}

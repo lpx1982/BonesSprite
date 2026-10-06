@@ -29,7 +29,7 @@ const M = {
   // ===== 4 个 quickbtn 整组配置（打开/保存/撤消/重做）=====
   // 改这里一处即可同时控制所有按钮的容器 + 按钮框 + 图标位置/尺寸
   ICON_GRP: {
-    BOTTOM:        8,    // 整组距离 header 底部的距离（控制垂直基线对齐 logo）
+    TOP:           5,     // 整组距离 header 顶部的距离（最上面那条黑色横条）
     LEFT:          4,    // 整组距离 logo 的左边距
     GAP:           2,    // 4 个按钮之间的间距
     BTN_SIZE:      24,   // 按钮框尺寸（24×24）
@@ -91,7 +91,6 @@ export function TopMenu() {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const { t, locale } = useT();
-  const projectName = usePixiBonesStore((s) => s.projectName);
   const setLocale = usePixiBonesStore((s) => s.setLocale);
   const [hoverSettings, setHoverSettings] = useState(false);
   const [settingsRowRect, setY] = useState<{ top: number; left: number } | null>(null);
@@ -158,7 +157,7 @@ export function TopMenu() {
             src={logoImg}
             alt="PixiBones"
             style={{
-              height: 22,
+              height: 18,
               width: 'auto',
               display: 'block',
             }}
@@ -173,7 +172,7 @@ export function TopMenu() {
           style={{
             gap:           M.ICON_GRP.GAP,
             paddingLeft:    M.ICON_GRP.LEFT,
-            paddingBottom:  M.ICON_GRP.BOTTOM,
+            paddingTop:     M.ICON_GRP.TOP,
           }}
         >
           <QuickBtn title={t('quickbtn.open_tip')} onClick={() => console.log(t('quickbtn.open_console'))}>
@@ -192,19 +191,6 @@ export function TopMenu() {
             <img src={forwardIcon} alt="重做" width={M.ICON_GRP.ICON_SIZE} height={M.ICON_GRP.ICON_SIZE} style={{ display: 'block' }} />
           </QuickBtn>
         </div>
-      )}
-
-      {/* 项目名称（跟 4 个按钮堆栈同组，受 M.ICON_GRP 控制） */}
-      {!open && (
-        <span
-          className="text-xs"
-          style={{
-            color: 'var(--spine-text-dim)',
-            paddingLeft: M.ICON_GRP.GAP * 2,  // 跟 4 个按钮之间同样的间距
-          }}
-        >
-          {projectName}
-        </span>
       )}
 
       {/* 下拉菜单：从窗口最左上角弹出 */}

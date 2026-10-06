@@ -24,7 +24,22 @@ const dict = {
     view_editor:        { zh: '🦴 编辑器',         en: '🦴 Editor' },
     view_demo:          { zh: '🎬 Demo',          en: '🎬 Demo' },
     view_tip:           { zh: '视图',              en: 'View' },
+    hide_views_tip:     { zh: '隐藏所有视图',       en: 'Hide All Views' },
     settings_tip:       { zh: '设置',              en: 'Settings' },
+
+    // ===== 视图菜单（11 项 + 1 条分隔线）=====
+    view_menu: {
+      weights:     { zh: '权重',   en: 'Weights',     sc: 'Opt+W' },
+      skin:        { zh: '皮肤',   en: 'Skin',        sc: 'Opt+S' },
+      grid_tool:   { zh: '网格工具', en: 'Grid Tool', sc: 'Opt+E' },
+      color:       { zh: '颜色',   en: 'Color',       sc: 'Opt+C' },
+      animation:   { zh: '动画',   en: 'Animation',   sc: 'Opt+A' },
+      hierarchy:   { zh: '层级树', en: 'Hierarchy',   sc: 'Opt+T' },
+      indicators:  { zh: '指标',   en: 'Indicators',  sc: 'Opt+M' },
+      outline:     { zh: '轮廓',   en: 'Outline',     sc: 'Opt+O' },
+      issues:      { zh: '问题',   en: 'Issues',      sc: 'Opt+B' },
+      preview:     { zh: '预览',   en: 'Preview',     sc: 'Opt+R' },
+    },
   },
 
   // ===== 编辑器 tab（左上角按钮：装配 / 动画）=====
@@ -111,6 +126,8 @@ const dict = {
   },
 } as const;
 
+// 诊断代码已删除
+
 // =================================================================================
 //  类型推导：自动生成 key 路径（保证调用方不会拼错）
 // =================================================================================
@@ -125,14 +142,17 @@ type Path<T, P extends string = ''> = {
 export type I18nKey = Path<Dict>;
 
 /** 根据 key 取中/英文字符串（找不到时返回 key 本身，便于排错） */
-export function tr(locale: Locale, key: I18nKey): string {
+export function tr(locale: Locale, key: string): string {
   const parts = key.split('.');
   let cur: any = dict;
   for (const p of parts) {
     if (cur && typeof cur === 'object' && p in cur) cur = cur[p];
     else return key; // 找不到原样返回
   }
+  // 走到叶子：cur 是 {zh, en, sc} —— 取 locale 字段
   if (cur && typeof cur === 'object' && (locale in cur)) return cur[locale];
+  // 兜底：直接当 string 用
+  if (typeof cur === 'string') return cur;
   return key;
 }
 
@@ -144,6 +164,6 @@ export function useT() {
   const locale = usePixiBonesStore((s) => s.locale);
   return {
     locale,
-    t: (key: string) => tr(locale, key as I18nKey),
+    t: (key: string) => tr(locale, key),
   };
 }

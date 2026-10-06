@@ -50,6 +50,18 @@ export interface PixiBonesState {
   showLeftPanel: boolean;
   showRightPanel: boolean;
   showRulers: boolean;
+  // ---- 视图菜单 11 个开关（Spine 视图风格，全部默认关闭）----
+  viewWeights:        boolean; toggleViewWeights:        () => void;
+  viewSkin:           boolean; toggleViewSkin:           () => void;
+  viewGridTool:       boolean; toggleViewGridTool:       () => void;
+  viewColor:          boolean; toggleViewColor:          () => void;
+  viewAnimation:      boolean; toggleViewAnimation:      () => void;
+  viewHierarchy:      boolean; toggleViewHierarchy:      () => void;
+  viewIndicators:     boolean; toggleViewIndicators:     () => void;
+  viewOutline:        boolean; toggleViewOutline:        () => void;
+  viewIssues:         boolean; toggleViewIssues:         () => void;
+  viewPreview:        boolean; toggleViewPreview:        () => void;
+  viewAllHidden:      boolean; setViewAllHidden:         (v: boolean) => void;
   editorMode: 'pose' | 'weights' | 'create';
   transformSpace: 'local' | 'world';
   /** 当前项目名（默认 raptor-pro，可被 setProjectName 覆盖，如导入 PSD 后用文件名） */
@@ -176,6 +188,19 @@ export const usePixiBonesStore = create<PixiBonesState>((set) => ({
   showLeftPanel: false,
   showRightPanel: false,
   showRulers: true,
+
+  // 视图菜单 11 项默认值（false=关闭）
+  viewWeights:     false, toggleViewWeights:     () => set((s) => ({ viewWeights:    !s.viewWeights })),
+  viewSkin:        false, toggleViewSkin:        () => set((s) => ({ viewSkin:       !s.viewSkin })),
+  viewGridTool:    false, toggleViewGridTool:    () => set((s) => ({ viewGridTool:   !s.viewGridTool })),
+  viewColor:       false, toggleViewColor:       () => set((s) => ({ viewColor:      !s.viewColor })),
+  viewAnimation:   false, toggleViewAnimation:   () => set((s) => ({ viewAnimation:  !s.viewAnimation })),
+  viewHierarchy:   false, toggleViewHierarchy:   () => set((s) => ({ viewHierarchy:  !s.viewHierarchy })),
+  viewIndicators:  false, toggleViewIndicators:  () => set((s) => ({ viewIndicators: !s.viewIndicators })),
+  viewOutline:     false, toggleViewOutline:     () => set((s) => ({ viewOutline:    !s.viewOutline })),
+  viewIssues:      false, toggleViewIssues:      () => set((s) => ({ viewIssues:     !s.viewIssues })),
+  viewPreview:     false, toggleViewPreview:     () => set((s) => ({ viewPreview:    !s.viewPreview })),
+  viewAllHidden:   false, setViewAllHidden:      (v) => set({ viewAllHidden: v }),
   fitRequestId: 0,
   editorMode: 'pose',
   transformSpace: 'local',
