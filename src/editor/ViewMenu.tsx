@@ -116,7 +116,7 @@ export function ViewMenu() {
     SC_FONT: 11,
     ICON:    16,
     PAD_X:   10,
-    MIN_W:   160,
+    MIN_W:   150,
     TOP_OFFSET: 4,  // 菜单顶部距离按钮底部的距离
   };
 
@@ -201,15 +201,14 @@ export function ViewMenu() {
                 >
                   {item.icon}
                 </span>
-                {/* 标签 */}
-                <span style={{ minWidth: 70 }}>{t(`header.view_menu.${item.labelKey}`)}</span>
-                {/* 快捷键：固定在右侧（不依赖名字长度） */}
+                {/* 标签：用 flex:1 撑满，名字紧贴快捷键（之前用 min-width 会留空隙） */}
+                <span style={{ flex: 1 }}>{t(`header.view_menu.${item.labelKey}`)}</span>
+                {/* 快捷键：自然右贴 */}
                 <span
                   style={{
                     color: M.DIM,
                     fontSize: M.SC_FONT,
                     fontFamily: 'monospace',
-                    flex: 'none',
                   }}
                 >
                   {item.shortcut}
