@@ -3,6 +3,8 @@ import { usePixiBonesStore } from './store';
 import { useT, type Locale } from './i18n';
 import logoImg from '/logo.png';
 import folderIcon from './icons/folder.png';
+import forwardIcon from './icons/forward.png';
+import replyIcon from './icons/reply.png';
 
 // =================================================================================
 //  尺寸 & 样式常量
@@ -161,10 +163,10 @@ export function TopMenu() {
             <IconSave />
           </QuickBtn>
           <QuickBtn title={t('quickbtn.undo_tip')} onClick={() => console.log(t('quickbtn.undo_console'))}>
-            <IconUndo />
+            <img src={replyIcon} alt="撤消" width={14} height={14} style={{ display: 'block' }} />
           </QuickBtn>
           <QuickBtn title={t('quickbtn.redo_tip')} onClick={() => console.log(t('quickbtn.redo_console'))}>
-            <IconRedo />
+            <img src={forwardIcon} alt="重做" width={14} height={14} style={{ display: 'block' }} />
           </QuickBtn>
         </div>
       )}
