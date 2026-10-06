@@ -47,6 +47,7 @@ export function BoneEditor() {
     const cleanups: Array<() => void> = [];
     type DragState =
       | { kind: 'tip'; boneId: string; startLocal: { x: number; y: number }; startScreen: { x: number; y: number } }
+      | { kind: 'tip-resize'; boneId: string; startLength: number; startRotation: number; parentWorld: { x: number; y: number }; parentRotDeg: number; startScreen: { x: number; y: number }; startScreenParent: { x: number; y: number } }
       | { kind: 'rotate'; boneId: string; startRot: number; startScreen: { x: number; y: number } }
       | { kind: 'pan'; startScreen: { x: number; y: number }; startPan: { x: number; y: number } }
       | { kind: 'create-from'; parentId: string; startWorld: { x: number; y: number }; startScreen: { x: number; y: number }; preview: Gfx }
@@ -521,11 +522,22 @@ export function BoneEditor() {
           tipHandle.cursor = 'grab';
           tipHandle.on('pointerdown', (ev: FederatedPointerEvent) => {
             ev.stopPropagation();
+            // 拖 tip = 改变骨骼的 length 和 rotation
+            const parentRotDeg = node.parentId
+              ? (findBone(usePixiBonesStore.getState().bones, node.parentId)?.rotation ?? 0)
+              : 0;
             dragState = {
-              kind: 'tip',
+              kind: 'tip-resize',
               boneId: node.id,
-              startLocal: { x: node.x, y: node.y },
+              startLength: node.length,
+              startRotation: node.rotation,
+              parentWorld: skeletonRef!.getWorldPosition(b),
+              parentRotDeg,
               startScreen: { x: ev.global.x, y: ev.global.y },
+              startScreenParent: {
+                x: ox + (skeletonRef!.getWorldPosition(b).x) * root.scale.x,
+                y: oy + (skeletonRef!.getWorldPosition(b).y) * root.scale.y,
+              },
             };
             tipHandle.cursor = 'grabbing';
           });
@@ -560,6 +572,30 @@ export function BoneEditor() {
             dragState.startLocal.x + localDx,
             dragState.startLocal.y + localDy,
           );
+        } else if (dragState.kind === 'tip-resize') {
+          // 拖 tip = 根据鼠标相对父骨骼的角度/距离改变 rotation/length
+          const sx = root.scale.x;
+          const sy = root.scale.y;
+          const boneId = dragState.boneId;
+          const dxScreen = ev.global.x - dragState.startScreenParent.x;
+          const dyScreen = ev.global.y - dragState.startScreenParent.y;
+          // 屏幕 delta → 世界 delta
+          const dxWorld = sx !== 0 ? dxScreen / sx : 0;
+          const dyWorld = sy !== 0 ? dyScreen / sy : 0;
+          // 鼠标相对父骨骼的角度（世界空间）
+          const worldRotRad = Math.atan2(dyWorld, dxWorld);
+          // 子骨骼 rotation = 世界 rotation - 父骨骼 rotation
+          const parentRotRad = dragState.parentRotDeg * (Math.PI / 180);
+          const newRotationDeg = worldRotRad - parentRotRad * (180 / Math.PI);
+          // length = 鼠标到父骨骼关节的距离 / 父骨骼缩放
+          const dist = Math.sqrt(dxScreen * dxScreen + dyScreen * dyScreen);
+          const scale = (Math.abs(sx) + Math.abs(sy)) / 2;
+          const newLength = scale !== 0 ? dist / scale : dragState.startLength;
+          usePixiBonesStore.setState((s) => ({
+            bones: s.bones.map((n) => (n.id === boneId
+              ? { ...n, length: Math.max(1, newLength), rotation: newRotationDeg }
+              : n)),
+          }));
         } else if (dragState.kind === 'rotate') {
           const node = findBone(st.bones, dragState.boneId);
           if (!node) return;
