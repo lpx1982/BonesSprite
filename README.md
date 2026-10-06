@@ -1,6 +1,6 @@
 # PixiBones
 
-<img src="./public/logo.png" alt="PixiBones" width="320" />
+<img src="./public/logo.svg" alt="PixiBones" width="320" />
 
 > 轻量开源的 Web 端 **2D / 2.5D 骨骼绑定与动画工具**，对标 Spine，但完全免费开源。
 
