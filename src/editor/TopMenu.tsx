@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { usePixiBonesStore } from './store';
 import { useT, type Locale } from './i18n';
-import logoImg from '/logo.svg';
+import logoImg from '/logo.png';
 
 // =================================================================================
 //  尺寸 & 样式常量
