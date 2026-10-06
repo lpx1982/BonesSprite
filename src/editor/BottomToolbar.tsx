@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useEffect, useRef } from 'react';
 import { usePixiBonesStore, findBone, type BoneNode } from './store';
 import { useT } from './i18n';
 import moveIcon from './icons/move.png';
@@ -24,12 +24,12 @@ import frameKeyIcon from './icons/frame_key.png';
 //    INPUT_RADIUS:     输入框圆角
 //
 const T = {
-  ROW_HEIGHT:        34,
+  ROW_HEIGHT:        26,
   LABEL_BOX_WIDTH:   80,
   LABEL_BOX_PAD_L:   8,
   LABEL_ICON_SIZE:   18,
   ROW_H_PAD:         4,
-  INPUT_HEIGHT:      34,
+  INPUT_HEIGHT:      26,
   INPUT_FONT_SIZE:   11,
   INPUT_WIDTH:       60,                                          // 单个 input 框宽度（双 input 行每个用这个）
   INPUT_GAP:         4,                                          // 双 input 之间的间距（保留备查；当前由 DIVIDER_WIDTH 替代）
@@ -77,7 +77,42 @@ export function BottomToolbar() {
   const selectBone = usePixiBonesStore((s) => s.selectBone);
   const editorTab = usePixiBonesStore((s) => s.editorTab);
   const timelineHeight = usePixiBonesStore((s) => s.timelineHeight);
+  const toolbarLocked = usePixiBonesStore((s) => s.toolbarLocked);
+  const toggleToolbarLocked = usePixiBonesStore((s) => s.toggleToolbarLocked);
+  const toolbarOffsetX = usePixiBonesStore((s) => s.toolbarOffsetX);
+  const setToolbarOffsetX = usePixiBonesStore((s) => s.setToolbarOffsetX);
   const { t } = useT();
+
+  // 卡片组横向拖动：mousedown 在卡片组的 drag-handle 上（解锁状态），window 上监听 mousemove/mouseup
+  const dragRef = useRef<{ startX: number; startOffset: number } | null>(null);
+  useEffect(() => {
+    if (toolbarLocked) return;
+    const onMove = (e: MouseEvent) => {
+      const d = dragRef.current;
+      if (!d) return;
+      const delta = e.clientX - d.startX;
+      setToolbarOffsetX(d.startOffset + delta);
+    };
+    const onUp = () => {
+      dragRef.current = null;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [toolbarLocked, setToolbarOffsetX]);
+
+  const onGroupDragStart = (e: React.MouseEvent) => {
+    if (toolbarLocked) return;
+    dragRef.current = { startX: e.clientX, startOffset: toolbarOffsetX };
+    document.body.style.cursor = 'ew-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  };
 
   const selected = selectedBoneId ? findBone(bones, selectedBoneId) : null;
   const breadcrumb = useMemo(() => buildPath(bones, selectedBoneId), [bones, selectedBoneId]);
@@ -97,7 +132,47 @@ export function BottomToolbar() {
         bottom: editorTab === 'animate' ? timelineHeight + 12 : 12,
       }}
     >
-      <div className="flex items-start pointer-events-auto" style={{ gap: T.CARDS_GAP }}>
+      {/* 左下角锁按钮（解锁时显示双箭头表示可拖动） */}
+      <button
+        type="button"
+        onClick={toggleToolbarLocked}
+        onMouseDown={(e) => e.stopPropagation()}
+        className="absolute pointer-events-auto"
+        title={toolbarLocked ? t('toolbar.lock_unlock') : t('toolbar.lock_lock')}
+        style={{
+          // 锁按钮贴在卡片组左下角
+          left: 'calc(50% - 130px)',
+          bottom: 0,
+          transform: toolbarLocked
+            ? 'translateX(0)'
+            : `translateX(${toolbarOffsetX}px)`,
+          width: 18,
+          height: 18,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'transparent',
+          border: 'none',
+          cursor: 'pointer',
+          color: 'var(--spine-text-dim)',
+          fontSize: 13,
+          padding: 0,
+        }}
+      >
+        {toolbarLocked ? <IconLock /> : <IconUnlockArrows />}
+      </button>
+
+      <div
+        className="flex items-start pointer-events-auto"
+        style={{
+          gap: T.CARDS_GAP,
+          // 解锁状态下卡片组跟随 toolbarOffsetX 横向偏移
+          transform: toolbarLocked ? 'translateX(0)' : `translateX(${toolbarOffsetX}px)`,
+          transition: dragRef.current ? 'none' : 'transform 0.15s',
+          cursor: toolbarLocked ? 'default' : 'ew-resize',
+        }}
+        onMouseDown={onGroupDragStart}
+      >
         {/* 卡片 1：mode 切换 */}
         <Card>
           <ModeButton
@@ -579,6 +654,29 @@ function IconPixel() {
 
 function IconLink() {
   return <ImgIcon src={frameKeyIcon} alt="关键帧" />;
+}
+
+// 小锁（锁定态：卡片组居中，不可拖动）
+function IconLock() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="7" width="10" height="7" rx="1" fill="currentColor" />
+      <path d="M5 7 L5 5 A3 3 0 0 1 11 5 L11 7" stroke="currentColor" fill="none" />
+    </svg>
+  );
+}
+
+// 解锁 + 上下双向箭头（解锁态：可横向拖动卡片组）
+function IconUnlockArrows() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 6 L3 10" />
+      <path d="M1 8 L3 6 L5 8" />
+      <path d="M13 6 L13 10" />
+      <path d="M11 8 L13 6 L15 8" />
+      <path d="M7 3 L9 1 M7 3 L9 5 M7 13 L9 11 M7 13 L9 15" />
+    </svg>
+  );
 }
 
 // ============================================================

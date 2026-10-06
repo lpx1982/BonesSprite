@@ -61,6 +61,12 @@ export interface PixiBonesState {
   /** 动画时间轴高度（px），拖动 resize 时同步 */
   timelineHeight: number;
   setTimelineHeight: (h: number) => void;
+  /** 底部卡片组是否锁定居中（true=居中 / false=可拖动横向） */
+  toolbarLocked: boolean;
+  toggleToolbarLocked: () => void;
+  /** 底部卡片组水平偏移（px，正向右、负向左）。锁定时为 0。 */
+  toolbarOffsetX: number;
+  setToolbarOffsetX: (n: number) => void;
 
   // ---- i18n ----
   locale: Locale;
@@ -181,6 +187,12 @@ export const usePixiBonesStore = create<PixiBonesState>((set) => ({
 
   timelineHeight: 240,
   setTimelineHeight: (h) => set({ timelineHeight: h }),
+
+  toolbarLocked: true,
+  toggleToolbarLocked: () =>
+    set((s) => ({ toolbarLocked: !s.toolbarLocked, toolbarOffsetX: !s.toolbarLocked ? 0 : s.toolbarOffsetX })),
+  toolbarOffsetX: 0,
+  setToolbarOffsetX: (n) => set({ toolbarOffsetX: n }),
 
   // Day 1 setters
   setSkeleton: (s) => set({ skeleton: s }),

@@ -105,6 +105,9 @@ const dict = {
     vis_bone:           { zh: '骨骼',          en: 'B' },
     vis_image:          { zh: '图片',          en: 'I' },
     vis_other:          { zh: '其他',          en: 'O' },
+    // 左下角锁按钮 tooltip
+    lock_unlock:        { zh: '解锁：可横向移动卡片组',  en: 'Unlock: drag toolbar horizontally' },
+    lock_lock:          { zh: '锁定：居中显示',          en: 'Lock: center' },
   },
 } as const;
 
