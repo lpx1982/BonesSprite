@@ -49,6 +49,7 @@ export function BoneEditor() {
       | { kind: 'tip'; boneId: string; startLocal: { x: number; y: number }; startScreen: { x: number; y: number } }
       | { kind: 'rotate'; boneId: string; startRot: number; startScreen: { x: number; y: number } }
       | { kind: 'pan'; startScreen: { x: number; y: number }; startPan: { x: number; y: number } }
+      | { kind: 'create-from'; parentId: string; startWorld: { x: number; y: number }; startScreen: { x: number; y: number }; preview: Gfx }
       | null;
     let dragState: DragState = null;
 
@@ -478,8 +479,22 @@ export function BoneEditor() {
             ev.stopPropagation();
             const mode = usePixiBonesStore.getState().editorMode;
             if (mode === 'create') {
-              // Create 模式：点击父骨骼关节 = 在 +X 方向创建子骨骼（length=100）
-              usePixiBonesStore.getState().addBone(node.id, { x: 100, y: 0, length: 100 });
+              // Create 模式：启动"从父骨骼拖出子骨骼"模式
+              // 起点是父骨骼关节的世界坐标
+              const origin = skeletonRef!.getWorldPosition(b);
+              const startWorld = { x: origin.x, y: origin.y };
+              const startScreen = { x: ev.global.x, y: ev.global.y };
+              // 预览线：从父骨骼关节 → 当前鼠标位置（每帧更新）
+              const preview = new Gfx();
+              preview.eventMode = 'none';
+              a.stage.addChild(preview);
+              dragState = {
+                kind: 'create-from',
+                parentId: node.id,
+                startWorld,
+                startScreen,
+                preview,
+              };
             } else {
               usePixiBonesStore.getState().selectBone(node.id);
             }
@@ -549,10 +564,63 @@ export function BoneEditor() {
           drawGrid(s.psd);
           drawHighlight(s.psd, s.selectedLayerId);
           drawBones(s.bones, s.selectedBoneId);
+        } else if (dragState.kind === 'create-from') {
+          // 更新预览线：从父骨骼关节 → 鼠标位置（世界坐标）
+          const sx = root.scale.x;
+          const sy = root.scale.y;
+          const ox = root.x;
+          const oy = root.y;
+          const dxScreen = ev.global.x - dragState.startScreen.x;
+          const dyScreen = ev.global.y - dragState.startScreen.y;
+          // 鼠标世界坐标
+          const mouseWorldX = dragState.startWorld.x + (sx !== 0 ? dxScreen / sx : 0);
+          const mouseWorldY = dragState.startWorld.y + (sy !== 0 ? dyScreen / sy : 0);
+          const sx0 = ox + dragState.startWorld.x * sx;
+          const sy0 = oy + dragState.startWorld.y * sy;
+          const mx  = ox + mouseWorldX * sx;
+          const my  = oy + mouseWorldY * sy;
+          // 画预览线（从父骨骼 → 鼠标）
+          dragState.preview.clear();
+          dragState.preview
+            .moveTo(sx0, sy0).lineTo(mx, my)
+            .stroke({ width: 2, color: 0xf0e020, alpha: 0.7 });
+          // 端点圆
+          dragState.preview.circle(mx, my, 4).fill({ color: 0xf0e020 });
+          // 暂存当前鼠标世界坐标，pointerup 用
+          (dragState as { currentMouseWorld?: { x: number; y: number } }).currentMouseWorld = { x: mouseWorldX, y: mouseWorldY };
         }
       };
       const onPointerUp = () => {
         if (!dragState) return;
+        // 创建子骨骼：pointerup 时如果在 create-from 状态，根据当前鼠标位置 addBone
+        if (dragState.kind === 'create-from') {
+          const mouseWorld = (dragState as { currentMouseWorld?: { x: number; y: number } }).currentMouseWorld;
+          if (mouseWorld) {
+            // 鼠标相对父骨骼关节的偏移（世界空间）
+            const dx = mouseWorld.x - dragState.startWorld.x;
+            const dy = mouseWorld.y - dragState.startWorld.y;
+            const length = Math.sqrt(dx * dx + dy * dy);
+            if (length > 1) {
+              // 父骨骼的世界 rotation（从 worldMatrix 提取角度）
+              // 这里假设 root 永远 rotation=0（spine 标准），父骨骼 rotation 就是 world rotation
+              const parentNode = findBone(usePixiBonesStore.getState().bones, dragState.parentId);
+              const parentRotDeg = parentNode ? parentNode.rotation : 0;
+              const parentRotRad = parentRotDeg * (Math.PI / 180);
+              // 子骨骼 tip 朝向鼠标方向（世界）→ 在父骨骼 local frame 下
+              // localRot = worldRot - parentRot
+              const worldRot = Math.atan2(dy, dx);
+              const localRot = worldRot - parentRotRad;
+              usePixiBonesStore.getState().addBone(dragState.parentId, {
+                x: 0, y: 0,
+                rotation: localRot * (180 / Math.PI),  // store 用度数
+                length,
+              });
+            }
+          }
+          // 清理预览
+          a.stage.removeChild(dragState.preview);
+          dragState.preview.destroy();
+        }
         dragState = null;
         a.canvas.style.cursor = 'default';
       };
