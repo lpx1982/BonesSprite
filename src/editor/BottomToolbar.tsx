@@ -84,8 +84,9 @@ export function BottomToolbar() {
   const { t } = useT();
 
   // 卡片组横向拖动：pointer events + setPointerCapture（在卡片下方同一目标下）
-// 不需要 window listener —— pointer capture 让 pointermove 即使移出 wrapper 也能继续触发到 wrapper
+  // 不需要 window listener —— pointer capture 让 pointermove 即使移出 wrapper 也能继续触发到 wrapper
   const dragRef = useRef<{ startX: number; startOffset: number; pointerId: number } | null>(null);
+  const lockButtonRef = useRef<HTMLButtonElement>(null);
 
   // 测 wrapper 实际宽度，让锁按钮贴在卡片组左外侧
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -110,53 +111,52 @@ export function BottomToolbar() {
     };
   }, [toolbarOffsetX, toolbarLocked]);
 
-  const onGroupDragStart = (e: React.PointerEvent) => {
-    if (toolbarLocked) return;
-    if (e.button !== 0) return;
-    dragRef.current = { startX: e.clientX, startOffset: toolbarOffsetX, pointerId: e.pointerId };
-    document.body.style.cursor = 'ew-resize';
-    document.body.style.userSelect = 'none';
-    // 强制捕获 pointer，让 pointermove 即使移出 wrapper 也能继续触发
-    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {}
-  };
-
-  const onGroupMouseMove = (e: React.PointerEvent) => {
-    const d = dragRef.current;
-    if (!d) return;
-    setToolbarOffsetX(d.startOffset + (e.clientX - d.startX));
-  };
-
-  const onGroupMouseUp = (e: React.PointerEvent) => {
-    if (!dragRef.current) return;
-    dragRef.current = null;
-    document.body.style.cursor = '';
-    document.body.style.userSelect = '';
-    try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
-  };
-
-  // 兜底：在 window 上也监听 pointermove/up，万一 wrapper 没收到（Card 内 button 拦截）也能继续拖
+  // 全局 pointer 监听：解锁后整个卡片组可拖，不依赖 wrapper onPointerDown 是否被触发
   useEffect(() => {
     if (toolbarLocked) return;
+    let activePointerId: number | null = null;
+    let startX = 0;
+    let startOffset = 0;
+
+    const onDown = (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      // 只响应来自 toolbar 区域的 pointerdown
+      const target = e.target as HTMLElement;
+      const wrapper = wrapperRef.current;
+      if (!wrapper) return;
+      // 锁按钮位置（也在外层）需要排除
+      const lockBtn = lockButtonRef.current;
+      if (lockBtn && lockBtn.contains(target)) return;
+      // 只接受 wrapper 内的 pointerdown
+      if (!wrapper.contains(target)) return;
+      activePointerId = e.pointerId;
+      startX = e.clientX;
+      startOffset = toolbarOffsetX;
+      document.body.style.cursor = 'ew-resize';
+      document.body.style.userSelect = 'none';
+    };
     const onMove = (e: PointerEvent) => {
-      const d = dragRef.current;
-      if (!d || e.pointerId !== d.pointerId) return;
-      setToolbarOffsetX(d.startOffset + (e.clientX - d.startX));
+      if (activePointerId === null || e.pointerId !== activePointerId) return;
+      setToolbarOffsetX(startOffset + (e.clientX - startX));
     };
     const onUp = (e: PointerEvent) => {
-      if (!dragRef.current || e.pointerId !== dragRef.current.pointerId) return;
-      dragRef.current = null;
+      if (activePointerId === null || e.pointerId !== activePointerId) return;
+      activePointerId = null;
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
     };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-    window.addEventListener('pointercancel', onUp);
+
+    document.addEventListener('pointerdown', onDown);
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', onUp);
     return () => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      window.removeEventListener('pointercancel', onUp);
+      document.removeEventListener('pointerdown', onDown);
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.removeEventListener('pointercancel', onUp);
     };
-  }, [toolbarLocked, setToolbarOffsetX]);
+  }, [toolbarLocked, toolbarOffsetX, setToolbarOffsetX]);
 
   const selected = selectedBoneId ? findBone(bones, selectedBoneId) : null;
   const breadcrumb = useMemo(() => buildPath(bones, selectedBoneId), [bones, selectedBoneId]);
@@ -179,8 +179,10 @@ export function BottomToolbar() {
       {/* 锁按钮：放在外层，pointer events 独立，不被 wrapper 的 setPointerCapture 劫持
         位置由 wrapperRef.getBoundingClientRect() 实时测出（卡片组大小变化时自动跟随） */}
       <button
+        ref={lockButtonRef}
         type="button"
         onClick={toggleToolbarLocked}
+        onPointerDown={(e) => e.stopPropagation()}  // 阻止 document 上的 pointerdown 进入拖动判定
         className="absolute pointer-events-auto"
         title={toolbarLocked ? t('toolbar.lock_unlock') : t('toolbar.lock_lock')}
         style={{
@@ -212,13 +214,9 @@ export function BottomToolbar() {
           gap: T.CARDS_GAP,
           // 解锁状态下卡片组跟随 toolbarOffsetX 横向偏移
           transform: toolbarLocked ? 'translateX(0)' : `translateX(${toolbarOffsetX}px)`,
-          transition: dragRef.current ? 'none' : 'transform 0.15s',
+          transition: toolbarLocked ? 'transform 0.15s' : 'none',
           cursor: toolbarLocked ? 'default' : 'ew-resize',
         }}
-        onPointerDown={onGroupDragStart}
-        onPointerMove={onGroupMouseMove}
-        onPointerUp={onGroupMouseUp}
-        onPointerCancel={onGroupMouseUp}
       >
         {/* 卡片 1：mode 切换 */}
         <Card>
