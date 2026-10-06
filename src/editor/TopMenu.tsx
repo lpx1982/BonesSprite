@@ -21,8 +21,8 @@ const M = {
   ITEM_COLOR:       'var(--spine-text)',
   SHORTCUT_COLOR:   'var(--spine-text-dim)',
   DIVIDER:          '1px solid rgba(255, 255, 255, 0.06)',
-  TRIAL_BG:         '#1d4ed8',
-  TRIAL_COLOR:      '#ffffff',
+  // 早期版本有 TRIAL 徽章（spine trial 风格），现版本作为正式完整版发布，徽章已移除
+  // 保留字段位置占位以便未来扩展
   LOGO_COLOR:       'var(--spine-accent)',
 };
 
@@ -120,7 +120,7 @@ export function TopMenu() {
   return (
     <div ref={rootRef} className="relative flex items-center" style={{ height: M.HEADER_HEIGHT }}>
       {/* Logo + 版本徽章（点击区）
-          - 关闭时显示 🩻 PixiBones + TRIAL
+          - 关闭时显示 PixiBones logo
           - 打开时变成透明（宽度不变），让面板里的 logo 接管视觉效果 */}
       <button
         type="button"
@@ -135,27 +135,15 @@ export function TopMenu() {
         title={t('header.main_menu')}
       >
         {!open && (
-          <>
-            <img
-              src={logoImg}
-              alt="PixiBones"
-              style={{
-                height: 22,
-                width: 'auto',
-                display: 'block',
-              }}
-            />
-            <span
-              style={{
-                color: M.LOGO_COLOR,
-                fontSize: 12,
-                fontWeight: 600,
-                letterSpacing: 1,
-              }}
-            >
-              {t('header.trial_short')}
-            </span>
-          </>
+          <img
+            src={logoImg}
+            alt="PixiBones"
+            style={{
+              height: 22,
+              width: 'auto',
+              display: 'block',
+            }}
+          />
         )}
       </button>
 
@@ -212,21 +200,8 @@ export function TopMenu() {
                 height: 22,
                 width: 'auto',
                 display: 'block',
-                marginRight: 12,
               }}
             />
-            <span
-              style={{
-                background: M.TRIAL_BG,
-                color: M.TRIAL_COLOR,
-                fontSize: 11,
-                fontWeight: 500,
-                padding: '2px 8px',
-                borderRadius: 3,
-              }}
-            >
-              {t('header.trial_long')}
-            </span>
           </div>
 
           {MENU_ITEMS.map((item, i) =>

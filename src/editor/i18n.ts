@@ -13,8 +13,8 @@ export type Locale = 'zh' | 'en';
 const dict = {
   // ===== header / 主菜单 =====
   header: {
-    trial_short:        { zh: 'TRIAL',            en: 'TRIAL' },
-    trial_long:         { zh: '0.1.0 Trial',      en: '0.1.0 Trial' },
+    trial_short:        { zh: '',                en: '' },
+    trial_long:         { zh: '',                en: '' },
     main_menu:          { zh: '主菜单',            en: 'Main Menu' },
     project_unnamed:    { zh: '(未命名)',          en: '(Untitled)' },
     layer_panel:        { zh: '🗂 图层',           en: '🗂 Layers' },
