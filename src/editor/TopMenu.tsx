@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { usePixiBonesStore } from './store';
 import { useT, type Locale } from './i18n';
-import logoSvg from '/logo.svg?url';
+import logoImg from '/logo.png';
 
 // =================================================================================
 //  尺寸 & 样式常量
@@ -137,7 +137,7 @@ export function TopMenu() {
         {!open && (
           <>
             <img
-              src={logoSvg}
+              src={logoImg}
               alt="PixiBones"
               style={{
                 height: 22,
@@ -206,7 +206,7 @@ export function TopMenu() {
             }}
           >
             <img
-              src={logoSvg}
+              src={logoImg}
               alt="PixiBones"
               style={{
                 height: 22,
