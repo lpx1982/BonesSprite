@@ -20,6 +20,7 @@ export function CanvasOverlay() {
   const requestFitContent = usePixiBonesStore((s) => s.requestFitContent);
   const editorTab = usePixiBonesStore((s) => s.editorTab);
   const setEditorTab = usePixiBonesStore((s) => s.setEditorTab);
+  const timelineHeight = usePixiBonesStore((s) => s.timelineHeight);
   const { t } = useT();
 
   const [canvasSize, setCanvasSize] = useState({ width: 1000, height: 600 });
@@ -104,12 +105,14 @@ export function CanvasOverlay() {
       {/* 十字光标 — HTML 层，永远在 ruler 之上（之前在 PixiJS 画，被 rulers 遮住） */}
       {/* 左下角 zoom 控制条 —— 按 Spine 布局：[zoom in] → [slider] → [zoom out]，放大镜独立在最下面 */}
       <div
-        className="absolute left-[28px] bottom-2 p-1 pointer-events-auto flex flex-col items-center gap-1 rounded"
+        className="absolute left-[28px] p-1 pointer-events-auto flex flex-col items-center gap-1 rounded"
         style={{
           // 纯半透明（去掉 backdrop-blur，否则会把画布棋盘格模糊成均匀暗色，看起来还是实心）
           background: 'rgba(31, 31, 31, 0.55)',
           border: '1px solid rgba(255, 255, 255, 0.06)',
           width: 26,
+          // 动画 tab 时贴在时间轴（timelineHeight）上方 + 8px 间距
+          bottom: editorTab === 'animate' ? timelineHeight + 8 : 8,
         }}
       >
         {/* zoom in（顶部）—— 纯 + 号 */}
@@ -163,7 +166,8 @@ export function CanvasOverlay() {
     <div
       className="absolute left-[33px] pointer-events-auto w-4"
       style={{
-        bottom: 176,
+        // 动画 tab 时上移 timelineHeight（与 zoom 容器同步）
+        bottom: editorTab === 'animate' ? 176 + timelineHeight : 176,
       }}
     >
       <IconButton
@@ -183,7 +187,8 @@ export function CanvasOverlay() {
     <div
       className="absolute left-[33px] pointer-events-auto w-4"
       style={{
-        bottom: 148,
+        // 动画 tab 时上移 timelineHeight（与 zoom 容器同步）
+        bottom: editorTab === 'animate' ? 148 + timelineHeight : 148,
       }}
     >
       <IconButton
