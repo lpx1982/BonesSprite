@@ -205,25 +205,6 @@ export function ViewMenu() {
                   textAlign: 'left',
                 }}
               >
-                {/* checkbox 圆点 */}
-                <span
-                  style={{
-                    width: 14,
-                    height: 14,
-                    marginRight: 8,
-                    borderRadius: 2,
-                    border: item.on ? 'none' : '1px solid rgba(255,255,255,0.4)',
-                    background: item.on ? 'var(--spine-accent, #4a8cff)' : 'transparent',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: 10,
-                    color: '#fff',
-                    flex: 'none',
-                  }}
-                >
-                  {item.on ? '✓' : ''}
-                </span>
                 {/* emoji 图标 */}
                 <span
                   style={{
