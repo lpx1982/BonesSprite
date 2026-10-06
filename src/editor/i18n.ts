@@ -27,6 +27,14 @@ const dict = {
     settings_tip:       { zh: '设置',              en: 'Settings' },
   },
 
+  // ===== 编辑器 tab（左上角按钮：装配 / 动画）=====
+  tab: {
+    setup:             { zh: '设置',              en: 'Setup' },
+    animate:           { zh: '动画',              en: 'Animate' },
+    timeline_anim:     { zh: '图表',              en: 'Animations' },
+    timeline_phot:     { zh: '摄影表',            en: 'Dopesheet' },
+  },
+
   // ===== 主菜单项 =====
   menu: {
     new_project:        { zh: '新建项目',          en: 'New Project' },

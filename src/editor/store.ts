@@ -5,6 +5,7 @@ import type { PixiBonesPsd, PixiBonesLayer } from '@psd/types';
 import type { Locale } from './i18n';
 
 export type ViewMode = 'editor' | 'demo';
+export type EditorTab = 'setup' | 'animate';
 
 /**
  * 骨骼的可序列化表示。所有 BoneNode 共同构成一棵骨树（parentId === null 是根）。
@@ -54,6 +55,9 @@ export interface PixiBonesState {
   viewport: { panX: number; panY: number; zoom: number };
   /** BoneEditor 的实际渲染原点/缩放，用于标尺换算（世界 0,0 在屏幕的哪里） */
   render: { x: number; y: number; scale: number };
+  /** 编辑器顶部 tab：setup（装配/骨骼）/ animate（动画） */
+  editorTab: EditorTab;
+  setEditorTab: (t: EditorTab) => void;
 
   // ---- i18n ----
   locale: Locale;
@@ -168,6 +172,9 @@ export const usePixiBonesStore = create<PixiBonesState>((set) => ({
 
   locale: 'zh',
   setLocale: (l) => set({ locale: l }),
+
+  editorTab: 'setup',
+  setEditorTab: (t) => set({ editorTab: t }),
 
   // Day 1 setters
   setSkeleton: (s) => set({ skeleton: s }),

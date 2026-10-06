@@ -4,6 +4,7 @@ import { PropertyPanel } from './PropertyPanel';
 import { BoneEditor } from './BoneEditor';
 import { BottomToolbar } from './BottomToolbar';
 import { TopMenu } from './TopMenu';
+import { AnimationTimeline } from './AnimationTimeline';
 import { useT } from './i18n';
 
 /**
@@ -16,6 +17,7 @@ import { useT } from './i18n';
 export function Editor() {
   const showLeftPanel = usePixiBonesStore((s) => s.showLeftPanel);
   const showRightPanel = usePixiBonesStore((s) => s.showRightPanel);
+  const editorTab = usePixiBonesStore((s) => s.editorTab);
   const psd = usePixiBonesStore((s) => s.psd);
   const bones = usePixiBonesStore((s) => s.bones);
   const { t } = useT();
@@ -56,6 +58,8 @@ export function Editor() {
         <BoneEditor />
         {showRightPanel && <PropertyPanel />}
         <BottomToolbar />
+        {/* 动画 tab 时显示底部时间轴（占位 UI） */}
+        {editorTab === 'animate' && <AnimationTimeline />}
       </main>
     </div>
   );

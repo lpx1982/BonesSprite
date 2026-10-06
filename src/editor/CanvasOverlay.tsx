@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePixiBonesStore } from './store';
+import { useT } from './i18n';
 
 /**
  * Day 3.5 · 画布 overlay UI（Spine 风格）
@@ -17,6 +18,9 @@ export function CanvasOverlay() {
   const showRulers = usePixiBonesStore((s) => s.showRulers);
   const toggleRulers = usePixiBonesStore((s) => s.toggleRulers);
   const requestFitContent = usePixiBonesStore((s) => s.requestFitContent);
+  const editorTab = usePixiBonesStore((s) => s.editorTab);
+  const setEditorTab = usePixiBonesStore((s) => s.setEditorTab);
+  const { t } = useT();
 
   const [canvasSize, setCanvasSize] = useState({ width: 1000, height: 600 });
   useEffect(() => {
@@ -47,6 +51,13 @@ export function CanvasOverlay() {
 
   return (
     <div className="absolute inset-0 pointer-events-none">
+      {/* 左上角 tab 切换：装配（设置）/ 动画 —— Spine 风格 */}
+      <EditorTabSwitch
+        active={editorTab}
+        onChange={setEditorTab}
+        t={t}
+      />
+
       {/* 顶横标尺 —— Spine 风格：ruler 高度 22px，黑色背景 + 纯黑下边线 */}
       {showRulers && (
       <div
@@ -476,5 +487,94 @@ function SmallBtn({
     >
       {children}
     </button>
+  );
+}
+
+// =================================================================================
+//  编辑器 tab 切换：装配（设置）/ 动画 —— Sp  ine 风格
+//   - 左上角浮在 ruler 之上（pointer-events-auto）
+//   - 两个 tab：设置（双臂伸展小人）+ 动画（跑步小人）
+//   - 当前 tab 文字加粗
+// =================================================================================
+function EditorTabSwitch({
+  active, onChange, t,
+}: {
+  active: 'setup' | 'animate';
+  onChange: (v: 'setup' | 'animate') => void;
+  t: (k: string) => string;
+}) {
+  return (
+    <div
+      className="absolute flex pointer-events-auto"
+      style={{ top: 28, left: 28, zIndex: 5, gap: 6 }}
+    >
+      <TabButton active={active === 'setup'} onClick={() => onChange('setup')}>
+        <IconPersonSetup />
+        <span style={{ fontWeight: active === 'setup' ? 700 : 400 }}>{t('tab.setup')}</span>
+      </TabButton>
+      <TabButton active={active === 'animate'} onClick={() => onChange('animate')}>
+        <IconPersonRun />
+        <span style={{ fontWeight: active === 'animate' ? 700 : 400 }}>{t('tab.animate')}</span>
+      </TabButton>
+    </div>
+  );
+}
+
+function TabButton({
+  active, onClick, children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex items-center"
+      style={{
+        gap: 6,
+        padding: '4px 8px',
+        background: 'transparent',
+        border: 'none',
+        cursor: 'pointer',
+        color: active ? 'var(--spine-text)' : 'var(--spine-text-dim)',
+        fontSize: 13,
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+// 双臂伸展小人（setup tab icon）
+function IconPersonSetup() {
+  return (
+    <svg width="18" height="22" viewBox="0 0 18 22" fill="currentColor">
+      {/* 头 */}
+      <circle cx="9" cy="3" r="1.8" />
+      {/* 身体 */}
+      <path d="M9 5 L9 14" stroke="currentColor" strokeWidth="1.6" fill="none" />
+      {/* 双臂伸展 */}
+      <path d="M9 8 L1 5 M9 5 L17 5 M9 8 L1 11 M9 8 L17 11" stroke="currentColor" strokeWidth="1.6" fill="none" strokeLinecap="round" />
+      {/* 双腿 */}
+      <path d="M9 14 L5 20 M9 14 L13 20" stroke="currentColor" strokeWidth="1.6" fill="none" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// 跑步姿态小人（animate tab icon）
+function IconPersonRun() {
+  return (
+    <svg width="20" height="22" viewBox="0 0 20 22" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+      {/* 头 */}
+      <circle cx="12" cy="3" r="1.8" fill="currentColor" stroke="none" />
+      {/* 躯干前倾 */}
+      <path d="M12 4 L7 11" />
+      {/* 前后摆臂 */}
+      <path d="M9 6 L4 4 M9 6 L14 9" />
+      {/* 跑步跨腿 */}
+      <path d="M7 11 L4 18 M7 11 L11 17" />
+    </svg>
   );
 }
