@@ -209,7 +209,7 @@ export function ViewMenu() {
                     color: M.DIM,
                     fontSize: M.SC_FONT,
                     fontFamily: 'monospace',
-                    marginLeft: 16,
+                    marginLeft: 8,
                   }}
                 >
                   {item.shortcut}
