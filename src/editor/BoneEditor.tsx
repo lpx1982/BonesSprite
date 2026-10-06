@@ -35,6 +35,7 @@ export function BoneEditor() {
   const viewport = usePixiBonesStore((s) => s.viewport);
   const setViewport = usePixiBonesStore((s) => s.setViewport);
   const setRender = usePixiBonesStore((s) => s.setRender);
+  const editorMode = usePixiBonesStore((s) => s.editorMode);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -491,7 +492,13 @@ export function BoneEditor() {
           jointHit.cursor = 'pointer';
           jointHit.on('pointerdown', (ev: FederatedPointerEvent) => {
             ev.stopPropagation();
-            usePixiBonesStore.getState().selectBone(node.id);
+            const mode = usePixiBonesStore.getState().editorMode;
+            if (mode === 'create') {
+              // Create 模式：点击父骨骼关节 = 在 +X 方向创建子骨骼（length=100）
+              usePixiBonesStore.getState().addBone(node.id, { x: 100, y: 0, length: 100 });
+            } else {
+              usePixiBonesStore.getState().selectBone(node.id);
+            }
           });
           handlesLayer.addChild(jointHit);
 
@@ -761,6 +768,15 @@ export function BoneEditor() {
 
     return cleanup;
   }, []);
+
+  // 监听 editorMode：create 模式下画布 cursor 变十字
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const canvas = host.querySelector('canvas') as HTMLCanvasElement | null;
+    if (!canvas) return;
+    canvas.style.cursor = editorMode === 'create' ? 'crosshair' : 'default';
+  }, [editorMode]);
 
   return (
     <div
