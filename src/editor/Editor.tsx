@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { usePixiBonesStore } from './store';
 import { PsdPanel } from './PsdPanel';
 import { PropertyPanel } from './PropertyPanel';
+import { HierarchyPanel } from './HierarchyPanel';
 import { BoneEditor } from './BoneEditor';
 import { BottomToolbar } from './BottomToolbar';
 import { TopMenu } from './TopMenu';
@@ -110,6 +111,22 @@ export function Editor() {
         <div className="ml-auto flex items-center gap-1">
           <button
             className="spine-btn-icon"
+            onClick={() => usePixiBonesStore.getState().toggleLeftPanel()}
+            title={t('header.layer_panel_tip')}
+            style={{ opacity: showLeftPanel ? 1 : 0.5 }}
+          >
+            <span style={{ fontSize: 14 }}>{t('header.layer_panel')}</span>
+          </button>
+          <button
+            className="spine-btn-icon"
+            onClick={() => usePixiBonesStore.getState().toggleRightPanel()}
+            title={t('header.props_panel_tip')}
+            style={{ opacity: showRightPanel ? 1 : 0.5 }}
+          >
+            <span style={{ fontSize: 14 }}>{t('header.props_panel')}</span>
+          </button>
+          <button
+            className="spine-btn-icon"
             onClick={toggleAll}
             title={t('header.hide_views_tip')}
             style={{ opacity: viewAllHidden ? 0.5 : 1 }}
@@ -123,6 +140,11 @@ export function Editor() {
       <main className="flex-1 relative flex overflow-hidden">
         {showLeftPanel && <PsdPanel />}
         <BoneEditor />
+        {showRightPanel && (
+          <div className="w-72 bg-gray-800 text-white flex flex-col overflow-hidden">
+            <HierarchyPanel />
+          </div>
+        )}
         {showRightPanel && <PropertyPanel />}
         <BottomToolbar />
         {/* 动画 tab 时显示底部时间轴（占位 UI） */}

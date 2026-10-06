@@ -201,7 +201,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   selectedBoneId: null,
 
   showLeftPanel: false,
-  showRightPanel: false,
+  showRightPanel: true,   // 默认显示右侧属性+层级树（Spine setup 模式）
   showRulers: true,
 
   // 视图菜单 11 项默认值（false=关闭）
