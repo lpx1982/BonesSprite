@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, useLayoutEffect } from 'react';
+import { useMemo, useRef, useState, useLayoutEffect, useEffect } from 'react';
 import { usePixiBonesStore, findBone, type BoneNode } from './store';
 import { useT } from './i18n';
 import moveIcon from './icons/move.png';
@@ -85,7 +85,7 @@ export function BottomToolbar() {
 
   // 卡片组横向拖动：pointer events + setPointerCapture（在卡片下方同一目标下）
 // 不需要 window listener —— pointer capture 让 pointermove 即使移出 wrapper 也能继续触发到 wrapper
-  const dragRef = useRef<{ startX: number; startOffset: number } | null>(null);
+  const dragRef = useRef<{ startX: number; startOffset: number; pointerId: number } | null>(null);
 
   // 测 wrapper 实际宽度，让锁按钮贴在卡片组左外侧
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -113,11 +113,11 @@ export function BottomToolbar() {
   const onGroupDragStart = (e: React.PointerEvent) => {
     if (toolbarLocked) return;
     if (e.button !== 0) return;
-    dragRef.current = { startX: e.clientX, startOffset: toolbarOffsetX };
+    dragRef.current = { startX: e.clientX, startOffset: toolbarOffsetX, pointerId: e.pointerId };
     document.body.style.cursor = 'ew-resize';
     document.body.style.userSelect = 'none';
     // 强制捕获 pointer，让 pointermove 即使移出 wrapper 也能继续触发
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {}
   };
 
   const onGroupMouseMove = (e: React.PointerEvent) => {
@@ -133,6 +133,30 @@ export function BottomToolbar() {
     document.body.style.userSelect = '';
     try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
   };
+
+  // 兜底：在 window 上也监听 pointermove/up，万一 wrapper 没收到（Card 内 button 拦截）也能继续拖
+  useEffect(() => {
+    if (toolbarLocked) return;
+    const onMove = (e: PointerEvent) => {
+      const d = dragRef.current;
+      if (!d || e.pointerId !== d.pointerId) return;
+      setToolbarOffsetX(d.startOffset + (e.clientX - d.startX));
+    };
+    const onUp = (e: PointerEvent) => {
+      if (!dragRef.current || e.pointerId !== dragRef.current.pointerId) return;
+      dragRef.current = null;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+  }, [toolbarLocked, setToolbarOffsetX]);
 
   const selected = selectedBoneId ? findBone(bones, selectedBoneId) : null;
   const breadcrumb = useMemo(() => buildPath(bones, selectedBoneId), [bones, selectedBoneId]);
