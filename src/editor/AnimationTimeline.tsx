@@ -1,4 +1,10 @@
+import { useEffect, useRef } from 'react';
 import { useT } from './i18n';
+import { usePixiBonesStore } from './store';
+
+const MIN_HEIGHT = 100;
+const MAX_HEIGHT = 600;
+const DEFAULT_HEIGHT = 240;
 
 /**
  * 动画时间轴（Spine 风格）—— 当前为 UI 占位
@@ -12,6 +18,7 @@ import { useT } from './i18n';
  *   │ 事件││                                                            │    │
  *   └──────┴───────────────────────────────────────────────────────────────────┘
  *
+ * - 高度可拖动（顶部边缘 4px handle，鼠标悬停 ns-resize，上下拖动改高度）
  * 目前只渲染外壳 + 静态 demo 数据（run / event 两条轨道 + 一帧指示线）
  * 后续接：
  *   - 当前播放帧（playhead）随 currentTime 移动
@@ -21,6 +28,39 @@ import { useT } from './i18n';
  */
 export function AnimationTimeline() {
   const { t } = useT();
+  const height = usePixiBonesStore((s) => s.timelineHeight);
+  const setHeight = usePixiBonesStore((s) => s.setTimelineHeight);
+  const dragRef = useRef<{ startY: number; startH: number } | null>(null);
+
+  // 拖动逻辑：mousedown 在 handle 上，记录起点；mousemove/mouseup 在 window 上
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      const d = dragRef.current;
+      if (!d) return;
+      // 鼠标向下移 → 高度变大（编辑器"被往下拉"）
+      const delta = d.startY - e.clientY;
+      const next = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, d.startH + delta));
+      setHeight(next);
+    };
+    const onUp = () => {
+      dragRef.current = null;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [setHeight]);
+
+  const onHandleDown = (e: React.MouseEvent) => {
+    dragRef.current = { startY: e.clientY, startH: height };
+    document.body.style.cursor = 'ns-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  };
 
   // demo 数据：5 个动画轨道 + 几个关键帧
   const tracks = [
@@ -33,11 +73,26 @@ export function AnimationTimeline() {
     <div
       className="absolute left-0 right-0 bottom-0 z-20 flex flex-col"
       style={{
-        height: 240,
+        height,
         background: 'var(--spine-bg-toolbar)',
         borderTop: '1px solid var(--spine-border)',
       }}
     >
+      {/* 顶部 resize handle（4px 高，整条宽，悬停 ns-resize + 亮线提示） */}
+      <div
+        onMouseDown={onHandleDown}
+        className="timeline-resize-handle"
+        style={{
+          position: 'absolute',
+          top: -2,
+          left: 0,
+          right: 0,
+          height: 4,
+          cursor: 'ns-resize',
+          zIndex: 1,
+        }}
+        title="拖动调整高度"
+      />
       {/* 顶部工具条（占位） */}
       <div
         className="flex items-center gap-2 px-3 shrink-0"

@@ -58,6 +58,9 @@ export interface PixiBonesState {
   /** 编辑器顶部 tab：setup（装配/骨骼）/ animate（动画） */
   editorTab: EditorTab;
   setEditorTab: (t: EditorTab) => void;
+  /** 动画时间轴高度（px），拖动 resize 时同步 */
+  timelineHeight: number;
+  setTimelineHeight: (h: number) => void;
 
   // ---- i18n ----
   locale: Locale;
@@ -175,6 +178,9 @@ export const usePixiBonesStore = create<PixiBonesState>((set) => ({
 
   editorTab: 'setup',
   setEditorTab: (t) => set({ editorTab: t }),
+
+  timelineHeight: 240,
+  setTimelineHeight: (h) => set({ timelineHeight: h }),
 
   // Day 1 setters
   setSkeleton: (s) => set({ skeleton: s }),
