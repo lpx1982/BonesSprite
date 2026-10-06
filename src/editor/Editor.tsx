@@ -46,6 +46,15 @@ export function Editor() {
     if (s.viewPreview)    s.toggleViewPreview();
   }, [viewAllHidden]);
 
+  // 同步：showRightPanel ↔ viewHierarchy（header 按钮 / ViewMenu 都要一致）
+  useEffect(() => {
+    const s = usePixiBonesStore.getState();
+    if (showRightPanel && !s.viewHierarchy) s.toggleViewHierarchy();
+    if (!showRightPanel && s.viewHierarchy) s.toggleViewHierarchy();
+    // 只在 showRightPanel 变化时跑
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showRightPanel]);
+
   // 全局键盘快捷键：Cmd+Z / Ctrl+Z 撤销，Cmd+Shift+Z / Ctrl+Y 重做
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

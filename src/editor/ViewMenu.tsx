@@ -42,6 +42,7 @@ export function ViewMenu() {
   const toggleViewOutline  = usePixiBonesStore((s) => s.toggleViewOutline);
   const toggleViewIssues   = usePixiBonesStore((s) => s.toggleViewIssues);
   const toggleViewPreview  = usePixiBonesStore((s) => s.toggleViewPreview);
+  const toggleRightPanel   = usePixiBonesStore((s) => s.toggleRightPanel);
 
   // 点击外部 / Esc 关闭
   useEffect(() => {
@@ -92,7 +93,7 @@ export function ViewMenu() {
     { key: 'grid_tool',  icon: '▦',  labelKey: 'grid_tool',  on: viewGridTool,   toggle: toggleViewGridTool,   shortcut: SHORTCUTS.grid_tool },
     { key: 'color',      icon: '🎨', labelKey: 'color',      on: viewColor,      toggle: toggleViewColor,      shortcut: SHORTCUTS.color },
     { key: 'animation',  icon: '🏃', labelKey: 'animation',  on: viewAnimation,  toggle: toggleViewAnimation,  shortcut: SHORTCUTS.animation },
-    { key: 'hierarchy',  icon: '🌳', labelKey: 'hierarchy',  on: viewHierarchy,  toggle: toggleViewHierarchy,  shortcut: SHORTCUTS.hierarchy },
+    { key: 'hierarchy',  icon: '🌳', labelKey: 'hierarchy',  on: viewHierarchy,  toggle: () => { toggleViewHierarchy(); toggleRightPanel(); }, shortcut: SHORTCUTS.hierarchy },
     { key: 'indicators', icon: '📊', labelKey: 'indicators', on: viewIndicators, toggle: toggleViewIndicators, shortcut: SHORTCUTS.indicators },
     { key: 'outline',    icon: '🖼', labelKey: 'outline',    on: viewOutline,    toggle: toggleViewOutline,    shortcut: SHORTCUTS.outline },
     { key: 'issues',     icon: '⚠', labelKey: 'issues',     on: viewIssues,     toggle: toggleViewIssues,     shortcut: SHORTCUTS.issues },
