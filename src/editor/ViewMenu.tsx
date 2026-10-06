@@ -100,9 +100,7 @@ export function ViewMenu() {
     { key: 'preview',    icon: '👁', labelKey: 'preview',    on: viewPreview,    toggle: toggleViewPreview,    shortcut: SHORTCUTS.preview },
   ];
 
-  // "隐藏所有视图"总开关（点击菜单外的 hideviews 按钮控制），菜单内只读显示
-  // 这里菜单自身只显示状态条，不提供 toggle（按钮在菜单外）
-  const anyOn = items.some((i) => i.on);
+  // "隐藏所有视图"总开关在菜单外（hideviews 按钮），菜单本身不再显示状态条
 
   // 视图菜单样式（跟 TopMenu 一致的暗色风格）
   const M = {
@@ -160,23 +158,6 @@ export function ViewMenu() {
             transformOrigin: 'top right',
           }}
         >
-          {/* 顶部状态条：显示"隐藏所有视图"总开关状态 */}
-          <div
-            style={{
-              padding: '4px 10px',
-              fontSize: M.FONT - 1,
-              color: viewAllHidden ? '#e88' : M.DIM,
-              borderBottom: M.DIVIDER,
-              marginBottom: 4,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-            }}
-          >
-            <span>{viewAllHidden ? '🚫 所有视图已隐藏' : anyOn ? '部分视图显示中' : '所有视图显示中'}</span>
-            <span style={{ fontSize: M.SC_FONT - 1 }}>{viewAllHidden ? '👁‍🗨' : '👁'}</span>
-          </div>
-
           {items.map((item, i) => (
             <div key={item.key}>
               {/* 在 hierarchy 之后插一条分隔线（第 6 项后 = index 5） */}
