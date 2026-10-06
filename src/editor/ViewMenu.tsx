@@ -18,6 +18,7 @@ export function ViewMenu() {
   const [hover, setHover] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const [collapsing, setCollapsing] = useState(false);
   const { t } = useT();
 
   // store
@@ -93,7 +94,17 @@ export function ViewMenu() {
     { key: 'grid_tool',  icon: '▦',  labelKey: 'grid_tool',  on: viewGridTool,   toggle: toggleViewGridTool,   shortcut: SHORTCUTS.grid_tool },
     { key: 'color',      icon: '🎨', labelKey: 'color',      on: viewColor,      toggle: toggleViewColor,      shortcut: SHORTCUTS.color },
     { key: 'animation',  icon: '🏃', labelKey: 'animation',  on: viewAnimation,  toggle: toggleViewAnimation,  shortcut: SHORTCUTS.animation },
-    { key: 'hierarchy',  icon: '🌳', labelKey: 'hierarchy',  on: viewHierarchy,  toggle: () => { toggleViewHierarchy(); toggleRightPanel(); }, shortcut: SHORTCUTS.hierarchy },
+    // 层级树：先播放菜单收回动画（180ms），再实际 toggle 面板
+    { key: 'hierarchy',  icon: '🌳', labelKey: 'hierarchy',  on: viewHierarchy,  toggle: () => {
+        if (collapsing) return;
+        setCollapsing(true);
+        window.setTimeout(() => {
+          toggleViewHierarchy();
+          toggleRightPanel();
+          setOpen(false);              // 关菜单
+          setCollapsing(false);
+        }, 180);
+      }, shortcut: SHORTCUTS.hierarchy },
     { key: 'indicators', icon: '📊', labelKey: 'indicators', on: viewIndicators, toggle: toggleViewIndicators, shortcut: SHORTCUTS.indicators },
     { key: 'outline',    icon: '🖼', labelKey: 'outline',    on: viewOutline,    toggle: toggleViewOutline,    shortcut: SHORTCUTS.outline },
     { key: 'issues',     icon: '⚠', labelKey: 'issues',     on: viewIssues,     toggle: toggleViewIssues,     shortcut: SHORTCUTS.issues },
@@ -146,7 +157,7 @@ export function ViewMenu() {
 
       {open && pos && (
         <div
-          className="fixed z-50 shadow-2xl topmenu-dropdown"
+          className={'fixed z-50 shadow-2xl topmenu-dropdown' + (collapsing ? ' collapsing' : '')}
           style={{
             top: pos.top,
             right: pos.right,

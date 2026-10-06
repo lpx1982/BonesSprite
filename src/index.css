@@ -183,6 +183,25 @@ html, body, #root {
   animation: topmenu-drop 220ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
 }
 
+/* ============ ViewMenu 层级树项触发时的收回动画（Spine 风格：右下向左上缩回） ============ */
+@keyframes viewmenu-collapse {
+  0%   { transform: scale(1)     translate3d(0,0,0);     opacity: 1; }
+  100% { transform: scale(0.05)  translate3d(40px,-40px,0); opacity: 0; }
+}
+.topmenu-dropdown.collapsing {
+  animation: viewmenu-collapse 180ms cubic-bezier(0.4, 0.0, 1, 1) forwards;
+}
+
+/* ============ 层级树面板弹出动画（从右上角 scale+fade in） ============ */
+@keyframes hierarchy-pop {
+  0%   { transform: scale(0.05); opacity: 0; transform-origin: top right; }
+  60%  { transform: scale(1.05); opacity: 1; transform-origin: top right; }
+  100% { transform: scale(1);    opacity: 1; transform-origin: top right; }
+}
+.hierarchy-pop-enter {
+  animation: hierarchy-pop 220ms cubic-bezier(0.2, 0.8, 0.3, 1) both;
+}
+
 /* ============ AnimationTimeline 顶部 resize handle ============ */
 .timeline-resize-handle::after {
   content: '';
