@@ -439,10 +439,6 @@ export function BoneEditor() {
             bonesLayer.circle(cx, cy, W * (28 / 446)).stroke({ width: W * (8 / 446), color });
             // 中心小圆环（内圆，半径 ~11）
             bonesLayer.circle(cx, cy, W * (11 / 446)).stroke({ width: W * (5 / 446), color });
-            // 选中态：加蓝色高亮圈
-            if (isSelected) {
-              bonesLayer.circle(cx, cy, W * (38 / 446)).stroke({ width: 1.5, color: 0x4FB8F8, alpha: 0.9 });
-            }
           } else {
             bonesLayer
               .moveTo(ox + p0.x * sx, oy + p0.y * sy)
@@ -451,11 +447,6 @@ export function BoneEditor() {
             bonesLayer
               .circle(ox + p0.x * sx, oy + p0.y * sy, 6 * sAvg)
               .fill({ color: 0xffffff });
-            if (isSelected) {
-              bonesLayer
-                .circle(ox + p0.x * sx, oy + p0.y * sy, 10)
-                .stroke({ width: 1.5, color: 0x4FB8F8, alpha: 0.9 });
-            }
           }
           for (const c of bone.children) {
             const sel = (c as unknown as { _id?: string })._id === selectedBoneId;
