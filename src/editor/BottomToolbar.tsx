@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react';
+import { useMemo, useRef, useState, useLayoutEffect } from 'react';
 import { usePixiBonesStore, findBone, type BoneNode } from './store';
 import { useT } from './i18n';
 import moveIcon from './icons/move.png';
@@ -87,6 +87,29 @@ export function BottomToolbar() {
 // 不需要 window listener —— pointer capture 让 pointermove 即使移出 wrapper 也能继续触发到 wrapper
   const dragRef = useRef<{ startX: number; startOffset: number } | null>(null);
 
+  // 测 wrapper 实际宽度，让锁按钮贴在卡片组左外侧
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const [wrapperLeft, setWrapperLeft] = useState(0);
+  useLayoutEffect(() => {
+    const update = () => {
+      if (wrapperRef.current) {
+        const rect = wrapperRef.current.getBoundingClientRect();
+        const parentRect = wrapperRef.current.parentElement!.getBoundingClientRect();
+        // 锁按钮在父容器坐标系下的 left = wrapper.left - parentRect.left - 22px
+        setWrapperLeft(rect.left - parentRect.left - 22);
+      }
+    };
+    update();
+    window.addEventListener('resize', update);
+    // toolbarOffsetX / toolbarLocked 变化时 wrapper 位置变化，重测
+    const ro = new ResizeObserver(update);
+    if (wrapperRef.current) ro.observe(wrapperRef.current);
+    return () => {
+      window.removeEventListener('resize', update);
+      ro.disconnect();
+    };
+  }, [toolbarOffsetX, toolbarLocked]);
+
   const onGroupDragStart = (e: React.PointerEvent) => {
     if (toolbarLocked) return;
     if (e.button !== 0) return;
@@ -129,19 +152,16 @@ export function BottomToolbar() {
         bottom: editorTab === 'animate' ? timelineHeight + 12 : 12,
       }}
     >
-      {/* 锁按钮：放在外层，pointer events 独立，不被 wrapper 的 setPointerCapture 劫持 */}
+      {/* 锁按钮：放在外层，pointer events 独立，不被 wrapper 的 setPointerCapture 劫持
+        位置由 wrapperRef.getBoundingClientRect() 实时测出（卡片组大小变化时自动跟随） */}
       <button
         type="button"
         onClick={toggleToolbarLocked}
         className="absolute pointer-events-auto"
         title={toolbarLocked ? t('toolbar.lock_unlock') : t('toolbar.lock_lock')}
         style={{
-          // 卡片组居中（justify-center），卡片组宽度 ~470px，所以左下角锁按钮约在 calc(50% - 235px)
-          // 解锁态跟随 toolbarOffsetX 横向偏移（让锁按钮跟着卡片组移动）
-          // 再往左 22px 让锁按钮在 mode 卡左外侧
-          left: toolbarLocked
-            ? 'calc(50% - 235px - 22px)'
-            : `calc(50% - 235px - 22px + ${toolbarOffsetX}px)`,
+          // 由 useLayoutEffect 测量出的 wrapper 实际左侧（包含 toolbarOffsetX 偏移）
+          left: wrapperLeft,
           // 跟 wrapper 一样贴底，跟 mode 卡底边对齐
           bottom: 0,
           width: 18,
@@ -149,7 +169,7 @@ export function BottomToolbar() {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          background: 'rgba(255, 0, 0, 0.4)',  // DEBUG：红色背景，方便确认位置
+          background: 'transparent',
           border: 'none',
           cursor: 'pointer',
           color: 'var(--spine-text-dim)',
@@ -162,6 +182,7 @@ export function BottomToolbar() {
       </button>
 
       <div
+        ref={wrapperRef}
         className="relative flex items-start pointer-events-auto"
         style={{
           gap: T.CARDS_GAP,
