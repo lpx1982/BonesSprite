@@ -75,6 +75,7 @@ export function BottomToolbar() {
   const bones = usePixiBonesStore((s) => s.bones);
   const selectedBoneId = usePixiBonesStore((s) => s.selectedBoneId);
   const selectBone = usePixiBonesStore((s) => s.selectBone);
+  const editorTab = usePixiBonesStore((s) => s.editorTab);
   const { t } = useT();
 
   const selected = selectedBoneId ? findBone(bones, selectedBoneId) : null;
@@ -88,7 +89,12 @@ export function BottomToolbar() {
 
   return (
     <div
-      className="absolute bottom-3 left-0 right-0 z-10 flex justify-center pointer-events-none"
+      className="absolute left-0 right-0 z-10 flex justify-center pointer-events-none"
+      style={{
+        // 动画 tab 时贴在时间轴（240px）上方 + 12px 间距
+        // 装配 tab 时正常贴底 12px
+        bottom: editorTab === 'animate' ? 252 : 12,
+      }}
     >
       <div className="flex items-start pointer-events-auto" style={{ gap: T.CARDS_GAP }}>
         {/* 卡片 1：mode 切换 */}
