@@ -115,14 +115,10 @@ html, body, #root {
 .spine-tree-row.selected { background: var(--spine-accent-dim); color: white; }
 
 .canvas-host {
+  /* 棋盘格 + grid line 全部由 PIXI 画（BoneEditor.tsx 的 drawGrid），
+     这样两者用同一份缩放/对齐，永远 100% 同步。
+     这里只保留 host 的深色底，作为棋盘格"暗格"的兜底色。 */
   background-color: var(--spine-bg-canvas-dark);
-  background-image:
-    linear-gradient(45deg, var(--spine-bg-canvas-light) 25%, transparent 25%),
-    linear-gradient(-45deg, var(--spine-bg-canvas-light) 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, var(--spine-bg-canvas-light) 75%),
-    linear-gradient(-45deg, transparent 75%, var(--spine-bg-canvas-light) 75%);
-  background-size: 20px 20px;
-  background-position: 0 0, 0 10px, 10px -10px, -10px 0;
   position: relative;
   display: flex;
 }

@@ -298,6 +298,8 @@ export function BoneEditor() {
         const margin = 40;
         const rw = host.clientWidth;
         const rh = host.clientHeight;
+        // 画布还没初始化好尺寸时直接返回，避免算出 renderX/Y ≈ 0 把根骨推到画布外
+        if (rw <= 0 || rh <= 0) return;
         const sw = Math.max(1, rw - margin * 2);
         const sh = Math.max(1, rh - margin * 2);
         const baseFit = Math.min(sw / psd.width, sh / psd.height);
@@ -311,38 +313,82 @@ export function BoneEditor() {
         pushRender(renderX, renderY, scale);
       };
 
-      const GRID_STEP = 32;
+      // 网格 + 棋盘格一体化绘制：用同一个 checkerSize、同一个 sx/sy，
+      // 保证棋盘格方块和 grid 线永远 100% 对齐（不会因为 float 误差错位）。
+      // 棋盘格：浅色方块按奇偶坐标交替填在 gridLayer 上
+      // grid line：在棋盘格交界处画 1px 线
+      const CHECKER_LIGHT = 0x444446;   // 浅格（亮色）
+      const CHECKER_DARK = 0x393939;    // 深格（暗色）—— 与 CSS 兜底色一致
+      const GRID_LINE = 0x454548;       // grid 线颜色
+
       const drawGrid = (psd: PixiBonesPsd | null) => {
         gridLayer.clear();
-        if (!psd) return;
 
         const sx = root.scale.x;
         const sy = root.scale.y;
         if (sx <= 0 || sy <= 0) return;
+        // 棋盘格屏幕步长（像素）—— 与 updateCheckerSize 同步
+        const CELL = checkerSize;
+        // 棋盘格在 PSD 坐标系里的步长（世界单位）
+        const CELL_W = CELL / Math.abs(sx);
 
+        // 计算可视区域（世界坐标）。有 PSD 时夹紧到 PSD 边界，无 PSD 时覆盖整个画布。
         const minWX = (-root.x) / sx;
         const maxWX = (a.renderer.width - root.x) / sx;
         const minWY = (-root.y) / sy;
         const maxWY = (a.renderer.height - root.y) / sy;
+        let left = Math.floor(minWX / CELL_W) * CELL_W;
+        let right = Math.ceil(maxWX / CELL_W) * CELL_W;
+        let top = Math.floor(minWY / CELL_W) * CELL_W;
+        let bottom = Math.ceil(maxWY / CELL_W) * CELL_W;
+        if (psd && psd.width > 0 && psd.height > 0) {
+          // 有 PSD：夹紧到 PSD 边界（Spine 风格只在图像区域显示）
+          left = Math.max(0, left);
+          right = Math.min(psd.width, right);
+          top = Math.max(0, top);
+          bottom = Math.min(psd.height, bottom);
+        }
 
-        const left = Math.max(0, Math.floor(minWX / GRID_STEP) * GRID_STEP);
-        const right = Math.min(psd.width, Math.ceil(maxWX / GRID_STEP) * GRID_STEP);
-        const top = Math.max(0, Math.floor(minWY / GRID_STEP) * GRID_STEP);
-        const bottom = Math.min(psd.height, Math.ceil(maxWY / GRID_STEP) * GRID_STEP);
+        // ★ 关键：用整型 cell index 算奇偶（不要用 Math.floor(x/CELL_W)，
+        //   当 x 是负数时 Math.floor 会向负无穷取整，导致第一个方块 index=-1 而不是 0）
+        // 我们循环变量 x 从 left 开始，每次 +CELL_W，所以第 i 个方块的 index =
+        // Math.round(left / CELL_W) + i。这样无论 left 是正数负数，奇偶判定都稳定。
+        const xStart = Math.round(left / CELL_W);
+        const yStart = Math.round(top / CELL_W);
 
-        for (let x = left; x <= right; x += GRID_STEP) {
+        // ★ 棋盘格：在奇数行/列填浅色方块（(行+列) % 2 === 0 时填浅色）
+        let iy = 0;
+        for (let y = top; y < bottom; y += CELL_W) {
+          const sy0 = root.y + y * sy;
+          const h = Math.min(CELL_W, bottom - y) * sy;
+          let ix = 0;
+          for (let x = left; x < right; x += CELL_W) {
+            const sx0 = root.x + x * sx;
+            const w = Math.min(CELL_W, right - x) * sx;
+            const isLight = ((xStart + ix + (yStart + iy)) % 2) === 0;
+            gridLayer.rect(sx0, sy0, w, h).fill({ color: isLight ? CHECKER_LIGHT : CHECKER_DARK });
+            ix++;
+          }
+          iy++;
+        }
+
+        // ★ grid 线：画在棋盘格交界（用世界步长 CELL_W 算屏幕坐标）
+        // 起点 = left，终点 = right + 半个格子（最后一条线在棋盘格最右边）
+        const lastX = right;
+        const lastY = bottom;
+        for (let x = left; x <= lastX; x += CELL_W) {
           const sx0 = root.x + x * sx;
           gridLayer
             .moveTo(sx0, root.y + top * sy)
-            .lineTo(sx0, root.y + bottom * sy)
-            .stroke({ width: 1, color: 0x454548, alpha: 0.4 });
+            .lineTo(sx0, root.y + lastY * sy)
+            .stroke({ width: 1, color: GRID_LINE, alpha: 0.5 });
         }
-        for (let y = top; y <= bottom; y += GRID_STEP) {
+        for (let y = top; y <= lastY; y += CELL_W) {
           const sy0 = root.y + y * sy;
           gridLayer
             .moveTo(root.x + left * sx, sy0)
-            .lineTo(root.x + right * sx, sy0)
-            .stroke({ width: 1, color: 0x454548, alpha: 0.4 });
+            .lineTo(root.x + lastX * sx, sy0)
+            .stroke({ width: 1, color: GRID_LINE, alpha: 0.5 });
         }
       };
 
@@ -366,6 +412,26 @@ export function BoneEditor() {
           .stroke({ width: 1, color: 0x000000, alpha: 0.6 });
         // 中心点
         crosshairLayer.circle(cx, cy, 3).fill({ color: 0x000000, alpha: 0.7 });
+      };
+
+      // ★ 棋盘格尺寸：
+      //   - 默认：vp.zoom=1 时 = CHECKER_BASE = 20px
+      //   - 下限：zoom=0.1 时 = 5px（再小就看不见了）
+      //   - 上限：zoom=8 时 = 160px（封顶防爆屏）
+      // 公式：size = round(CHECKER_BASE * min(rawScale, MAX_SCALE))
+      //       再夹下限 max(CHECKER_MIN_PX, size)
+      const CHECKER_BASE = 20;          // vp.zoom=1 时的初始棋盘格大小（像素）
+      const CHECKER_MIN_PX = 5;         // 棋盘格最小像素（zoom=0.1 时 = 5px）
+      const CHECKER_MAX_SCALE = 8;      // 棋盘格最大缩放倍数（封顶防爆屏）
+      let checkerSize = CHECKER_BASE;
+      const updateCheckerSize = () => {
+        const rawScale = Math.abs(root.scale.x);
+        // 1. 先按 vp.zoom 比例算，再封顶
+        const scaled = Math.round(CHECKER_BASE * Math.min(rawScale, CHECKER_MAX_SCALE));
+        // 2. 夹下限（避免 zoom 极小时棋盘格变成 1-2px 的噪点）
+        const size = Math.max(CHECKER_MIN_PX, scaled);
+        if (size === checkerSize) return;
+        checkerSize = size;
       };
 
       let skeletonRef: Skeleton | null = null;
@@ -416,36 +482,60 @@ export function BoneEditor() {
         const SELECTED_COLOR = 0xF0E020;   // 选中：黄色
         const sAvg = (Math.abs(sx) + Math.abs(sy)) / 2;  // 平均缩放
 
+        // 根骨视觉锚点：center() 推给 store.render 的"十字位置"
+        // - 有 PSD 时 = PSD 底部中心（Spine 风格：根骨 = 图像原点）
+        // - 无 PSD 时 = 画布中心
+        // 用它代替 ox/oy 来画根骨图标，否则会画在 root.x/y（PSD 模式下是左上角，跑偏到 -100/-100）
+        const renderInfo = usePixiBonesStore.getState().render;
+        const rootAnchorX = renderInfo.x;
+        const rootAnchorY = renderInfo.y;
+
         const visit = (bone: EngineBone, isSelected: boolean, length: number) => {
           const p0 = skeletonRef!.getWorldPosition(bone);
           const p1 = skeletonRef!.getWorldTip(bone);
           if (length === 0) {
-            // 0 长度骨骼 = 根骨骼图标（精确按用户 SVG 比例：446x335 viewBox）
-            // SVG 中心 (167, 163)，4 条 20px 宽矩形臂 + 中心双圆环
-            // 右臂比左/上/下臂长（指向骨骼默认 +X 方向）
-            const cx = ox + p0.x * sx;
-            const cy = oy + p0.y * sy;
+            // 0 长度骨骼 = 根骨骼图标（按 Codex 设计的 spine 风格图标）
+            // 几何：viewBox 446x335，anchor (223, 167)，左右臂不对称（右侧更长指向 +X）
+            // 4 条 line + 双圆环（外环 stroke、内环深色填充当背景）
+            const cx = rootAnchorX;
+            const cy = rootAnchorY;
             const color = isSelected ? SELECTED_COLOR : BONE_COLOR;
-            // 整体缩放：基准 446x335 缩放到视觉宽度 W
-            const W = 120 * sAvg;
-            const H = W * (335 / 446);
-            // 图标左上角（中心点对齐到 SVG 中心 (167,163)）
-            const ix = cx - W * (167 / 446);
-            const iy = cy - H * (163 / 335);
-            // 4 条臂（20px 粗，原始坐标 → 归一化）
-            const armW = W * (20 / 446);
-            // 上臂：(157,14)→(177,95)，81 长
-            bonesLayer.rect(ix + W * (157 / 446), iy + H * (14 / 335), armW, H * (81 / 335)).fill({ color });
-            // 下臂：(157,231)→(177,312)，81 长
-            bonesLayer.rect(ix + W * (157 / 446), iy + H * (231 / 335), armW, H * (81 / 335)).fill({ color });
-            // 左臂：(18,153)→(99,173)，81 长
-            bonesLayer.rect(ix + W * (18 / 446), iy + H * (153 / 335), W * (81 / 446), armW).fill({ color });
-            // 右臂：(234,153)→(427,173)，193 长（最长，指向 +X）
-            bonesLayer.rect(ix + W * (234 / 446), iy + H * (153 / 335), W * (193 / 446), armW).fill({ color });
-            // 中心大圆环（外圆，半径 ~28 in 446 viewBox）
-            bonesLayer.circle(cx, cy, W * (28 / 446)).stroke({ width: W * (8 / 446), color });
-            // 中心小圆环（内圆，半径 ~11）
-            bonesLayer.circle(cx, cy, W * (11 / 446)).stroke({ width: W * (5 / 446), color });
+            // anchor (viewBox 中心) — 4 条 line 都相对它对称布置
+            const ax = 223;
+            const ay = 167;
+            // 4 条 line 端点（viewBox 局部坐标）
+            const strokeW = 12;
+            // 内圈背景色（深灰，避免和外圈 stroke 之间留白显出画布底色）
+            const innerBg = 0x1a1d22;
+            // ★ Spine 风格：图标尺寸不严格跟着 root.scale 走。
+            // 原因：zoom 很小时图标消失、zoom 很大时图标爆炸。
+            // 策略：在 MIN/MAX 之间跟随 zoom，超出范围夹紧。
+            // 这样新建项目（默认 zoom=1）图标适中，放到最大也不会变巨无霸。
+            const MIN_ICON_SCALE = 0.1;   // zoom < 0.6 时图标固定 0.6 倍
+            const MAX_ICON_SCALE = 0.3;   // zoom > 1.8 时图标固定 1.8 倍（不再放大）
+            const A = Math.max(MIN_ICON_SCALE, Math.min(sAvg, MAX_ICON_SCALE));
+            // 局部→屏幕 = (cx + (localX - ax) * A, cy + (localY - ay) * A)
+            const tx = (lx: number) => cx + (lx - ax) * A;
+            const ty = (ly: number) => cy + (ly - ay) * A;
+            // 4 条带圆头的线段（左/上/下 短，右 长 指向 +X）
+            // 左臂 [121, 167] → [176, 167]（靠近中心）
+            bonesLayer.moveTo(tx(121), ty(167)).lineTo(tx(176), ty(167))
+              .stroke({ width: strokeW * A, color, cap: 'round' });
+            // 右臂 [270, 167] → [370, 167]（最长，指向 +X）
+            bonesLayer.moveTo(tx(270), ty(167)).lineTo(tx(370), ty(167))
+              .stroke({ width: strokeW * A, color, cap: 'round' });
+            // 上臂 [223, 65] → [223, 120]
+            bonesLayer.moveTo(tx(223), ty(65)).lineTo(tx(223), ty(120))
+              .stroke({ width: strokeW * A, color, cap: 'round' });
+            // 下臂 [223, 214] → [223, 269]
+            bonesLayer.moveTo(tx(223), ty(214)).lineTo(tx(223), ty(269))
+              .stroke({ width: strokeW * A, color, cap: 'round' });
+            // 双圆环（先画内圈深色背景，再画外圈 stroke 覆盖）
+            // 内圈实心填充（深色）— 让中央不会透出画布
+            bonesLayer.circle(tx(223), ty(167), 26 * A).fill({ color: innerBg });
+            // 外圈 stroke（带圆角端点，模仿原图）
+            bonesLayer.circle(tx(223), ty(167), 32 * A)
+              .stroke({ width: 12 * A, color, cap: 'round' });
           } else {
             bonesLayer
               .moveTo(ox + p0.x * sx, oy + p0.y * sy)
@@ -472,8 +562,10 @@ export function BoneEditor() {
             : node.id === selectedBoneId;
 
           const origin = skeletonRef.getWorldPosition(b);
-          const oX = ox + origin.x * sx;
-          const oY = oy + origin.y * sy;
+          // 根骨 (length=0) 的世界坐标 (0,0) 经过 ox/oy 映射会跑到 root.x/root.y
+          // （PSD 模式下是左上角 ~-100/-100），必须用 rootAnchor（PSD 底部中心 / 画布中心）
+          const oX = node.length === 0 ? rootAnchorX : ox + origin.x * sx;
+          const oY = node.length === 0 ? rootAnchorY : oy + origin.y * sy;
           const jointHit = new Gfx();
           // hit area：0 长度骨骼用大圆覆盖整个图标范围（图标最大半径约 30px）
           const hitR = node.length === 0 ? 32 : 16;
@@ -530,7 +622,13 @@ export function BoneEditor() {
           });
           handlesLayer.addChild(jointHit);
 
+          // 根骨 (length=0) 没有 tip，不画 tipHandle
+          if (node.length === 0) {
+            continue;
+          }
+
           const tip = skeletonRef.getWorldTip(b);
+          // 根骨 tip = 自身位置，用 rootAnchor 而不是 ox/oy
           const stageX = ox + tip.x * sx;
           const stageY = oy + tip.y * sy;
 
@@ -560,8 +658,8 @@ export function BoneEditor() {
               parentRotDeg,
               startScreen: { x: ev.global.x, y: ev.global.y },
               startScreenParent: {
-                x: ox + (skeletonRef!.getWorldPosition(b).x) * root.scale.x,
-                y: oy + (skeletonRef!.getWorldPosition(b).y) * root.scale.y,
+                x: node.length === 0 ? rootAnchorX : ox + (skeletonRef!.getWorldPosition(b).x) * root.scale.x,
+                y: node.length === 0 ? rootAnchorY : oy + (skeletonRef!.getWorldPosition(b).y) * root.scale.y,
               },
             };
             tipHandle.cursor = 'grabbing';
@@ -732,10 +830,11 @@ export function BoneEditor() {
             for (const n of usePixiBonesStore.getState().bones) {
               const bone = boneById.get(n.id);
               if (!bone) continue;
-              // 根 world → screen
+              // 根 world → screen（根骨用 store.render 不用 ox/oy，避免被映射到 PSD 左上角）
+              const r = usePixiBonesStore.getState().render;
               const p0 = skeletonRef.getWorldPosition(bone);
-              const sx0 = root.x + p0.x * root.scale.x;
-              const sy0 = root.y + p0.y * root.scale.y;
+              const sx0 = n.length === 0 ? r.x : root.x + p0.x * root.scale.x;
+              const sy0 = n.length === 0 ? r.y : root.y + p0.y * root.scale.y;
               // tip world → screen
               const p1 = skeletonRef.getWorldTip(bone);
               const sx1 = root.x + p1.x * root.scale.x;
@@ -855,7 +954,7 @@ export function BoneEditor() {
         }
         // 从 store 实时读 zoom
         const curVp = usePixiBonesStore.getState().viewport;
-        const newZoom = Math.max(0.05, Math.min(curVp.zoom * factor, 16));
+        const newZoom = Math.max(0.05, Math.min(curVp.zoom * factor, 8));
         setViewport({ ...curVp, zoom: newZoom });
         const s = usePixiBonesStore.getState();
         // 重新算 center（保持 bottom-center 在 oldBottomX/Y）
@@ -958,10 +1057,11 @@ export function BoneEditor() {
         }
         applyVisibility(state.psd, state.layerVisibility);
         drawHighlight(state.psd, state.selectedLayerId);
-        drawBones(state.bones, state.selectedBoneId);
+        drawBones(state.bones, state.selectedBoneId, state.selectedBoneIds);
         center(state.psd);
         drawGrid(state.psd);
         drawCrosshair(state.psd);
+        updateCheckerSize();   // ★ 棋盘格尺寸跟 zoom 走，但有 min/max 夹紧
         prev = state;
       });
       cleanups.push(unsub);

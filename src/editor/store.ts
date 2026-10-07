@@ -210,7 +210,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   selectedBoneIds: [],
 
   showLeftPanel: false,
-  showRightPanel: true,   // 默认显示右侧属性+层级树（Spine setup 模式）
+  showRightPanel: false,  // 默认隐藏层级树，用户从 View 菜单手动开启
   showRulers: true,
 
   // 视图菜单 11 项默认值（false=关闭）
@@ -440,23 +440,21 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     selectedLayerId: null,
   }),
   // 多选：additive=true 增量追加，false 替换
-  selectBones: (ids, additive = false) => {
-    return set((s) => {
-      if (additive) {
-        const next = Array.from(new Set([...s.selectedBoneIds, ...ids]));
-        return {
-          selectedBoneIds: next,
-          selectedBoneId: next[0] ?? null,
-          selectedLayerId: null,
-        };
-      }
+  selectBones: (ids, additive = false) => set((s) => {
+    if (additive) {
+      const next = Array.from(new Set([...s.selectedBoneIds, ...ids]));
       return {
-        selectedBoneIds: ids,
-        selectedBoneId: ids[0] ?? null,
+        selectedBoneIds: next,
+        selectedBoneId: next[0] ?? null,
         selectedLayerId: null,
       };
-    });
-  },
+    }
+    return {
+      selectedBoneIds: ids,
+      selectedBoneId: ids[0] ?? null,
+      selectedLayerId: null,
+    };
+  }),
 }));  // end usePixiBonesStore = create<PixiBonesState>((set, get) => ({
 
 // 兼容：导出供 store 外的消费者复用
