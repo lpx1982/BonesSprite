@@ -466,7 +466,10 @@ export function BoneEditor() {
         for (const node of nodes) {
           const b = boneById.get(node.id);
           if (!b) continue;
-          const isSelected = node.id === selectedBoneId;
+          // 单选兼容：优先用 selectedBoneIds（多选），fallback 到 selectedBoneId
+          const isSelected = (selectedBoneIds && selectedBoneIds.length > 0)
+            ? selectedBoneIds.includes(node.id)
+            : node.id === selectedBoneId;
 
           const origin = skeletonRef.getWorldPosition(b);
           const oX = ox + origin.x * sx;
@@ -724,14 +727,21 @@ export function BoneEditor() {
           const yMax = Math.max(startScreen.y, nowScreen.y);
           const hit: string[] = [];
           if (skeletonRef) {
+            const insideRect = (x: number, y: number) =>
+              x >= xMin && x <= xMax && y >= yMin && y <= yMax;
             for (const n of usePixiBonesStore.getState().bones) {
               const bone = boneById.get(n.id);
               if (!bone) continue;
-              const p = skeletonRef.getWorldPosition(bone);
-              // 骨根 world → screen
-              const sx = root.x + p.x * root.scale.x;
-              const sy = root.y + p.y * root.scale.y;
-              if (sx >= xMin && sx <= xMax && sy >= yMin && sy <= yMax) {
+              // 根 world → screen
+              const p0 = skeletonRef.getWorldPosition(bone);
+              const sx0 = root.x + p0.x * root.scale.x;
+              const sy0 = root.y + p0.y * root.scale.y;
+              // tip world → screen
+              const p1 = skeletonRef.getWorldTip(bone);
+              const sx1 = root.x + p1.x * root.scale.x;
+              const sy1 = root.y + p1.y * root.scale.y;
+              // 根 或 tip 任何一在框内即认为该骨被框中（Spine 风格）
+              if (insideRect(sx0, sy0) || insideRect(sx1, sy1)) {
                 hit.push(n.id);
               }
             }
