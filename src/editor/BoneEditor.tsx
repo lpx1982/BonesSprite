@@ -436,6 +436,9 @@ export function BoneEditor() {
 
       let skeletonRef: Skeleton | null = null;
       const boneById = new Map<string, EngineBone>();
+      // ★ jointHit 缓存：按 id 复用，drawBones 频繁调用时同一个 jointHit 不被 destroy，
+      //   PIXI 的 hit-test 和 hover 状态才能正常工作。
+      const hitById = new Map<string, Gfx>();
 
       const buildSkeleton = (nodes: BoneNode[]) => {
         boneById.clear();
@@ -462,12 +465,9 @@ export function BoneEditor() {
 
       const drawBones = (nodes: BoneNode[], selectedBoneId: string | null, selectedBoneIds?: string[]) => {
         bonesLayer.clear();
-        while (handlesLayer.children.length > 0) {
-          const c = handlesLayer.children[0];
-          handlesLayer.removeChild(c);
-          c.destroy();
-        }
         if (!skeletonRef || nodes.length === 0) return;
+        // 当前 hover 的骨骼 id（用于图标 hover 高亮变浅）
+        const hoveredBoneId = usePixiBonesStore.getState().hoveredBoneId;
 
         // 多选判定：传入 selectedBoneIds 则用其，否则 fallback 到单选 id
         const isMultiSel = (id: string | undefined) =>
@@ -480,6 +480,7 @@ export function BoneEditor() {
 
         const BONE_COLOR = 0x9ca3af;     // 未选中：灰色
         const SELECTED_COLOR = 0xF0E020;   // 选中：黄色
+        const HOVER_COLOR = 0xC8CCD4;     // hover：浅灰（比默认亮一档）
         const sAvg = (Math.abs(sx) + Math.abs(sy)) / 2;  // 平均缩放
 
         // 根骨视觉锚点：center() 推给 store.render 的"十字位置"
@@ -499,7 +500,19 @@ export function BoneEditor() {
             // 4 条 line + 双圆环（外环 stroke、内环深色填充当背景）
             const cx = rootAnchorX;
             const cy = rootAnchorY;
-            const color = isSelected ? SELECTED_COLOR : BONE_COLOR;
+            // 颜色优先级：选中 > hover > 默认
+            // - 选中：黄色
+            // - 未选中但 hover：浅灰（HOVER_COLOR）
+            // - 默认：灰（BONE_COLOR）
+            let color: number;
+            const rootBoneId = (bone as unknown as { _id?: string })._id;
+            if (isSelected) {
+              color = SELECTED_COLOR;
+            } else if (hoveredBoneId === rootBoneId) {
+              color = HOVER_COLOR;
+            } else {
+              color = BONE_COLOR;
+            }
             // anchor (viewBox 中心) — 4 条 line 都相对它对称布置
             const ax = 223;
             const ay = 167;
@@ -566,16 +579,42 @@ export function BoneEditor() {
           // （PSD 模式下是左上角 ~-100/-100），必须用 rootAnchor（PSD 底部中心 / 画布中心）
           const oX = node.length === 0 ? rootAnchorX : ox + origin.x * sx;
           const oY = node.length === 0 ? rootAnchorY : oy + origin.y * sy;
-          const jointHit = new Gfx();
-          // hit area：0 长度骨骼用大圆覆盖整个图标范围（图标最大半径约 30px）
-          const hitR = node.length === 0 ? 32 : 16;
-          jointHit
-            .circle(0, 0, hitR)
-            .fill({ color: 0xffffff, alpha: 0.001 });
+          // ★ jointHit 复用：按 id 缓存到 hitById 里，drawBones 多次调用时复用同一对象，
+          //   PIXI 的 hit-test / hover 状态就不会失效。
+          let jointHit = hitById.get(node.id) as (Gfx & { __boneId?: string }) | undefined;
+          if (jointHit) {
+            // 复用：只更新位置（hover 监听保留）
+            jointHit.x = oX;
+            jointHit.y = oY;
+          } else {
+            // 新建：带 hover 监听 + 标记 id
+            jointHit = new Gfx() as Gfx & { __boneId?: string };
+            jointHit.__boneId = node.id;
+            // hit area：0 长度骨骼用大圆覆盖整个图标范围（图标最大半径约 30px）
+            const hitR = node.length === 0 ? 32 : 16;
+            jointHit
+              .circle(0, 0, hitR)
+              .fill({ color: 0xffffff, alpha: 0.001 });
+            jointHit.eventMode = 'static';
+            jointHit.cursor = 'pointer';
+            // ★ hover 监听：进入时 setHoveredBoneId(id)，离开时清空。
+            // 用 pointerenter/pointerleave 不冒泡，避免内部子元素切换误触发。
+            jointHit.on('pointerenter', (ev: FederatedPointerEvent) => {
+              ev.stopPropagation();
+              usePixiBonesStore.getState().setHoveredBoneId(node.id);
+            });
+            jointHit.on('pointerleave', (ev: FederatedPointerEvent) => {
+              ev.stopPropagation();
+              const cur = usePixiBonesStore.getState().hoveredBoneId;
+              if (cur === node.id) {
+                usePixiBonesStore.getState().setHoveredBoneId(null);
+              }
+            });
+            handlesLayer.addChild(jointHit);
+            hitById.set(node.id, jointHit);
+          }
           jointHit.x = oX;
           jointHit.y = oY;
-          jointHit.eventMode = 'static';
-          jointHit.cursor = 'pointer';
           jointHit.on('pointerdown', (ev: FederatedPointerEvent) => {
             ev.stopPropagation();
             const mode = usePixiBonesStore.getState().editorMode;
@@ -620,7 +659,6 @@ export function BoneEditor() {
               };
             }
           });
-          handlesLayer.addChild(jointHit);
 
           // 根骨 (length=0) 没有 tip，不画 tipHandle
           if (node.length === 0) {
@@ -866,6 +904,15 @@ export function BoneEditor() {
       a.stage.on('pointerup', onPointerUp);
       a.stage.on('pointerupoutside', onPointerUp);
 
+      // ★ hover 兜底：鼠标离开整个 stage 时清空 hover 状态。
+      // 因为 drawBones 会 destroy 旧 jointHit（不触发 leave），新的也不会自动 enter，
+      // 所以用 stage 级的 pointerleave 保证 hover 一定不会"粘住"。
+      a.stage.on('pointerleave', () => {
+        if (usePixiBonesStore.getState().hoveredBoneId !== null) {
+          usePixiBonesStore.getState().setHoveredBoneId(null);
+        }
+      });
+
       a.stage.on('pointerdown', (ev: FederatedPointerEvent) => {
         if (ev.target === a.stage && ev.button === 0) {
           const mode = usePixiBonesStore.getState().editorMode;
@@ -1066,13 +1113,22 @@ export function BoneEditor() {
       });
       cleanups.push(unsub);
 
+      // ResizeObserver debounce：CSS 动画（如 hierarchy-pop 220ms）过程中 host 宽度会变，
+      // 但中间帧的尺寸是"过渡态"，拿去做 center 会导致 store.render 被推错值。
+      // 用 rAF debounce 把多次回调合并成"动画结束后"的稳定尺寸。
+      let resizeRaf = 0;
       resizeObs = new ResizeObserver(() => {
         if (destroyed) return;
-        const s = usePixiBonesStore.getState();
-        center(s.psd);
-        drawGrid(s.psd);
-        drawHighlight(s.psd, s.selectedLayerId);
-        drawBones(s.bones, s.selectedBoneId, s.selectedBoneIds);
+        if (resizeRaf) cancelAnimationFrame(resizeRaf);
+        resizeRaf = requestAnimationFrame(() => {
+          resizeRaf = 0;
+          if (destroyed) return;
+          const s = usePixiBonesStore.getState();
+          center(s.psd);
+          drawGrid(s.psd);
+          drawHighlight(s.psd, s.selectedLayerId);
+          drawBones(s.bones, s.selectedBoneId, s.selectedBoneIds);
+        });
       });
       resizeObs.observe(host);
     })();

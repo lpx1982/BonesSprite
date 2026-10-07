@@ -50,6 +50,8 @@ export interface PixiBonesState {
    *  - 多选：selectedBoneIds = [a,b,c]，selectedBoneId = 第一个（兼容旧代码）
    */
   selectedBoneIds: string[];
+  /** 鼠标悬停的骨骼 id（用于显示 hover 高亮） */
+  hoveredBoneId: string | null;
 
   // ---- UI state ----
   showLeftPanel: boolean;
@@ -138,6 +140,8 @@ export interface PixiBonesState {
   selectBone: (id: string | null) => void;
   /** 多选（Shift+点击 / 框选）。传入 true = 增量，false = 替换 */
   selectBones: (ids: string[], additive?: boolean) => void;
+  /** 设置当前 hover 的骨骼 id（用于图标 hover 高亮） */
+  setHoveredBoneId: (id: string | null) => void;
   setBoneParent: (id: string, parentId: string | null) => void;
 }
 
@@ -195,6 +199,7 @@ export { findLayer };
 
 export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   skeleton: null,
+  hoveredBoneId: null,
   animations: [],
   currentTime: 0,
   playing: true,
@@ -455,6 +460,9 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       selectedLayerId: null,
     };
   }),
+
+  // 设置 hover 骨骼 id（不进入 history、不影响选中态）
+  setHoveredBoneId: (id) => set({ hoveredBoneId: id }),
 }));  // end usePixiBonesStore = create<PixiBonesState>((set, get) => ({
 
 // 兼容：导出供 store 外的消费者复用

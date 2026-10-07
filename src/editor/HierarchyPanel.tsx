@@ -118,7 +118,13 @@ export function HierarchyPanel() {
   return (
     <aside
       className="w-72 flex flex-col overflow-hidden text-sm hierarchy-pop-enter"
-      style={{ background: C.panel, color: C.text, borderLeft: '1px solid ' + C.border, transformOrigin: 'top right' }}
+      style={{
+        background: C.panel, color: C.text,
+        borderLeft: '1px solid ' + C.border,
+        transformOrigin: 'top right',
+        // ★ 浮在画布右侧，不参与 flex 布局（避免挤压画布宽度）
+        position: 'absolute', top: 0, right: 0, bottom: 0, zIndex: 10,
+      }}
     >
       {/* ============ 顶部：标题 + 折叠按钮 ============ */}
       <div
