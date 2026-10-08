@@ -188,6 +188,10 @@ export interface PixiBonesState {
   /** 线框：勾选后即使未选中该网格，也画出它的顶点和边（key = attachmentId） */
   meshWireframe: Record<string, boolean>;
   setMeshWireframe: (attachmentId: string, v: boolean) => void;
+  /** 「描绘」请求：面板点一次自增一次，BoneEditor 订阅到变化后按图片 alpha 自动提取轮廓。
+   *  （和 fitRequestId 同一套路：面板不直接改网格数据，只发请求） */
+  traceRequestId: number;
+  requestTrace: () => void;
   /** 绘制顺序（slotId 列表，索引 0 = 最先绘制 = 最底层）。
    *  空数组 = 用自然顺序。 */
   slotOrder: string[];
@@ -708,6 +712,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   dockPanelWidths: { ...DOCK_PANEL_DEFAULT_WIDTH },
   setDockPanelWidth: (key, w) => set((s) => ({ dockPanelWidths: { ...s.dockPanelWidths, [key]: w } })),
   fitRequestId: 0,
+  traceRequestId: 0,
+  requestTrace: () => set((s) => ({ traceRequestId: s.traceRequestId + 1 })),
   editorMode: 'idle',
     transformSpace: 'local',
     activeTool: 'rotate',

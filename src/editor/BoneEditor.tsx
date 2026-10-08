@@ -3424,7 +3424,35 @@ export function BoneEditor() {
         if (state.editorMode !== prev.editorMode && state.editorMode !== 'create') {
           attachmentHover.clear();
         }
-// fit-to-content 请求：通过 setViewport 写入 vp.zoom/panX/panY，让 center() 自动重算 root
+        // 描绘（Trace）：面板点「描绘」→ 按图片 alpha 自动提取轮廓，用该多边形重建网格
+        if (state.traceRequestId !== prev.traceRequestId) {
+          const slotId = state.meshEditSlotId;
+          const slot = slotId ? state.slots.find((x) => x.id === slotId) ?? null : null;
+          const aid = slot?.activeAttachmentId ?? null;
+          const layer = aid
+            ? allAttachmentsOf(state.psd, state.images).find((l) => l.id === aid) ?? null
+            : null;
+          if (aid && layer?.canvas && layer.width > 0 && layer.height > 0) {
+            const poly = traceAlphaHull(layer.canvas, TRACE_ALPHA_THRESHOLD, TRACE_DETAIL);
+            if (poly.length >= 3) {
+              const indices = triangulatePolygon(poly);
+              if (indices.length >= 3) {
+                const vertices: number[] = [];
+                const uvs: number[] = [];
+                for (const p of poly) {
+                  vertices.push(p.x, p.y);
+                  uvs.push(p.x / layer.width, p.y / layer.height);
+                }
+                const st0 = usePixiBonesStore.getState();
+                st0.setMeshNewPolygon(null);          // 正在手绘的话先取消
+                st0.pushHistory();
+                st0.setMeshData(aid, { vertices, uvs, indices });
+                st0.setMeshSelectedVertices([]);
+              }
+            }
+          }
+        }
+        // fit-to-content 请求：通过 setViewport 写入 vp.zoom/panX/panY，让 center() 自动重算 root
         if (state.fitRequestId !== prev.fitRequestId) {
           const b = root.getLocalBounds();
           const psd = state.psd;
@@ -3928,6 +3956,139 @@ function composeTint(...colors: Array<string | undefined>): number {
  */
 type OutlineSegments = { w: number; h: number; segs: Float32Array };
 const _outlineCache = new WeakMap<HTMLCanvasElement, OutlineSegments>();
+
+// =================================================================================
+//  描绘（Trace）：按图片 alpha 通道自动提取网格外壳
+// =================================================================================
+
+/** Ramer–Douglas–Peucker：把折线简化到 ε 容差内（递归）。 */
+function rdp(pts: Array<{ x: number; y: number }>, eps: number): Array<{ x: number; y: number }> {
+  if (pts.length <= 2) return pts;
+  const first = pts[0];
+  const last = pts[pts.length - 1];
+  let idx = -1;
+  let maxD = -1;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const d = distToSegment(pts[i].x, pts[i].y, first.x, first.y, last.x, last.y);
+    if (d > maxD) { maxD = d; idx = i; }
+  }
+  if (idx < 0 || maxD <= eps) return [first, last];
+  const left = rdp(pts.slice(0, idx + 1), eps);
+  const right = rdp(pts.slice(idx), eps);
+  return [...left.slice(0, -1), ...right];
+}
+
+/** 闭合多边形的 RDP 简化：按离 poly[0] 最远的点切成两条折线分别简化，再拼回去。 */
+function simplifyClosedPolygon(
+  poly: Array<{ x: number; y: number }>,
+  eps: number,
+): Array<{ x: number; y: number }> {
+  const n = poly.length;
+  if (n <= 4) return poly;
+  let far = 0;
+  let farD = -1;
+  for (let i = 1; i < n; i++) {
+    const d = (poly[i].x - poly[0].x) ** 2 + (poly[i].y - poly[0].y) ** 2;
+    if (d > farD) { farD = d; far = i; }
+  }
+  const a = rdp(poly.slice(0, far + 1), eps);
+  const b = rdp([...poly.slice(far), poly[0]], eps);
+  // b 的末点就是 poly[0]，已在 a 的首位 → 去掉两端
+  return [...a, ...b.slice(1, -1)];
+}
+
+/**
+ * 描绘（Trace）——从图层 alpha 通道自动提取网格外壳多边形（图片像素坐标）：
+ *   1) 二值化：alpha ≥ alphaThreshold（忽略几乎透明的像素）
+ *   2) Moore 邻域边界跟踪 → 外轮廓（8 邻域；含凹处，不处理孔洞）
+ *   3) RDP 简化成少量顶点（detail 越大 → ε 越小 → 顶点越多）
+ * 无内容 / 轮廓退化时返回 []。
+ */
+function traceAlphaHull(
+  canvas: HTMLCanvasElement,
+  alphaThreshold: number,
+  detail: number,
+): Array<{ x: number; y: number }> {
+  const W = canvas.width;
+  const H = canvas.height;
+  if (W === 0 || H === 0) return [];
+  let ctx: CanvasRenderingContext2D | null = null;
+  try { ctx = canvas.getContext('2d'); } catch { /* 跨域 canvas 会抛 */ }
+  if (!ctx) return [];
+  const img = ctx.getImageData(0, 0, W, H).data;
+  const thr = Math.max(0, Math.min(255, Math.round(alphaThreshold * 255)));
+  const solid = (x: number, y: number) =>
+    x >= 0 && y >= 0 && x < W && y < H && img[(y * W + x) * 4 + 3] >= thr;
+
+  // 起点：扫描顺序里第一个实心像素（最上最左，其北/西必为空，便于从西侧进入）
+  let sx = -1;
+  let sy = -1;
+  for (let y = 0; y < H && sx < 0; y++) {
+    for (let x = 0; x < W; x++) {
+      if (solid(x, y)) { sx = x; sy = y; break; }
+    }
+  }
+  if (sx < 0) return [];
+
+  // 8 邻域方向（顺时针：N, NE, E, SE, S, SW, W, NW）
+  const DIRS: Array<[number, number]> = [
+    [0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1],
+  ];
+  const dirIndex = (px: number, py: number, qx: number, qy: number) => {
+    const dx = Math.sign(qx - px);
+    const dy = Math.sign(qy - py);
+    for (let d = 0; d < 8; d++) if (DIRS[d][0] === dx && DIRS[d][1] === dy) return d;
+    return 0;
+  };
+
+  const contour: Array<{ x: number; y: number }> = [{ x: sx, y: sy }];
+  let px = sx;
+  let py = sy;
+  let bx = sx - 1;   // 进入方向：从西侧进来
+  let by = sy;
+  // 用「(当前点, 回溯点)」状态去重来终止（比单纯 p===start 稳）
+  const seen = new Set<string>();
+  const guardMax = 8 * (W + H) + 64;
+  for (let guard = 0; guard < guardMax; guard++) {
+    const key = `${px},${py},${bx},${by}`;
+    if (seen.has(key)) break;
+    seen.add(key);
+    const bd = dirIndex(px, py, bx, by);
+    let foundDir = -1;
+    for (let k = 1; k <= 8; k++) {
+      const d = (bd + k) % 8;
+      if (solid(px + DIRS[d][0], py + DIRS[d][1])) { foundDir = d; break; }
+    }
+    if (foundDir < 0) break;                       // 孤立像素
+    const prevD = (foundDir + 7) % 8;              // 顺时针的前一格回退点
+    bx = px + DIRS[prevD][0];
+    by = py + DIRS[prevD][1];
+    px += DIRS[foundDir][0];
+    py += DIRS[foundDir][1];
+    if (px === sx && py === sy) break;
+    contour.push({ x: px, y: py });
+  }
+  if (contour.length < 3) return [];
+
+  // 太长先抽稀，限制 RDP 递归深度
+  let pts = contour;
+  const MAXP = 2000;
+  if (pts.length > MAXP) {
+    const step = Math.ceil(pts.length / MAXP);
+    const thinned: Array<{ x: number; y: number }> = [];
+    for (let i = 0; i < pts.length; i += step) thinned.push(pts[i]);
+    pts = thinned;
+  }
+
+  const maxDim = Math.max(W, H);
+  const eps = Math.max(1, maxDim * (0.016 - 0.012 * Math.max(0, Math.min(1, detail))));
+  return simplifyClosedPolygon(pts, eps);
+}
+
+/** 描绘的默认参数（Spine 的 Trace 面板里有 Detail / Concavity / Alpha threshold / Padding 等；
+ *  这里先用一组稳妥的默认值，需要暴露 UI 时改成 store 字段即可）。 */
+const TRACE_ALPHA_THRESHOLD = 0.1;
+const TRACE_DETAIL = 0.6;
 
 function computeAttachmentOutline(canvas: HTMLCanvasElement): OutlineSegments {
   const hit = _outlineCache.get(canvas);

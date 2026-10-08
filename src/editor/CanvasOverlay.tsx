@@ -606,6 +606,7 @@ function MeshEditPanel() {
   const isolate = usePixiBonesStore((s) => s.meshIsolate);
   const setIsolate = usePixiBonesStore((s) => s.setMeshIsolate);
   const resetMesh = usePixiBonesStore((s) => s.resetMesh);
+  const requestTrace = usePixiBonesStore((s) => s.requestTrace);
   const newPolygon = usePixiBonesStore((s) => s.meshNewPolygon);
   const setNewPolygon = usePixiBonesStore((s) => s.setMeshNewPolygon);
   const slots = usePixiBonesStore((s) => s.slots);
@@ -724,9 +725,9 @@ function MeshEditPanel() {
             disabled
           ><MeshIconGenerate />生成</button>
           <button
-            style={meshBtnStyle(false, true)}
-            title="自动描绘轮廓生成网格边界（待实现）"
-            disabled
+            style={meshBtnStyle(false, false)}
+            title="描绘：按图片 alpha 通道自动提取轮廓，生成网格边界（会替换当前顶点）"
+            onClick={requestTrace}
           ><MeshIconTrace />描绘</button>
         </div>
 
