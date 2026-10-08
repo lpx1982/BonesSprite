@@ -3153,43 +3153,57 @@ export function BoneEditor() {
       });
 
       // 直接在 canvas DOM 上挂 wheel（原 a.stage.on('wheel') 不知为何触发不了）
+      /**
+       * 滚轮缩放：**以鼠标位置为中心** —— 鼠标下的那个点在屏幕上保持不动。
+       *
+       * 思路：先算出鼠标当前指向的「世界坐标」w，缩放后要求它仍落在同一个屏幕点上，
+       * 反推 panX / panY（root 的位置由 center() 用 viewport 重新算出）。
+       */
       const wheelHandler = (ev: WheelEvent) => {
         ev.preventDefault();
         const ZOOM_STEP = 1.1;
         const factor = ev.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
-        // 记下旧的 image 底部中心
-        const sOld = usePixiBonesStore.getState();
-        let oldBottomX = 0, oldBottomY = 0;
-        if (sOld.psd && sOld.psd.width > 0 && sOld.psd.height > 0) {
-          oldBottomX = root.x + (sOld.psd.width / 2) * root.scale.x;
-          oldBottomY = root.y + sOld.psd.height * root.scale.y;
-        }
-        // 从 store 实时读 zoom
-        const curVp = usePixiBonesStore.getState().viewport;
+
+        const rect = a.canvas.getBoundingClientRect();
+        const mx = ev.clientX - rect.left;
+        const my = ev.clientY - rect.top;
+        lastPointer = { x: mx, y: my };
+
+        const s0 = usePixiBonesStore.getState();
+        const curVp = s0.viewport;
         const newZoom = Math.max(0.05, Math.min(curVp.zoom * factor, 8));
-        setViewport({ ...curVp, zoom: newZoom });
-        const s = usePixiBonesStore.getState();
-        // 重新算 center（保持 bottom-center 在 oldBottomX/Y）
-        if (s.psd && s.psd.width > 0 && s.psd.height > 0) {
-          const cssW = host.clientWidth;
-          const cssH = host.clientHeight;
-          const margin = 30;
-          const baseFit = Math.max(0.01, Math.min(
-            Math.max(1, cssW - margin * 2) / s.psd.width,
-            Math.max(1, cssH - margin * 2) / s.psd.height,
-            1
-          ));
-          const scale = baseFit * newZoom;
-          root.scale.set(scale, scale);
-          root.x = oldBottomX - (s.psd.width / 2) * scale;
-          root.y = oldBottomY - s.psd.height * scale;
-        } else {
-          center(s.psd);
+        const psd = s0.psd;
+        const rw = host.clientWidth;
+        const rh = host.clientHeight;
+        if (rw <= 0 || rh <= 0) return;
+
+        if (!psd || psd.width === 0 || psd.height === 0) {
+          // 无 PSD：root.x = cssW/2 + panX、root.y = cssH/2 + panY、root.scale = zoom
+          const oldScale = root.scale.x || 1;
+          const wx = (mx - root.x) / oldScale;
+          const wy = (my - root.y) / oldScale;
+          const panX = mx - wx * newZoom - rw / 2;
+          const panY = my - wy * newZoom - rh / 2;
+          setViewport({ ...curVp, zoom: newZoom, panX, panY });
+          return;
         }
-        drawGrid(s.psd);
-        drawHighlight(s.psd, s.images, s.slots, s.selectedSlotIds);
-        drawBones(s.bones, s.selectedBoneId, s.selectedBoneIds);
-        drawCrosshair(s.psd);
+
+        // 有 PSD：scale = baseFit × zoom；root.x = (rw − psdW·scale)/2 + panX；root.y = rh/2 − psdH·scale + panY
+        const margin = 40;
+        const baseFit = Math.min(
+          Math.max(1, rw - margin * 2) / psd.width,
+          Math.max(1, rh - margin * 2) / psd.height,
+        );
+        const clampScale = (z: number) => Math.max(0.01, Math.min(baseFit * z, 8));
+        const oldScale = clampScale(curVp.zoom);
+        const newScale = clampScale(newZoom);
+        // 鼠标下的世界坐标（缩放前后保持不变）
+        const wx = (mx - root.x) / oldScale;
+        const wy = (my - root.y) / oldScale;
+        const panX = mx - wx * newScale - (rw - psd.width * newScale) / 2;
+        const panY = my - wy * newScale - (rh / 2 - psd.height * newScale);
+        setViewport({ ...curVp, zoom: newZoom, panX, panY });
+        // 后续重绘（grid / 骨骼 / 悬停框 …）由 store 订阅统一处理
       };
       a.canvas.addEventListener('wheel', wheelHandler, { passive: false });
 
@@ -3316,12 +3330,19 @@ export function BoneEditor() {
         applyVisibility(state.psd, state.images, state.slots, state.slotVisibility);
         applyBindings(state.psd, state.images, state.slots, state.slotBindings, state.slotTransforms);
         applySlotStyles(state.psd, state.images, state.slots, state.slotStyle, state.attachmentStyle);
+        // ★ 先更新 root（缩放 / 平移会改 root 位置），后面所有绘制才能用最新的变换
+        center(state.psd);
+        drawGrid(state.psd);
         drawHighlight(state.psd, state.images, state.slots, state.selectedSlotIds);
         drawBones(state.bones, state.selectedBoneId, state.selectedBoneIds);
         drawSlotHandles(state.psd, state.images, state.slots, state.selectedSlotId, state.activeTool, state.slotTransforms);
         drawMeshHandles();
-        center(state.psd);
-        drawGrid(state.psd);
+        // 缩放 / 平移后，悬停提示框要跟着重画（否则会残留在旧位置）
+        updateAttachmentHover(
+          lastPointer.x,
+          lastPointer.y,
+          state.editorMode === 'create' && metaDown,
+        );
         drawCrosshair(state.psd);
         updateCheckerSize();   // ★ 棋盘格尺寸跟 zoom 走，但有 min/max 夹紧
         prev = state;
