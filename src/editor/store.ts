@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { Skeleton } from '@engine/Skeleton';
 import type { Animation } from '@engine/Animation';
-import type { PixiBonesPsd, PixiBonesLayer, PixiBonesSlot } from '@psd/types';
+import type { PixiBonesPsd, PixiBonesLayer, PixiBonesSlot, MeshData } from '@psd/types';
 import { flattenLayers } from '@psd/index';
 import type { Locale } from './i18n';
 
@@ -40,6 +40,15 @@ export interface SlotBinding {
   boneId: string;
   ref: number[];
 }
+
+/** 撤销 / 重做快照的内容（骨树 + 插槽变换 + 网格顶点 + 选中骨）。 */
+export type HistorySnapshot = {
+  bones: BoneNode[];
+  slotTransforms: Record<string, { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }>;
+  /** 网格数据也纳入快照，这样拖顶点 / 增删顶点都能 Cmd+Z 撤销 */
+  attachmentMeshes: Record<string, MeshData>;
+  selectedBoneId: string | null;
+};
 
 export interface PixiBonesState {
   // ---- Day 1 残留字段（Demo 用自己的 skeleton，这里保留兼容）----
@@ -92,6 +101,42 @@ export interface PixiBonesState {
   /** 附件的颜色与混合模式（key = attachmentId = PixiBonesLayer.id）。语义同 slotStyle。 */
   attachmentStyle: Record<string, { color: string; blend: string }>;
   setAttachmentStyle: (attachmentId: string, patch: Partial<{ color: string; blend: string }>) => void;
+
+  // ---- 网格附件（仿 Spine Mesh Attachment）----
+  /** 附件的网格数据（key = attachmentId）。
+   *  有记录 = 网格附件（渲染走 PIXI Mesh）；没有 = 区域附件（4 角 Sprite）。 */
+  attachmentMeshes: Record<string, MeshData>;
+  /** 把一个附件转成网格附件。cols/rows = 初始细分（默认 2×2 → 4 顶点，仿 Spine）。 */
+  createMesh: (attachmentId: string, cols?: number, rows?: number) => void;
+  /** 把网格附件转回区域附件（删除网格数据） */
+  removeMesh: (attachmentId: string) => void;
+  /** 重置：把每个顶点移回它 UV 对应的位置，消除变形 */
+  resetMesh: (attachmentId: string) => void;
+  /** 冻结：把该插槽当前的旋转 / 缩放（slotTransforms）烘焙进网格顶点，
+   *  再把 rotation 归 0、scale 归 1 —— 视觉不变但变换值清零（仿 Spine 的「冻结」）。 */
+  freezeMesh: (slotId: string, attachmentId: string) => void;
+  /** 写入顶点位置（拖动顶点时高频调用，不做历史快照） */
+  setMeshVertices: (attachmentId: string, vertices: number[]) => void;
+  /** 整体写入网格数据（增删顶点 / 细分边等改变拓扑时用） */
+  setMeshData: (attachmentId: string, mesh: MeshData) => void;
+  /** 正在编辑网格的插槽 id（null = 未进入网格编辑模式） */
+  meshEditSlotId: string | null;
+  setMeshEditSlot: (slotId: string | null) => void;
+  /** 网格编辑工具：modify=拖顶点（双击删除）/ create=点击加顶点、拖拽加边 / delete=点顶点删除 */
+  meshTool: 'modify' | 'create' | 'delete';
+  setMeshTool: (t: 'modify' | 'create' | 'delete') => void;
+  /** 编辑模式下选中的顶点索引（支持多选） */
+  meshSelectedVertices: number[];
+  setMeshSelectedVertices: (idx: number[]) => void;
+  /** 是否在画布上画出三角剖分（虚线） */
+  meshShowTriangles: boolean;
+  setMeshShowTriangles: (v: boolean) => void;
+  /** 变形：勾选 = 拖动顶点改变形状；未勾选 = 只编辑 UV（纹理映射） */
+  meshDeformed: boolean;
+  setMeshDeformed: (v: boolean) => void;
+  /** 线框：勾选后即使未选中该网格，也画出它的顶点和边（key = attachmentId） */
+  meshWireframe: Record<string, boolean>;
+  setMeshWireframe: (attachmentId: string, v: boolean) => void;
   /** 绘制顺序（slotId 列表，索引 0 = 最先绘制 = 最底层）。
    *  空数组 = 用自然顺序。 */
   slotOrder: string[];
@@ -180,8 +225,8 @@ export interface PixiBonesState {
   pushRecentProject: (id: string, name: string) => void;
   // ===== Undo/Redo 撤销重做（记录 bones + slotTransforms 的快照） =====
   /** 历史快照栈（最多 50 步），每项是 bones + slotTransforms + selectedBoneId 的快照 */
-  historyPast:  Array<{ bones: BoneNode[]; slotTransforms: Record<string, { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }>; selectedBoneId: string | null }>;
-  historyFuture: Array<{ bones: BoneNode[]; slotTransforms: Record<string, { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }>; selectedBoneId: string | null }>;
+  historyPast:  HistorySnapshot[];
+  historyFuture: HistorySnapshot[];
   /** 把当前快照推入 past（结构性变化前调用） */
   pushHistory: () => void;
   undo: () => void;
@@ -414,6 +459,121 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   setAttachmentStyle: (attachmentId, patch) => set((state) => ({
     attachmentStyle: { ...state.attachmentStyle, [attachmentId]: { ...state.attachmentStyle[attachmentId], ...patch } },
   })),
+  // ===== 网格附件 =====
+  attachmentMeshes: {},
+  createMesh: (attachmentId, cols = 2, rows = 2) => set((state) => {
+    const layer = attachmentLayers(state.psd, state.images).find((l) => l.id === attachmentId);
+    if (!layer) return state;
+    const w = layer.width;
+    const h = layer.height;
+    const cx = Math.max(2, Math.round(cols));
+    const cy = Math.max(2, Math.round(rows));
+    const vertices: number[] = [];
+    const uvs: number[] = [];
+    // 顶点按「从左到右、从上到下」排；UV 与位置同比例（此时网格无变形）
+    for (let j = 0; j < cy; j++) {
+      for (let i = 0; i < cx; i++) {
+        const u = i / (cx - 1);
+        const v = j / (cy - 1);
+        vertices.push(u * w, v * h);
+        uvs.push(u, v);
+      }
+    }
+    // 每个格子切成 2 个三角形
+    const indices: number[] = [];
+    for (let j = 0; j < cy - 1; j++) {
+      for (let i = 0; i < cx - 1; i++) {
+        const a = j * cx + i;      // 左上
+        const b = a + 1;           // 右上
+        const c = a + cx;          // 左下
+        const d = c + 1;           // 右下
+        indices.push(a, b, c, b, d, c);
+      }
+    }
+    return {
+      attachmentMeshes: {
+        ...state.attachmentMeshes,
+        [attachmentId]: { vertices, uvs, indices },
+      },
+    };
+  }),
+  removeMesh: (attachmentId) => set((state) => {
+    const next = { ...state.attachmentMeshes };
+    delete next[attachmentId];
+    return { attachmentMeshes: next };
+  }),
+  // 重置 = 把顶点移回 UV 位置（uv × 图层尺寸）→ 消除变形，拓扑不变
+  resetMesh: (attachmentId) => set((state) => {
+    const mesh = state.attachmentMeshes[attachmentId];
+    if (!mesh) return state;
+    const layer = attachmentLayers(state.psd, state.images).find((l) => l.id === attachmentId);
+    if (!layer) return state;
+    const vertices = mesh.vertices.slice();
+    for (let i = 0; i + 1 < mesh.uvs.length; i += 2) {
+      vertices[i] = mesh.uvs[i] * layer.width;
+      vertices[i + 1] = mesh.uvs[i + 1] * layer.height;
+    }
+    return {
+      attachmentMeshes: { ...state.attachmentMeshes, [attachmentId]: { ...mesh, vertices } },
+    };
+  }),
+  setMeshVertices: (attachmentId, vertices) => set((state) => {
+    const mesh = state.attachmentMeshes[attachmentId];
+    if (!mesh) return state;
+    return {
+      attachmentMeshes: { ...state.attachmentMeshes, [attachmentId]: { ...mesh, vertices } },
+    };
+  }),
+  setMeshData: (attachmentId, mesh) => set((state) => ({
+    attachmentMeshes: { ...state.attachmentMeshes, [attachmentId]: mesh },
+  })),
+  freezeMesh: (slotId, attachmentId) => set((state) => {
+    const mesh = state.attachmentMeshes[attachmentId];
+    if (!mesh) return state;
+    const lt = state.slotTransforms[slotId];
+    const n = Math.floor(mesh.vertices.length / 2);
+    if (!lt || n === 0) return state;
+    // 顶点质心作为旋转/缩放中心
+    let cx = 0;
+    let cy = 0;
+    for (let i = 0; i < n; i++) {
+      cx += mesh.vertices[i * 2];
+      cy += mesh.vertices[i * 2 + 1];
+    }
+    cx /= n;
+    cy /= n;
+    const cos = Math.cos(lt.rotation);
+    const sin = Math.sin(lt.rotation);
+    const vertices = mesh.vertices.slice();
+    for (let i = 0; i < n; i++) {
+      const dx = (mesh.vertices[i * 2] - cx) * lt.scaleX;
+      const dy = (mesh.vertices[i * 2 + 1] - cy) * lt.scaleY;
+      vertices[i * 2] = cx + cos * dx - sin * dy;
+      vertices[i * 2 + 1] = cy + sin * dx + cos * dy;
+    }
+    return {
+      attachmentMeshes: { ...state.attachmentMeshes, [attachmentId]: { ...mesh, vertices } },
+      slotTransforms: {
+        ...state.slotTransforms,
+        [slotId]: { ...lt, rotation: 0, scaleX: 1, scaleY: 1 },
+      },
+    };
+  }),
+  // 网格编辑态 / 工具 / 显示开关
+  meshEditSlotId: null,
+  setMeshEditSlot: (slotId) => set({ meshEditSlotId: slotId, meshSelectedVertices: [] }),
+  meshTool: 'modify',
+  setMeshTool: (t) => set({ meshTool: t }),
+  meshSelectedVertices: [],
+  setMeshSelectedVertices: (idx) => set({ meshSelectedVertices: idx }),
+  meshShowTriangles: true,
+  setMeshShowTriangles: (v) => set({ meshShowTriangles: v }),
+  meshDeformed: true,
+  setMeshDeformed: (v) => set({ meshDeformed: v }),
+  meshWireframe: {},
+  setMeshWireframe: (attachmentId, v) => set((state) => ({
+    meshWireframe: { ...state.meshWireframe, [attachmentId]: v },
+  })),
   slotOrder: [],
   setSlotOrder: (ids) => set({ slotOrder: ids }),
   selectedSlotId: null,
@@ -512,6 +672,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     const snap = {
       bones: JSON.parse(JSON.stringify(s.bones)),
       slotTransforms: JSON.parse(JSON.stringify(s.slotTransforms)),
+      attachmentMeshes: JSON.parse(JSON.stringify(s.attachmentMeshes)),
       selectedBoneId: s.selectedBoneId,
     };
     const past = [...s.historyPast, snap].slice(-50);  // 最多 50 步
@@ -526,6 +687,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     const currentSnap = {
       bones: JSON.parse(JSON.stringify(s.bones)),
       slotTransforms: JSON.parse(JSON.stringify(s.slotTransforms)),
+      attachmentMeshes: JSON.parse(JSON.stringify(s.attachmentMeshes)),
       selectedBoneId: s.selectedBoneId,
     };
     const future = [currentSnap, ...s.historyFuture];
@@ -534,6 +696,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       historyFuture: future,
       bones: prev.bones,
       slotTransforms: prev.slotTransforms,
+      attachmentMeshes: prev.attachmentMeshes,
       selectedBoneId: prev.selectedBoneId,
     });
   },
@@ -545,6 +708,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     const currentSnap = {
       bones: JSON.parse(JSON.stringify(s.bones)),
       slotTransforms: JSON.parse(JSON.stringify(s.slotTransforms)),
+      attachmentMeshes: JSON.parse(JSON.stringify(s.attachmentMeshes)),
       selectedBoneId: s.selectedBoneId,
     };
     const past = [...s.historyPast, currentSnap];
@@ -553,6 +717,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       historyFuture: rest,
       bones: next.bones,
       slotTransforms: next.slotTransforms,
+      attachmentMeshes: next.attachmentMeshes,
       selectedBoneId: next.selectedBoneId,
     });
   },
@@ -591,6 +756,10 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       slotTransforms: {},
       slotStyle: {},
       attachmentStyle: {},
+      attachmentMeshes: {},
+      meshEditSlotId: null,
+      meshSelectedVertices: [],
+      meshWireframe: {},
       slotOrder: [],
       selectedSlotId: null,
       selectedSlotIds: [],
@@ -693,15 +862,24 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
         return { ...s, attachmentIds, activeAttachmentId };
       });
       const attSelected = state.selectedAttachmentId === id;
-      // 附件级样式：删掉该附件的记录
+      // 附件级样式 / 网格：删掉该附件的记录
       const nextAttachmentStyle = { ...state.attachmentStyle };
       delete nextAttachmentStyle[id];
+      const nextMeshes = { ...state.attachmentMeshes };
+      delete nextMeshes[id];
+      const nextWire = { ...state.meshWireframe };
+      delete nextWire[id];
       return {
         images: state.images.filter((l) => l.id !== id),
         slots,
         selectedAttachmentId: attSelected ? null : state.selectedAttachmentId,
         selectedRowKey: attSelected ? null : state.selectedRowKey,
         attachmentStyle: nextAttachmentStyle,
+        attachmentMeshes: nextMeshes,
+        meshWireframe: nextWire,
+        meshEditSlotId: state.meshEditSlotId && state.meshEditSlotId === state.selectedSlotId && attSelected
+          ? null
+          : state.meshEditSlotId,
       };
     }),
   // 插槽显隐（key = slotId）

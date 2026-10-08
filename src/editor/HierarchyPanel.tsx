@@ -132,6 +132,17 @@ export function HierarchyPanel() {
   const setSlotStyle = usePixiBonesStore((s) => s.setSlotStyle);
   const attachmentStyle = usePixiBonesStore((s) => s.attachmentStyle);
   const setAttachmentStyle = usePixiBonesStore((s) => s.setAttachmentStyle);
+  // 网格（仿 Spine）
+  const attachmentMeshes = usePixiBonesStore((s) => s.attachmentMeshes);
+  const createMesh = usePixiBonesStore((s) => s.createMesh);
+  const removeMesh = usePixiBonesStore((s) => s.removeMesh);
+  const resetMesh = usePixiBonesStore((s) => s.resetMesh);
+  const freezeMesh = usePixiBonesStore((s) => s.freezeMesh);
+  const meshWireframe = usePixiBonesStore((s) => s.meshWireframe);
+  const setMeshWireframe = usePixiBonesStore((s) => s.setMeshWireframe);
+  const meshEditSlotId = usePixiBonesStore((s) => s.meshEditSlotId);
+  const setMeshEditSlot = usePixiBonesStore((s) => s.setMeshEditSlot);
+  const pushHistory = usePixiBonesStore((s) => s.pushHistory);
   const selectedSectionKey = usePixiBonesStore((s) => s.selectedSectionKey);
   const selectSection = usePixiBonesStore((s) => s.selectSection);
   const startAttach = usePixiBonesStore((s) => s.startAttach);
@@ -883,6 +894,29 @@ export function HierarchyPanel() {
           bindingBoneName={selectedBindingBoneName}
           onUnbind={selectedSlotId ? () => unbindSlot(selectedSlotId) : undefined}
           onParent={selectedSlotId ? () => startAttach(selectedSlotId) : undefined}
+          slotId={selectedSlotId}
+          isMesh={!!attachmentMeshes[selectedAttachment.id]}
+          onToggleMesh={(v) => {
+            pushHistory();
+            if (v) createMesh(selectedAttachment.id, 2, 2);
+            else {
+              removeMesh(selectedAttachment.id);
+              // 取消网格后退出编辑模式（该附件不再可编辑）
+              setMeshEditSlot(null);
+            }
+          }}
+          wireframe={!!meshWireframe[selectedAttachment.id]}
+          onToggleWireframe={(v) => setMeshWireframe(selectedAttachment.id, v)}
+          editingMesh={!!selectedSlotId && meshEditSlotId === selectedSlotId}
+          onEditMesh={() => {
+            if (!selectedSlotId) return;
+            setMeshEditSlot(meshEditSlotId === selectedSlotId ? null : selectedSlotId);
+          }}
+          onResetMesh={selectedSlotId ? () => { pushHistory(); resetMesh(selectedAttachment.id); } : undefined}
+          onFreeze={selectedSlotId ? () => { pushHistory(); freezeMesh(selectedSlotId, selectedAttachment.id); } : undefined}
+          vertexCount={attachmentMeshes[selectedAttachment.id]
+            ? Math.floor(attachmentMeshes[selectedAttachment.id].vertices.length / 2)
+            : undefined}
           C={C}
         />
       ) : selectedSlotId ? (
@@ -1562,31 +1596,40 @@ function PanelRow({
   );
 }
 
-/** 属性面板底部按钮（＋ 新建… / ↖ 父级） */
+/** 属性面板底部按钮（＋ 新建… / 父级 …） */
 function PanelFooterBtn({
-  C, onClick, icon, label, title, disabled = false,
+  C, onClick, icon, label, title, disabled = false, active = false, pro = false,
 }: {
   C: any; onClick: () => void; icon: string; label: string; title?: string;
   /** 不可用（如没有上下文插槽）时置灰、不可点 */
   disabled?: boolean;
+  /** 激活态（如「编辑网格」正在编辑中） */
+  active?: boolean;
+  /** 带 PRO 角标 */
+  pro?: boolean;
 }) {
   return (
     <button
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
-      className="rounded px-1 py-1 flex items-center justify-center gap-0.5"
+      className="rounded px-1 py-1 flex items-center justify-center gap-0.5 relative"
       style={{
-        background: C.panel,
-        color: C.text,
-        border: '1px solid ' + C.border,
+        background: active ? C.accentDk : C.panel,
+        color: active ? '#fff' : C.text,
+        border: '1px solid ' + (active ? C.accent : C.border),
         cursor: disabled ? 'not-allowed' : 'pointer',
         opacity: disabled ? 0.5 : 1,
+        fontSize: 10,
+        whiteSpace: 'nowrap',
       }}
-      onMouseEnter={(e) => { if (!disabled) e.currentTarget.style.background = C.toolbar; }}
-      onMouseLeave={(e) => (e.currentTarget.style.background = C.panel)}
+      onMouseEnter={(e) => { if (!disabled && !active) e.currentTarget.style.background = C.toolbar; }}
+      onMouseLeave={(e) => (e.currentTarget.style.background = active ? C.accentDk : C.panel)}
       title={title}
     >
-      <span style={{ color: C.accent }}>{icon}</span> {label}
+      {pro && (
+        <span style={{ color: '#e5c07b', fontSize: 7, fontWeight: 700, lineHeight: 1 }}>PRO</span>
+      )}
+      <span style={{ color: active ? '#fff' : C.accent }}>{icon}</span> {label}
     </button>
   );
 }
@@ -1746,6 +1789,26 @@ interface AttachmentPropsBlockProps {
   onUnbind?: () => void;
   /** 设置父级（拾取骨骼） */
   onParent?: () => void;
+  /** 上下文插槽 id（null = 该素材没被任何插槽引用） */
+  slotId: string | null;
+  // ---- 网格（仿 Spine）----
+  /** 该附件是否已经是网格附件 */
+  isMesh: boolean;
+  /** 勾选/取消「网格」：创建 / 移除网格数据 */
+  onToggleMesh: (v: boolean) => void;
+  /** 线框开关：未选中也画出顶点和边 */
+  wireframe: boolean;
+  onToggleWireframe: (v: boolean) => void;
+  /** 是否正在编辑这个网格 */
+  editingMesh: boolean;
+  /** 进入 / 退出网格编辑模式 */
+  onEditMesh: () => void;
+  /** 重置网格（顶点回到 UV 位置，消除变形）；非网格时 undefined */
+  onResetMesh?: () => void;
+  /** 冻结（把网格顶点的旋转归 0、缩放归 1）；非网格时 undefined */
+  onFreeze?: () => void;
+  /** 网格顶点数（显示在按钮旁） */
+  vertexCount?: number;
   C: any;
 }
 
@@ -1770,6 +1833,8 @@ function AttachmentPropsBlock(props: AttachmentPropsBlockProps) {
   const {
     attachment, color, onColor, candidates, onAddAttachment,
     onDetach, bindingBoneName, onUnbind, onParent, C,
+    isMesh, onToggleMesh, wireframe, onToggleWireframe, editingMesh, onEditMesh,
+    onResetMesh, onFreeze, vertexCount,
   } = props;
   // 「＋ 新建…」：把已有素材加入所属插槽
   const [picking, setPicking] = useState(false);
@@ -1793,11 +1858,12 @@ function AttachmentPropsBlock(props: AttachmentPropsBlockProps) {
       {/* 预览区：该附件的大图 */}
       <AssetPreview layer={attachment} C={C} />
 
-      {/* 标题栏：▭ 区域: 名字（✕ = 从插槽移出） */}
+      {/* 标题栏：勾了网格显示「网格:」，否则「区域:」（✕ = 从插槽移出） */}
       <PanelTitleBar
-        icon="▭"
-        kindLabel="区域"
+        icon={isMesh ? '▦' : '▭'}
+        kindLabel={isMesh ? '网格' : '区域'}
         name={attachment.name}
+        badge={isMesh && vertexCount ? `${vertexCount} 顶点` : undefined}
         C={C}
         onDelete={onDetach}
         deleteTitle="从插槽移出（变成独立插槽）"
@@ -1826,27 +1892,27 @@ function AttachmentPropsBlock(props: AttachmentPropsBlockProps) {
         <button style={{ ...miniBtn, color: '#7dd3a0' }} title="重新指定图片（待实现）">📂</button>
       </PanelRow>
 
-      {/* 选项：选择 / 导出 / 名称 */}
+      {/* 选项：选择 / 导出 / 名称 + 网格 / 线框 / 序列（仿 Spine） */}
       <PanelRow icon="📋" label="选项" C={C}>
-        <FlagCheck label="选择" checked={flag.selected} onChange={(v) => patchFlag('selected', v)} C={C} />
-        <FlagCheck label="导出" checked={flag.exported} onChange={(v) => patchFlag('exported', v)} C={C} />
-        <FlagCheck label="名称" checked={flag.named} onChange={(v) => patchFlag('named', v)} C={C} />
-      </PanelRow>
-
-      {/* 网格 / 序列（PRO，占位） */}
-      <PanelRow icon="▦" label="" C={C}>
-        <button
-          className="rounded px-1 text-[10px] flex items-center"
-          style={{ ...miniBtn, width: 'auto', padding: '0 6px' }}
-          title="网格编辑（待实现）"
-        >
-          <span style={{ color: '#e5c07b', fontSize: 8, marginRight: 2, fontWeight: 700 }}>PRO</span>网格
-        </button>
-        <button
-          className="rounded px-1 text-[10px]"
-          style={{ ...miniBtn, width: 'auto', padding: '0 6px' }}
-          title="序列帧（待实现）"
-        >序列</button>
+        <div className="flex flex-col gap-1 w-full">
+          <div className="flex items-center gap-2 flex-wrap">
+            <FlagCheck label="选择" checked={flag.selected} onChange={(v) => patchFlag('selected', v)} C={C} />
+            <FlagCheck label="导出" checked={flag.exported} onChange={(v) => patchFlag('exported', v)} C={C} />
+            <FlagCheck label="名称" checked={flag.named} onChange={(v) => patchFlag('named', v)} C={C} />
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <FlagCheck label="网格" checked={isMesh} onChange={onToggleMesh} C={C} />
+            <FlagCheck label="线框" checked={wireframe} onChange={onToggleWireframe} C={C} />
+            <span
+              className="flex items-center gap-1 text-[10px] shrink-0"
+              style={{ color: C.dim, cursor: 'not-allowed' }}
+              title="序列帧（待实现）"
+            >
+              <input type="checkbox" disabled className="w-3 h-3" style={{ accentColor: C.accent }} />
+              序列
+            </span>
+          </div>
+        </div>
       </PanelRow>
 
       {/* 颜色行 */}
@@ -1888,24 +1954,72 @@ function AttachmentPropsBlock(props: AttachmentPropsBlockProps) {
         </div>
       )}
 
-      {/* 操作按钮：＋ 新建… / ↖ 父级 */}
-      <div className="px-2 pb-2 pt-1 grid grid-cols-2 gap-1 text-[10px]">
-        <PanelFooterBtn
-          C={C}
-          onClick={() => setPicking((v) => !v)}
-          icon="＋"
-          label="新建…"
-          title={onAddAttachment ? '把已有素材加入所属插槽' : '请先在层级树里选中一个插槽下的附件'}
-          disabled={!onAddAttachment}
-        />
-        <PanelFooterBtn
-          C={C}
-          onClick={onParent ?? (() => { /* 无上下文插槽：按钮已置灰 */ })}
-          icon="↖"
-          label="父级"
-          title={onParent ? '设置父级（拾取骨骼）' : '请先在层级树里选中一个插槽下的附件'}
-          disabled={!onParent}
-        />
+      {/* 操作按钮：＋新建… / 父级 [/ 编辑网格 / 描绘 / 重置 / 冻结（勾网格后出现）] */}
+      <div className="px-2 pb-2 pt-1 flex flex-col gap-1 text-[10px]">
+        <div className="grid grid-cols-4 gap-1">
+          <PanelFooterBtn
+            C={C}
+            onClick={() => setPicking((v) => !v)}
+            icon="＋"
+            label="新建…"
+            title={onAddAttachment ? '把已有素材加入所属插槽' : '请先在层级树里选中一个插槽下的附件'}
+            disabled={!onAddAttachment}
+          />
+          <PanelFooterBtn
+            C={C}
+            onClick={onParent ?? (() => { /* 无上下文插槽：按钮已置灰 */ })}
+            icon="↖"
+            label="父级"
+            title={onParent ? '设置父级（拾取骨骼）' : '请先在层级树里选中一个插槽下的附件'}
+            disabled={!onParent}
+          />
+          {isMesh && (
+            <>
+              <PanelFooterBtn
+                C={C}
+                onClick={onEditMesh}
+                icon="▦"
+                label="编辑网格"
+                title={editingMesh ? '退出网格编辑' : '进入网格编辑：拖动顶点、增删顶点、细分边'}
+                active={editingMesh}
+                pro
+              />
+              <PanelFooterBtn
+                C={C}
+                onClick={() => { /* 描绘：自动提取轮廓，待实现 */ }}
+                icon="✎"
+                label="描绘"
+                title="自动描绘轮廓生成网格（待实现）"
+                disabled
+                pro
+              />
+            </>
+          )}
+        </div>
+        {isMesh && (
+          <div className="grid grid-cols-4 gap-1">
+            <PanelFooterBtn
+              C={C}
+              onClick={onResetMesh ?? (() => {})}
+              icon="↺"
+              label="重置"
+              title="把顶点移回 UV 位置，消除变形"
+              disabled={!onResetMesh}
+              pro
+            />
+            <PanelFooterBtn
+              C={C}
+              onClick={onFreeze ?? (() => {})}
+              icon="❄"
+              label="冻结"
+              title="把网格顶点的旋转归 0、缩放归 1"
+              disabled={!onFreeze}
+              pro
+            />
+            <span />
+            <span />
+          </div>
+        )}
       </div>
     </div>
   );

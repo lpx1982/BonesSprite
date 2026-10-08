@@ -4,6 +4,8 @@ import {
   Container,
   Graphics as Gfx,
   Matrix,
+  Mesh,
+  MeshGeometry,
   Rectangle,
   Sprite,
   Texture,
@@ -14,6 +16,7 @@ import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, type BoneNo
 import { Bone as EngineBone } from '@engine/Bone';
 import { Skeleton } from '@engine/Skeleton';
 import { parsePsd, type PixiBonesLayer, type PixiBonesPsd, type PixiBonesSlot } from '@psd/index';
+import type { MeshData } from '@psd/types';
 import { importAssetFile } from './importAsset';
 import { CanvasOverlay } from './CanvasOverlay';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -101,6 +104,32 @@ export function BoneEditor() {
           /** 手柄在屏幕上的当前旋转角（move/scale/shear 手柄的 rotation，用于轴换算） */
           handleRotation: number;
         }
+      /** 网格编辑：拖动一批顶点（修改工具） */
+      | {
+          kind: 'mesh-vertex';
+          slotId: string;
+          attachmentId: string;
+          /** 参与拖动的顶点索引 */
+          indices: number[];
+          /** 拖动开始时的完整顶点数组副本 */
+          startVertices: number[];
+          /** 按下时的鼠标「附件局部坐标」 */
+          startLocal: { x: number; y: number };
+          /** 位移是否已写入 store（首帧才推历史） */
+          moved: boolean;
+        }
+      /** 网格编辑：框选顶点（修改工具，空白处拖动） */
+      | {
+          kind: 'mesh-marquee';
+          slotId: string;
+          attachmentId: string;
+          startScreen: { x: number; y: number };
+          nowScreen: { x: number; y: number };
+          rect: Gfx;
+          additive: boolean;
+          /** 按下时已选中的顶点 */
+          prevSel: number[];
+        }
       | null;
     /** 0 长度骨骼上的悬停分区（黑圈内=移动，圈外=旋转） */
     type HoverZone = { boneId: string; kind: 'move' | 'rotate' };
@@ -109,6 +138,8 @@ export function BoneEditor() {
     let lastPointer = { x: -99999, y: -99999 };
     /** Command（mac ⌘）键是否按下 */
     let metaDown = false;
+    /** 网格编辑：上一次点击的顶点（双击同一顶点 320ms 内 = 删除） */
+    let lastVertexClick = { idx: -1, t: 0 };
 
     const cleanup = () => {
       if (destroyed) return;
@@ -186,6 +217,12 @@ export function BoneEditor() {
       const slotHandles = new Gfx();
       a.stage.addChild(slotHandles);
 
+      // 网格编辑：顶点 / 边 / 三角形的绘制层（仿 Spine 的网格编辑）。
+      // 不接收事件（命中由 stage 的 pointerdown + 自己算顶点距离处理）。
+      const meshHandles = new Gfx();
+      meshHandles.eventMode = 'none';
+      a.stage.addChild(meshHandles);
+
       // 旋转拖动时跟随鼠标的绿色旋转光标（Spine 风格：按下出现，松开消失）
       const rotateCursor = new Gfx();
       rotateCursor.eventMode = 'none';
@@ -213,9 +250,12 @@ export function BoneEditor() {
         a.canvas.style.removeProperty('cursor');
       };
 
-      /** 插槽 id → 该插槽渲染出来的 wrap（内含 1 个 Sprite）。
-       *  ★ 每个插槽一份 sprite：同一素材被多个插槽引用时，两处各自渲染一份。 */
-      const spriteBySlotId = new Map<string, Container>();
+      /** 插槽 id → 该插槽渲染出来的 wrap（内含 1 个 Sprite 或 Mesh）。
+       *  ★ 每个插槽一份 view：同一素材被多个插槽引用时，两处各自渲染一份。 */
+      const viewBySlotId = new Map<string, Container>();
+      /** 插槽 id → 该插槽 wrap 相对 root 的矩阵（6 元组，由 applyBindings 写入）。
+       *  供「屏幕 ⇄ 附件局部坐标」换算用，避免依赖 PIXI 内部矩阵的更新时机。 */
+      const wrapMatrixBySlot = new Map<string, number[]>();
       const canvasRefs = new Set<HTMLCanvasElement>();
 
       a.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -315,40 +355,63 @@ export function BoneEditor() {
         return out;
       };
 
+      /** 插槽渲染出来的 view：区域附件是 Sprite（4 角），网格附件是 Mesh（三角网格）。 */
+      type AttachView = Sprite | Mesh;
+
       /**
-       * 为一个插槽创建 sprite —— 渲染它当前激活的那个附件。
-       * ★ 每个插槽一份 sprite：同一素材被多个插槽引用时（如一把枪给左手 / 右手），
+       * 为一个插槽创建 view —— 渲染它当前激活的那个附件。
+       * ★ 每个插槽一份 view：同一素材被多个插槽引用时（如一把枪给左手 / 右手），
        *   两处各自渲染一份，互不影响。
+       * ★ 有网格数据（attachmentMeshes[layer.id]）→ 用 Mesh 渲染三角网格；否则用 Sprite。
+       *   两者坐标系一致（都在 wrap 局部，position = layer.left/top），后续绑定 / 变换 / 颜色逻辑通用。
        */
-      const addSlotSprite = (slot: PixiBonesSlot, layer: PixiBonesLayer) => {
+      const addSlotView = (
+        slot: PixiBonesSlot,
+        layer: PixiBonesLayer,
+        mesh: MeshData | undefined,
+      ) => {
         if (!layer.canvas) return;
         if (layer.canvas.width === 0 || layer.canvas.height === 0) return;
 
         const tex = Texture.from(layer.canvas);
         tex.source.resize();
 
-        const sprite = new Sprite(tex);
-        sprite.x = layer.left;
-        sprite.y = layer.top;
-        sprite.alpha = layer.opacity;
-        sprite.visible = true;
-        (sprite as unknown as { blendMode: string }).blendMode = layer.blendMode;
-        sprite.eventMode = 'static';
-        sprite.cursor = 'pointer';
+        let view: AttachView;
+        if (mesh && mesh.vertices.length >= 6 && mesh.indices.length >= 6) {
+          // 网格附件：顶点已是「相对图层左上角」的像素坐标，UV 归一化 0..1
+          const geometry = new MeshGeometry({
+            positions: new Float32Array(mesh.vertices),
+            uvs: new Float32Array(mesh.uvs),
+            indices: new Uint32Array(mesh.indices),
+          });
+          const m = new Mesh({ geometry, texture: tex });
+          m.position.set(layer.left, layer.top);
+          view = m;
+        } else {
+          const s = new Sprite(tex);
+          s.position.set(layer.left, layer.top);
+          view = s;
+        }
+
+        view.alpha = layer.opacity;
+        view.visible = true;
+        (view as unknown as { blendMode: string }).blendMode = layer.blendMode;
+        view.eventMode = 'static';
+        view.cursor = 'pointer';
         // 标记：让 stage 的 pointerdown 能识别「点在哪个插槽画出来的图」上。
-        // sprite 自身不拦截事件，统一交给 stage 处理（单击=选中插槽 / 拖动=框选）。
-        (sprite as unknown as { __slotId: string }).__slotId = slot.id;
+        // view 自身不拦截事件，统一交给 stage 处理（单击=选中插槽 / 拖动=框选）。
+        (view as unknown as { __slotId: string }).__slotId = slot.id;
 
         const wrap = new Container();
         wrap.label = slot.name;
-        wrap.addChild(sprite);
+        wrap.addChild(view);
         root.addChild(wrap);
 
-        spriteBySlotId.set(slot.id, wrap);
+        viewBySlotId.set(slot.id, wrap);
         canvasRefs.add(layer.canvas);
       };
 
-      /** 重建全部 sprite —— 按绘制顺序，每个插槽渲染它当前激活的附件。 */
+      /** 重建全部 view —— 按绘制顺序，每个插槽渲染它当前激活的附件。 */
       const rebuildAssets = (
         psd: PixiBonesPsd | null,
         images: PixiBonesLayer[],
@@ -359,11 +422,13 @@ export function BoneEditor() {
           root.removeChild(c);
           c.destroy({ children: true, texture: true });
         }
-        spriteBySlotId.clear();
+        viewBySlotId.clear();
         canvasRefs.clear();
 
+        const meshes = usePixiBonesStore.getState().attachmentMeshes;
+        wrapMatrixBySlot.clear();
         for (const { slot, layer } of renderablesOf(psd, images, slots)) {
-          addSlotSprite(slot, layer);
+          addSlotView(slot, layer, meshes[layer.id]);
         }
       };
 
@@ -380,7 +445,7 @@ export function BoneEditor() {
       ) => {
         const byId = new Map(allAttachmentsOf(psd, images).map((l) => [l.id, l]));
         for (const slot of slots) {
-          const wrap = spriteBySlotId.get(slot.id);
+          const wrap = viewBySlotId.get(slot.id);
           if (!wrap) continue;
           const active = slot.activeAttachmentId ? byId.get(slot.activeAttachmentId) ?? null : null;
           wrap.visible = overrides[slot.id] ?? active?.visible ?? true;
@@ -408,12 +473,12 @@ export function BoneEditor() {
         const byId = new Map(allAttachmentsOf(psd, images).map((l) => [l.id, l]));
         for (const slot of slots) {
           // ★ 每插槽一份 sprite：直接取该插槽当前激活的附件
-          const wrap = spriteBySlotId.get(slot.id);
+          const wrap = viewBySlotId.get(slot.id);
           if (!wrap) continue;
           const aid = slot.activeAttachmentId;
           const layer = aid ? byId.get(aid) ?? null : null;
           if (!layer) continue;
-          const sprite = wrap.children[0] as Sprite | undefined;
+          const view = wrap.children[0] as AttachView | undefined;
           {
             const binding = bindings[slot.id];
             const bone = binding ? boneById.get(binding.boneId) : null;
@@ -465,7 +530,8 @@ export function BoneEditor() {
             // 骨骼矩阵 m（左乘）：wrap = m × slotLocal
             const out = mulAffine(m, slotLocal);
             wrap.setFromMatrix(new Matrix(out[0], out[1], out[2], out[3], out[4], out[5]));
-            if (sprite) sprite.position.set(0, 0);
+            wrapMatrixBySlot.set(slot.id, out);
+            if (view) view.position.set(0, 0);
           }
         }
       };
@@ -485,15 +551,15 @@ export function BoneEditor() {
       ) => {
         const byId = new Map(allAttachmentsOf(psd, images).map((l) => [l.id, l]));
         for (const slot of slots) {
-          const wrap = spriteBySlotId.get(slot.id);
-          const sprite = wrap?.children[0] as Sprite | undefined;
-          if (!sprite) continue;
+          const wrap = viewBySlotId.get(slot.id);
+          const view = wrap?.children[0] as AttachView | undefined;
+          if (!view) continue;
           const aid = slot.activeAttachmentId;
           const layer = aid ? byId.get(aid) ?? null : null;
           if (!layer) continue;
-          sprite.tint = composeTint(attachmentStyle[layer.id]?.color, slotStyle[slot.id]?.color);
+          view.tint = composeTint(attachmentStyle[layer.id]?.color, slotStyle[slot.id]?.color);
           const blend = attachmentStyle[layer.id]?.blend || slotStyle[slot.id]?.blend || layer.blendMode;
-          (sprite as unknown as { blendMode: string }).blendMode = blend || 'normal';
+          (view as unknown as { blendMode: string }).blendMode = blend || 'normal';
         }
       };
 
@@ -537,6 +603,8 @@ export function BoneEditor() {
         // ★ 不要在这里改 eventMode！init 里已经设为 'static' 且只设一次；
         //   若每次 clear 后重设会把 init 的 'static' 覆盖成 'none' → 手柄永远收不到事件。
         //   没有几何图形时（clear 后未画）PIXI 命中测试自然失败，不会误吞事件。
+        // 网格编辑模式下不显示插槽变换手柄（避免和网格顶点编辑冲突）
+        if (usePixiBonesStore.getState().meshEditSlotId) return;
         if (!selectedSlotId || !tool) return;
         const slot = slots.find((s) => s.id === selectedSlotId) ?? null;
         const layer = slot?.activeAttachmentId
@@ -546,7 +614,7 @@ export function BoneEditor() {
         const lt = _transforms[selectedSlotId] ?? { tx: 0, ty: 0, rotation: 0, scaleX: 1, scaleY: 1, skewX: 0, skewY: 0 };
         // ★ 选中插槽「激活附件」的 sprite 光标：有工具时改成"可操作"光标，避免 PIXI 一直显示 pointer
         {
-          const selSprite = spriteBySlotId.get(slot.id)?.children[0] as Sprite | undefined;
+          const selSprite = viewBySlotId.get(slot.id)?.children[0] as AttachView | undefined;
           if (selSprite) {
             selSprite.cursor = tool === 'move' ? 'move'
               : tool === 'scale' ? 'nwse-resize'
@@ -591,6 +659,128 @@ export function BoneEditor() {
         }
       };
 
+      /**
+       * 当前正在编辑的网格上下文（不在网格编辑态 / 数据不全时返回 null）。
+       */
+      const meshEditContext = () => {
+        const s = usePixiBonesStore.getState();
+        const slotId = s.meshEditSlotId;
+        if (!slotId) return null;
+        const slot = s.slots.find((x) => x.id === slotId) ?? null;
+        const attachmentId = slot?.activeAttachmentId ?? null;
+        const mesh = attachmentId ? s.attachmentMeshes[attachmentId] ?? null : null;
+        const layer = attachmentId
+          ? allAttachmentsOf(s.psd, s.images).find((l) => l.id === attachmentId) ?? null
+          : null;
+        if (!slot || !attachmentId || !mesh || !layer) return null;
+        return { slot, attachmentId, mesh, layer };
+      };
+
+      /** 网格顶点 → 屏幕坐标数组 */
+      const meshVerticesScreen = (slotId: string, layer: PixiBonesLayer, mesh: MeshData) => {
+        const n = Math.floor(mesh.vertices.length / 2);
+        const out: Array<{ x: number; y: number }> = new Array(n);
+        for (let i = 0; i < n; i++) {
+          out[i] = attachmentLocalToScreen(slotId, layer, mesh.vertices[i * 2], mesh.vertices[i * 2 + 1]);
+        }
+        return out;
+      };
+
+      /** 唯一网格边 + 每条边被几个三角形共享（n=1 → 边界边；n=2 → 内部边）。 */
+      const meshEdgeInfo = (mesh: MeshData) => {
+        const map = new Map<number, { a: number; b: number; n: number }>();
+        const idx = mesh.indices;
+        const vn = Math.max(1, Math.floor(mesh.vertices.length / 2));
+        for (let t = 0; t + 2 < idx.length; t += 3) {
+          const tri = [idx[t], idx[t + 1], idx[t + 2]];
+          for (let k = 0; k < 3; k++) {
+            const a = tri[k];
+            const b = tri[(k + 1) % 3];
+            const lo = Math.min(a, b);
+            const hi = Math.max(a, b);
+            const key = lo * vn + hi;
+            const cur = map.get(key);
+            if (cur) cur.n++;
+            else map.set(key, { a: lo, b: hi, n: 1 });
+          }
+        }
+        return [...map.values()];
+      };
+
+      /**
+       * 画网格的顶点 / 边 / 三角形。三种情况会画：
+       *   1) 该插槽正在网格编辑 → 顶点高亮、可交互
+       *   2) 该插槽被选中 → 只读显示
+       *   3) 该附件勾了「线框」→ 只读显示
+       * 边界边（只属于 1 个三角形）总是画；内部边只在勾选「三角形」时画（显示三角剖分）。
+       */
+      const drawMeshHandles = () => {
+        meshHandles.clear();
+        const s = usePixiBonesStore.getState();
+        const byId = new Map(allAttachmentsOf(s.psd, s.images).map((l) => [l.id, l]));
+        const selected = new Set(s.meshSelectedVertices);
+        const editSlotId = s.meshEditSlotId;
+
+        for (const slot of s.slots) {
+          const aid = slot.activeAttachmentId;
+          if (!aid) continue;
+          const mesh = s.attachmentMeshes[aid];
+          if (!mesh) continue;
+          const isEditing = slot.id === editSlotId;
+          const isSelected = slot.id === s.selectedSlotId;
+          const isWire = !!s.meshWireframe[aid];
+          if (!isEditing && !isSelected && !isWire) continue;
+          if (s.slotVisibility[slot.id] === false) continue;
+          const layer = byId.get(aid);
+          if (!layer) continue;
+
+          const pts = meshVerticesScreen(slot.id, layer, mesh);
+          const edges = meshEdgeInfo(mesh);
+
+          // 边界边：总是画（网格外轮廓）
+          for (const e of edges) {
+            if (e.n !== 1) continue;
+            const p0 = pts[e.a];
+            const p1 = pts[e.b];
+            if (!p0 || !p1) continue;
+            meshHandles.moveTo(p0.x, p0.y).lineTo(p1.x, p1.y);
+          }
+          meshHandles.stroke({
+            width: isEditing ? 1.4 : 1,
+            color: 0x4FB8F8,
+            alpha: isEditing ? 0.95 : 0.55,
+          });
+
+          // 内部边：勾选「三角形」时显示 → 能看清三角剖分
+          if (s.meshShowTriangles) {
+            for (const e of edges) {
+              if (e.n === 1) continue;
+              const p0 = pts[e.a];
+              const p1 = pts[e.b];
+              if (!p0 || !p1) continue;
+              meshHandles.moveTo(p0.x, p0.y).lineTo(p1.x, p1.y);
+            }
+            meshHandles.stroke({
+              width: 1,
+              color: 0x9BD1FF,
+              alpha: isEditing ? 0.7 : 0.35,
+            });
+          }
+
+          // 顶点
+          for (let i = 0; i < pts.length; i++) {
+            const p = pts[i];
+            if (!p) continue;
+            const sel = isEditing && selected.has(i);
+            const r = sel ? 5 : (isEditing ? 3.5 : 2.5);
+            meshHandles.circle(p.x, p.y, r);
+            meshHandles.fill({ color: sel ? 0xFFD34D : 0xFFFFFF, alpha: isEditing ? 1 : 0.65 });
+            meshHandles.circle(p.x, p.y, r);
+            meshHandles.stroke({ width: 1, color: 0x1E6FBF, alpha: isEditing ? 1 : 0.5 });
+          }
+        }
+      };
+
       /** 给选中的插槽画蓝色选框（选的是插槽，框画在它当前激活的附件上）。 */
       const drawHighlight = (
         psd: PixiBonesPsd | null,
@@ -621,26 +811,258 @@ export function BoneEditor() {
       const isSlotSprite = (t: unknown): boolean =>
         typeof (t as { __slotId?: unknown } | null)?.__slotId === 'string';
 
-      /** 屏幕坐标下最上层（最后绘制的）可见**插槽** id；无则 null。
-       *  （每个插槽渲染它当前激活的附件，所以命中插槽即确定是哪张图） */
-      const topSlotAt = (gx: number, gy: number): string | null => {
+      /**
+       * 屏幕坐标 → 某插槽渲染内容的「附件局部坐标」（= 网格顶点所在坐标系）。
+       * 链路：屏幕 → 世界（root 平移/缩放）→ 附件局部（wrap 矩阵求逆）。
+       * ★ wrap 矩阵已包含图层 left/top 的平移（applyBindings 的枢轴居中化写法），
+       *   且 view 的 position 被归零，所以顶点坐标不需要再加/减 left/top。
+       */
+      const screenToAttachmentLocal = (
+        slotId: string,
+        layer: PixiBonesLayer,
+        gx: number,
+        gy: number,
+      ): { x: number; y: number } | null => {
         const sx = root.scale.x;
         const sy = root.scale.y;
         if (sx === 0 || sy === 0) return null;
         const wx = (gx - root.x) / sx;
         const wy = (gy - root.y) / sy;
+        const m = wrapMatrixBySlot.get(slotId);
+        if (!m) return { x: wx - layer.left, y: wy - layer.top };
+        const inv = invAffine(m);
+        if (!inv) return null;
+        return {
+          x: inv[0] * wx + inv[2] * wy + inv[4],
+          y: inv[1] * wx + inv[3] * wy + inv[5],
+        };
+      };
+
+      /** 附件局部坐标 → 屏幕坐标（screenToAttachmentLocal 的逆）。 */
+      const attachmentLocalToScreen = (
+        slotId: string,
+        layer: PixiBonesLayer,
+        px: number,
+        py: number,
+      ): { x: number; y: number } => {
+        const m = wrapMatrixBySlot.get(slotId);
+        let X: number;
+        let Y: number;
+        if (m) {
+          X = m[0] * px + m[2] * py + m[4];
+          Y = m[1] * px + m[3] * py + m[5];
+        } else {
+          X = px + layer.left;
+          Y = py + layer.top;
+        }
+        return { x: root.x + X * root.scale.x, y: root.y + Y * root.scale.y };
+      };
+
+      /** 屏幕坐标下最上层（最后绘制的）可见**插槽** id；无则 null。
+       *  （每个插槽渲染它当前激活的附件，所以命中插槽即确定是哪张图）
+       *  ★ 网格附件用**三角形精确命中**（变形后依然准）；区域附件仍是矩形 bbox。 */
+      const topSlotAt = (gx: number, gy: number): string | null => {
         const s = usePixiBonesStore.getState();
-        // 只命中「当前实际绘制」的插槽（插槽可见 + 有激活附件）
         const items = renderablesOf(s.psd, s.images, s.slots);
         for (let i = items.length - 1; i >= 0; i--) {
           const { slot, layer: l } = items[i];
           if (s.slotVisibility[slot.id] === false) continue;
           if (l.width === 0 || l.height === 0) continue;
-          if (wx >= l.left && wx <= l.left + l.width && wy >= l.top && wy <= l.top + l.height) {
-            return slot.id;
+          const mesh = s.attachmentMeshes[l.id];
+          if (mesh) {
+            const p = screenToAttachmentLocal(slot.id, l, gx, gy);
+            if (p && pointInMesh(p.x, p.y, mesh)) return slot.id;
+          } else {
+            const sx = root.scale.x;
+            const sy = root.scale.y;
+            if (sx === 0 || sy === 0) continue;
+            const wx = (gx - root.x) / sx;
+            const wy = (gy - root.y) / sy;
+            if (wx >= l.left && wx <= l.left + l.width && wy >= l.top && wy <= l.top + l.height) {
+              return slot.id;
+            }
           }
         }
         return null;
+      };
+
+      /**
+       * 把附件当前的网格顶点同步到已渲染的 Mesh 上（拖动顶点时用，避免整棵重建）。
+       * 顶点数一致 → 原地改 + 上传 GPU；数量变了（增删顶点）由调用方 rebuildAssets。
+       */
+      const syncMeshVertices = (attachmentId: string) => {
+        const s = usePixiBonesStore.getState();
+        const mesh = s.attachmentMeshes[attachmentId];
+        if (!mesh) return;
+        for (const slot of s.slots) {
+          if (slot.activeAttachmentId !== attachmentId) continue;
+          const wrap = viewBySlotId.get(slot.id);
+          const v = wrap?.children[0];
+          if (!v || !(v instanceof Mesh)) continue;
+          const geo = v.geometry as MeshGeometry;
+          const pos = geo.positions;
+          if (pos.length === mesh.vertices.length) {
+            pos.set(mesh.vertices);
+            geo.getBuffer('aPosition').update();
+          }
+        }
+      };
+
+      // ===== 网格顶点编辑：拓扑操作 =====
+
+      /** 附件局部坐标 p 落在哪个三角形内（返回三角形序号 = 索引/3；-1 = 没命中）。 */
+      const triangleAt = (mesh: MeshData, px: number, py: number): number => {
+        const v = mesh.vertices;
+        const idx = mesh.indices;
+        for (let t = 0; t + 2 < idx.length; t += 3) {
+          const a = idx[t] * 2;
+          const b = idx[t + 1] * 2;
+          const c = idx[t + 2] * 2;
+          if (pointInTriangle(px, py, v[a], v[a + 1], v[b], v[b + 1], v[c], v[c + 1])) {
+            return t / 3;
+          }
+        }
+        return -1;
+      };
+
+      /** 离 p 最近的边（附件局部坐标，容差内）；无则 null。 */
+      const edgeNear = (mesh: MeshData, px: number, py: number, tol: number): [number, number] | null => {
+        const v = mesh.vertices;
+        let best: [number, number] | null = null;
+        let bestD = tol;
+        for (const e of meshEdgeInfo(mesh)) {
+          const d = distToSegment(px, py, v[e.a * 2], v[e.a * 2 + 1], v[e.b * 2], v[e.b * 2 + 1]);
+          if (d < bestD) {
+            bestD = d;
+            best = [e.a, e.b];
+          }
+        }
+        return best;
+      };
+
+      /** 用重心坐标把三角形 (a,b,c) 内点 p 的 UV 插值出来（加点时保证纹理正确）。 */
+      const barycentricUv = (
+        mesh: MeshData, a: number, b: number, c: number, px: number, py: number,
+      ): [number, number] => {
+        const v = mesh.vertices;
+        const ax = v[a * 2], ay = v[a * 2 + 1];
+        const bx = v[b * 2], by = v[b * 2 + 1];
+        const cx = v[c * 2], cy = v[c * 2 + 1];
+        const den = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
+        if (Math.abs(den) < 1e-9) return [mesh.uvs[a * 2], mesh.uvs[a * 2 + 1]];
+        const w1 = ((by - cy) * (px - cx) + (cx - bx) * (py - cy)) / den;
+        const w2 = ((cy - ay) * (px - cx) + (ax - cx) * (py - cy)) / den;
+        const w3 = 1 - w1 - w2;
+        return [
+          w1 * mesh.uvs[a * 2] + w2 * mesh.uvs[b * 2] + w3 * mesh.uvs[c * 2],
+          w1 * mesh.uvs[a * 2 + 1] + w2 * mesh.uvs[b * 2 + 1] + w3 * mesh.uvs[c * 2 + 1],
+        ];
+      };
+
+      /**
+       * 删除顶点（顶点塌陷）：把该顶点合并到一个邻居上，删掉因此退化的三角形，
+       * 再移除该顶点并重映射索引 —— 网格保持封闭、不留洞。
+       */
+      const collapseMeshVertex = (attachmentId: string, vi: number) => {
+        const s = usePixiBonesStore.getState();
+        const mesh = s.attachmentMeshes[attachmentId];
+        if (!mesh) return;
+        const n = Math.floor(mesh.vertices.length / 2);
+        if (n <= 3) return;   // 至少保留一个三角形
+        const idx = mesh.indices;
+        // 找邻居：与 vi 共边的第一个顶点
+        let neighbor = -1;
+        for (let t = 0; t + 2 < idx.length; t += 3) {
+          const tri = [idx[t], idx[t + 1], idx[t + 2]];
+          const k = tri.indexOf(vi);
+          if (k >= 0) {
+            neighbor = tri[(k + 1) % 3];
+            break;
+          }
+        }
+        if (neighbor < 0) return;
+        const remapped = idx.map((x) => (x === vi ? neighbor : x));
+        const kept: number[] = [];
+        for (let t = 0; t + 2 < remapped.length; t += 3) {
+          const a = remapped[t], b = remapped[t + 1], c = remapped[t + 2];
+          if (a === b || b === c || a === c) continue;   // 退化三角形
+          kept.push(a, b, c);
+        }
+        const map = new Array<number>(n).fill(-1);
+        const vertices: number[] = [];
+        const uvs: number[] = [];
+        let k2 = 0;
+        for (let i = 0; i < n; i++) {
+          if (i === vi) continue;
+          map[i] = k2++;
+          vertices.push(mesh.vertices[i * 2], mesh.vertices[i * 2 + 1]);
+          uvs.push(mesh.uvs[i * 2], mesh.uvs[i * 2 + 1]);
+        }
+        const indices = kept.map((x) => map[x]);
+        s.pushHistory();
+        s.setMeshData(attachmentId, { vertices, uvs, indices });
+        s.setMeshSelectedVertices([]);
+      };
+
+      /** 在三角形内部插入一个顶点（该三角形一分为三）。 */
+      const splitTriangle = (id: string, triIdx: number, px: number, py: number) => {
+        const s = usePixiBonesStore.getState();
+        const mesh = s.attachmentMeshes[id];
+        if (!mesh) return;
+        const idx = mesh.indices;
+        const a = idx[triIdx * 3], b = idx[triIdx * 3 + 1], c = idx[triIdx * 3 + 2];
+        if (a === undefined || b === undefined || c === undefined) return;
+        const nv = Math.floor(mesh.vertices.length / 2);
+        const uv = barycentricUv(mesh, a, b, c, px, py);
+        const vertices = [...mesh.vertices, px, py];
+        const uvs = [...mesh.uvs, uv[0], uv[1]];
+        const indices = idx.slice();
+        // 原三角形 → (a,b,nv)，再补 (b,c,nv) (c,a,nv)
+        indices[triIdx * 3] = a;
+        indices[triIdx * 3 + 1] = b;
+        indices[triIdx * 3 + 2] = nv;
+        indices.push(b, c, nv, c, a, nv);
+        s.pushHistory();
+        s.setMeshData(id, { vertices, uvs, indices });
+        s.setMeshSelectedVertices([nv]);
+      };
+
+      /** 在边的中点插入顶点（细分边）：把共享该边的每个三角形一分为二。 */
+      const splitEdgeAt = (id: string, va: number, vb: number, px: number, py: number) => {
+        const s = usePixiBonesStore.getState();
+        const mesh = s.attachmentMeshes[id];
+        if (!mesh) return;
+        const nv = Math.floor(mesh.vertices.length / 2);
+        // 新顶点 UV = 两端 UV 的中点
+        const u = (mesh.uvs[va * 2] + mesh.uvs[vb * 2]) / 2;
+        const vv = (mesh.uvs[va * 2 + 1] + mesh.uvs[vb * 2 + 1]) / 2;
+        const vertices = [...mesh.vertices, px, py];
+        const uvs = [...mesh.uvs, u, vv];
+        const idx = mesh.indices;
+        const indices: number[] = [];
+        for (let t = 0; t + 2 < idx.length; t += 3) {
+          const tri = [idx[t], idx[t + 1], idx[t + 2]];
+          let i0 = -1, i1 = -1, i2 = -1;
+          for (let k = 0; k < 3; k++) {
+            const p = tri[k];
+            const q = tri[(k + 1) % 3];
+            if ((p === va && q === vb) || (p === vb && q === va)) {
+              i0 = p;
+              i1 = q;
+              i2 = tri[(k + 2) % 3];
+              break;
+            }
+          }
+          if (i0 < 0) {
+            indices.push(tri[0], tri[1], tri[2]);
+            continue;
+          }
+          // 保持绕序： (i0, nv, i2) + (nv, i1, i2)
+          indices.push(i0, nv, i2, nv, i1, i2);
+        }
+        s.pushHistory();
+        s.setMeshData(id, { vertices, uvs, indices });
+        s.setMeshSelectedVertices([nv]);
       };
 
       /**
@@ -2010,6 +2432,55 @@ export function BoneEditor() {
             }
           }
           usePixiBonesStore.getState().setSlotTransform(slotId, next);
+        } else if (dragState.kind === 'mesh-vertex') {
+          // 拖动顶点：把选中的顶点按「附件局部坐标」的位移整体平移
+          const ctx = meshEditContext();
+          if (ctx && ctx.attachmentId === dragState.attachmentId) {
+            const p = screenToAttachmentLocal(dragState.slotId, ctx.layer, ev.global.x, ev.global.y);
+            if (p) {
+              const dx = p.x - dragState.startLocal.x;
+              const dy = p.y - dragState.startLocal.y;
+              if (!dragState.moved && (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01)) {
+                dragState.moved = true;
+                st.pushHistory();   // 首次真正位移时才推历史（避免点一下也入栈）
+              }
+              if (dragState.moved) {
+                const verts = dragState.startVertices.slice();
+                for (const vi of dragState.indices) {
+                  verts[vi * 2] = dragState.startVertices[vi * 2] + dx;
+                  verts[vi * 2 + 1] = dragState.startVertices[vi * 2 + 1] + dy;
+                }
+                st.setMeshVertices(dragState.attachmentId, verts);
+                syncMeshVertices(dragState.attachmentId);
+                drawMeshHandles();
+              }
+            }
+          }
+        } else if (dragState.kind === 'mesh-marquee') {
+          // 框选顶点：实时画矩形 + 更新选中集合
+          dragState.nowScreen = { x: ev.global.x, y: ev.global.y };
+          const { startScreen, nowScreen, rect } = dragState;
+          const x = Math.min(startScreen.x, nowScreen.x);
+          const y = Math.min(startScreen.y, nowScreen.y);
+          const w = Math.abs(nowScreen.x - startScreen.x);
+          const h = Math.abs(nowScreen.y - startScreen.y);
+          rect.clear();
+          rect.rect(x, y, w, h)
+              .stroke({ width: 1, color: 0x4FB8F8, alpha: 0.8 })
+              .fill({ color: 0x4FB8F8, alpha: 0.12 });
+          const ctxM = meshEditContext();
+          if (ctxM && ctxM.attachmentId === dragState.attachmentId) {
+            const pts = meshVerticesScreen(dragState.slotId, ctxM.layer, ctxM.mesh);
+            const picked: number[] = [];
+            for (let i = 0; i < pts.length; i++) {
+              const q = pts[i];
+              if (q.x >= x && q.x <= x + w && q.y >= y && q.y <= y + h) picked.push(i);
+            }
+            st.setMeshSelectedVertices(
+              dragState.additive ? Array.from(new Set([...dragState.prevSel, ...picked])) : picked,
+            );
+            drawMeshHandles();
+          }
         } else if (dragState.kind === 'marquee') {
           // 框选：实时画蓝色矩形 + 命中检测
           dragState.nowScreen = { x: ev.global.x, y: ev.global.y };
@@ -2065,6 +2536,11 @@ export function BoneEditor() {
       };
       const onPointerUp = (ev: FederatedPointerEvent) => {
         if (!dragState) return;
+        // 网格编辑：顶点框选收尾（销毁选框；顶点拖动无需特殊处理）
+        if (dragState.kind === 'mesh-marquee') {
+          a.stage.removeChild(dragState.rect);
+          dragState.rect.destroy();
+        }
         // 创建子骨骼：pointerup 时如果在 create-from 状态，根据当前鼠标位置 addBone
         if (dragState.kind === 'create-from') {
           // 单击（没有 pointermove）时鼠标世界坐标就是按下点
@@ -2222,6 +2698,7 @@ export function BoneEditor() {
         a.canvas.style.cursor = 'default';
         // 拖动结束后重新评估 0 长度骨骼手柄的显隐 / 光标
         syncZeroHandles();
+        drawMeshHandles();
       };
 
       a.stage.eventMode = 'static';
@@ -2352,6 +2829,99 @@ export function BoneEditor() {
 
       a.stage.on('pointerdown', (ev: FederatedPointerEvent) => {
         if (ev.button !== 0) return;
+        const stGrid = usePixiBonesStore.getState();
+        // ★ 网格编辑模式优先：拖顶点 / 加顶点 / 删顶点 / 框选顶点
+        if (stGrid.meshEditSlotId) {
+          const ctx = meshEditContext();
+          if (ctx) {
+            const p = screenToAttachmentLocal(ctx.slot.id, ctx.layer, ev.global.x, ev.global.y);
+            if (p) {
+              const pts = meshVerticesScreen(ctx.slot.id, ctx.layer, ctx.mesh);
+              // 命中顶点（屏幕距离阈值 9px）
+              let hitIdx = -1;
+              let bestD = 9;
+              for (let i = 0; i < pts.length; i++) {
+                const d = Math.hypot(pts[i].x - ev.global.x, pts[i].y - ev.global.y);
+                if (d < bestD) {
+                  bestD = d;
+                  hitIdx = i;
+                }
+              }
+              const tool = stGrid.meshTool;
+
+              if (tool === 'delete') {
+                ev.stopPropagation();
+                if (hitIdx >= 0) collapseMeshVertex(ctx.attachmentId, hitIdx);
+                return;
+              }
+
+              if (tool === 'create') {
+                ev.stopPropagation();
+                // 靠近某条边（容差按屏幕换算到局部）→ 在该边中点细分；
+                // 否则落在三角形内部 → 三角形一分为三。
+                const sx = Math.abs(root.scale.x) || 1;
+                const localTol = 8 / sx;
+                const near = edgeNear(ctx.mesh, p.x, p.y, localTol);
+                if (near) {
+                  const mid = {
+                    x: (ctx.mesh.vertices[near[0] * 2] + ctx.mesh.vertices[near[1] * 2]) / 2,
+                    y: (ctx.mesh.vertices[near[0] * 2 + 1] + ctx.mesh.vertices[near[1] * 2 + 1]) / 2,
+                  };
+                  splitEdgeAt(ctx.attachmentId, near[0], near[1], mid.x, mid.y);
+                } else {
+                  const tri = triangleAt(ctx.mesh, p.x, p.y);
+                  if (tri >= 0) splitTriangle(ctx.attachmentId, tri, p.x, p.y);
+                }
+                return;
+              }
+
+              // tool === 'modify'：命中顶点 → 拖动；否则空白 → 框选
+              if (hitIdx >= 0) {
+                ev.stopPropagation();
+                // 双击同一顶点 → 删除（顶点塌陷）
+                const now = performance.now();
+                if (lastVertexClick.idx === hitIdx && now - lastVertexClick.t < 320) {
+                  lastVertexClick = { idx: -1, t: 0 };
+                  collapseMeshVertex(ctx.attachmentId, hitIdx);
+                  return;
+                }
+                lastVertexClick = { idx: hitIdx, t: now };
+
+                // 点未选中的顶点 → 单选它；点已选中的 → 保持多选整体拖动
+                const cur = stGrid.meshSelectedVertices;
+                const idxs = cur.includes(hitIdx) ? cur : [hitIdx];
+                if (!cur.includes(hitIdx)) stGrid.setMeshSelectedVertices([hitIdx]);
+                dragState = {
+                  kind: 'mesh-vertex',
+                  slotId: ctx.slot.id,
+                  attachmentId: ctx.attachmentId,
+                  indices: [...idxs],
+                  startVertices: ctx.mesh.vertices.slice(),
+                  startLocal: p,
+                  moved: false,
+                };
+                return;
+              }
+
+              // 空白处拖动 → 框选顶点
+              const rectG = new Gfx();
+              rectG.eventMode = 'none';
+              a.stage.addChild(rectG);
+              dragState = {
+                kind: 'mesh-marquee',
+                slotId: ctx.slot.id,
+                attachmentId: ctx.attachmentId,
+                startScreen: { x: ev.global.x, y: ev.global.y },
+                nowScreen: { x: ev.global.x, y: ev.global.y },
+                rect: rectG,
+                additive: ev.shiftKey,
+                prevSel: stGrid.meshSelectedVertices,
+              };
+              return;
+            }
+          }
+        }
+
         const mode = usePixiBonesStore.getState().editorMode;
         // 创建模式：点空白 / 点 PSD 图层都可以从鼠标位置拖出子骨骼
         // （骨骼手柄自身会 stopPropagation，所以拖手柄不会走到这里）
@@ -2536,6 +3106,7 @@ export function BoneEditor() {
       buildSkeleton(initial.bones);
       applyBindings(initial.psd, initial.images, initial.slots, initial.slotBindings, initial.slotTransforms);
       applySlotStyles(initial.psd, initial.images, initial.slots, initial.slotStyle, initial.attachmentStyle);
+      drawMeshHandles();
       drawBones(initial.bones, initial.selectedBoneId);
 
       let prev = usePixiBonesStore.getState();
@@ -2549,6 +3120,37 @@ export function BoneEditor() {
           || state.slots !== prev.slots
         ) {
           rebuildAssets(state.psd, state.images, state.slots);
+        }
+        // 网格数据变化：
+        //   - 拓扑变了（新增/删除网格、顶点数或索引变了）→ 重建 view
+        //   - 只是顶点位置变了（拖动）→ 原地同步，不重建（高频路径）
+        if (state.attachmentMeshes !== prev.attachmentMeshes) {
+          const keys = new Set([
+            ...Object.keys(state.attachmentMeshes),
+            ...Object.keys(prev.attachmentMeshes),
+          ]);
+          let structural = false;
+          for (const k of keys) {
+            const a = state.attachmentMeshes[k];
+            const b = prev.attachmentMeshes[k];
+            if (
+              !a || !b
+              || a.vertices.length !== b.vertices.length
+              || a.indices !== b.indices
+              || a.uvs !== b.uvs
+            ) {
+              structural = true;
+              break;
+            }
+          }
+          if (structural) {
+            rebuildAssets(state.psd, state.images, state.slots);
+            applyVisibility(state.psd, state.images, state.slots, state.slotVisibility);
+            applyBindings(state.psd, state.images, state.slots, state.slotBindings, state.slotTransforms);
+            applySlotStyles(state.psd, state.images, state.slots, state.slotStyle, state.attachmentStyle);
+          } else {
+            for (const k of Object.keys(state.attachmentMeshes)) syncMeshVertices(k);
+          }
         }
         if (state.psd !== prev.psd) {
           // 新 PSD：重置视口（用户之前可能 zoom 过）
@@ -2614,6 +3216,7 @@ export function BoneEditor() {
         drawHighlight(state.psd, state.images, state.slots, state.selectedSlotIds);
         drawBones(state.bones, state.selectedBoneId, state.selectedBoneIds);
         drawSlotHandles(state.psd, state.images, state.slots, state.selectedSlotId, state.activeTool, state.slotTransforms);
+        drawMeshHandles();
         center(state.psd);
         drawGrid(state.psd);
         drawCrosshair(state.psd);
@@ -2747,6 +3350,59 @@ function drawDashedRect(
   seg(x + w, y + h, x, y + h);
   seg(x, y + h, x, y);
   g.stroke({ width, color });
+}
+
+/** 点是否落在三角形内（重心坐标法，边界算命中）。 */
+function pointInTriangle(
+  px: number, py: number,
+  ax: number, ay: number,
+  bx: number, by: number,
+  cx: number, cy: number,
+): boolean {
+  const v0x = cx - ax, v0y = cy - ay;
+  const v1x = bx - ax, v1y = by - ay;
+  const v2x = px - ax, v2y = py - ay;
+  const d00 = v0x * v0x + v0y * v0y;
+  const d01 = v0x * v1x + v0y * v1y;
+  const d11 = v1x * v1x + v1y * v1y;
+  const d20 = v2x * v0x + v2y * v0y;
+  const d21 = v2x * v1x + v2y * v1y;
+  const denom = d00 * d11 - d01 * d01;
+  if (Math.abs(denom) < 1e-12) return false;
+  const v = (d11 * d20 - d01 * d21) / denom;
+  const w = (d00 * d21 - d01 * d20) / denom;
+  const u = 1 - v - w;
+  const eps = -1e-6;
+  return u >= eps && v >= eps && w >= eps;
+}
+
+/** 点（附件局部坐标）是否落在网格的任一三角形内 —— 网格变形后命中依然准确。 */
+function pointInMesh(px: number, py: number, mesh: MeshData): boolean {
+  const v = mesh.vertices;
+  const idx = mesh.indices;
+  for (let t = 0; t + 2 < idx.length; t += 3) {
+    const a = idx[t] * 2;
+    const b = idx[t + 1] * 2;
+    const c = idx[t + 2] * 2;
+    if (a + 1 >= v.length || b + 1 >= v.length || c + 1 >= v.length) continue;
+    if (pointInTriangle(px, py, v[a], v[a + 1], v[b], v[b + 1], v[c], v[c + 1])) return true;
+  }
+  return false;
+}
+
+/** 点到线段的最短距离（网格编辑里做边命中用）。 */
+function distToSegment(
+  px: number, py: number,
+  ax: number, ay: number,
+  bx: number, by: number,
+): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  if (len2 < 1e-12) return Math.hypot(px - ax, py - ay);
+  let t = ((px - ax) * dx + (py - ay) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
 }
 
 /** CSS hex（'#rrggbb' / 'rrggbb'）→ RGB 分量；非法 / 空则 null。 */

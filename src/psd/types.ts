@@ -50,3 +50,23 @@ export interface PixiBonesSlot {
   /** 当前显示的附件 id；null = 该插槽不显示任何附件 */
   activeAttachmentId: string | null;
 }
+
+/**
+ * 网格附件数据（仿 Spine 的 Mesh Attachment）。
+ *
+ * 正常附件（区域附件）只有 4 个角顶点、只能整体变换；网格附件把图片切成
+ * 三角网格，**每个顶点可以各自移动**，于是图片能被弯曲 / 拉扯成任意形状。
+ *
+ * - `vertices`：顶点位置，**附件局部坐标**（相对图层 left/top 的像素）。
+ *   与 Sprite 同一个坐标系，所以骨骼绑定 / 插槽变换 / 颜色混合等现有逻辑可直接复用。
+ * - `uvs`：纹理坐标，归一化 0..1。创建时按网格算好，**之后固定不变**。
+ * - `indices`：三角形索引，每 3 个一组。
+ *
+ * 变形原理：UV 固定、顶点位置可变 —— 纹理跟着顶点走，图片随之弯曲。
+ * 「重置」= 把每个顶点移回它 UV 对应的位置（uv × 图层尺寸），从而消除变形。
+ */
+export interface MeshData {
+  vertices: number[];
+  uvs: number[];
+  indices: number[];
+}

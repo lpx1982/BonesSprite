@@ -203,6 +203,9 @@ export function CanvasOverlay() {
         <path d="M2 9 L8 9 M2 9 L3 8 M2 9 L3 10" stroke="currentColor" strokeWidth="1" strokeLinecap="round" fill="none" />
       </IconButton>
     </div>
+
+      {/* 网格编辑浮动面板（勾选「网格」+ 点「编辑网格」后出现） */}
+      <MeshEditPanel />
     </div>
   );
 }
@@ -581,5 +584,133 @@ function IconPersonRun() {
       {/* 跑步跨腿 */}
       <path d="M7 11 L4 18 M7 11 L11 17" />
     </svg>
+  );
+}
+
+// =================================================================================
+//  网格编辑浮动面板（仿 Spine 的「编辑网格」）
+//    工具：修改（拖顶点 / 双击删除 / 空白框选）、创建（点边细分 / 点三角形加点）、删除（点顶点删除）
+//    开关：三角形（显示三角剖分）、变形；底部显示顶点数。生成/吸附/克隆为占位（待实现）。
+// =================================================================================
+function MeshEditPanel() {
+  const editSlotId = usePixiBonesStore((s) => s.meshEditSlotId);
+  const setMeshEditSlot = usePixiBonesStore((s) => s.setMeshEditSlot);
+  const meshTool = usePixiBonesStore((s) => s.meshTool);
+  const setMeshTool = usePixiBonesStore((s) => s.setMeshTool);
+  const showTriangles = usePixiBonesStore((s) => s.meshShowTriangles);
+  const setShowTriangles = usePixiBonesStore((s) => s.setMeshShowTriangles);
+  const deformed = usePixiBonesStore((s) => s.meshDeformed);
+  const setDeformed = usePixiBonesStore((s) => s.setMeshDeformed);
+  const slots = usePixiBonesStore((s) => s.slots);
+  const meshes = usePixiBonesStore((s) => s.attachmentMeshes);
+
+  if (!editSlotId) return null;
+  const slot = slots.find((s) => s.id === editSlotId) ?? null;
+  const mesh = slot?.activeAttachmentId ? meshes[slot.activeAttachmentId] ?? null : null;
+  if (!slot || !mesh) return null;
+  const vertexCount = Math.floor(mesh.vertices.length / 2);
+
+  const toolBtnStyle = (active: boolean) => ({
+    background: active ? 'var(--spine-accent)' : 'var(--spine-bg-panel)',
+    color: active ? '#fff' : 'var(--spine-text)',
+    border: '1px solid ' + (active ? 'var(--spine-accent)' : 'var(--spine-border)'),
+    borderRadius: 3,
+    cursor: 'pointer',
+    padding: '2px 6px',
+    fontSize: 10,
+    whiteSpace: 'nowrap' as const,
+  });
+  const placeholderStyle = {
+    background: 'var(--spine-bg-panel)',
+    color: 'var(--spine-text-dim)',
+    border: '1px solid var(--spine-border)',
+    borderRadius: 3,
+    cursor: 'not-allowed',
+    padding: '2px 6px',
+    fontSize: 10,
+    opacity: 0.55,
+    whiteSpace: 'nowrap' as const,
+  };
+
+  return (
+    <div
+      className="absolute pointer-events-auto"
+      style={{
+        left: '50%',
+        transform: 'translateX(-50%)',
+        bottom: 12,
+        background: 'var(--spine-bg-panel)',
+        border: '1px solid var(--spine-border)',
+        borderRadius: 4,
+        padding: 6,
+        boxShadow: '0 4px 16px rgba(0, 0, 0, 0.5)',
+        zIndex: 30,
+      }}
+    >
+      {/* 标题栏：编辑网格 + 插槽名 + 退出 */}
+      <div className="flex items-center gap-1" style={{ marginBottom: 4 }}>
+        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--spine-text)' }}>编辑网格</span>
+        <span style={{ fontSize: 10, color: 'var(--spine-text-dim)' }}>{slot.name}</span>
+        <button
+          style={{
+            marginLeft: 8, background: 'transparent', border: 'none',
+            color: 'var(--spine-text-dim)', cursor: 'pointer', fontSize: 11, lineHeight: 1,
+          }}
+          title="退出网格编辑（Esc）"
+          onClick={() => setMeshEditSlot(null)}
+        >✕</button>
+      </div>
+
+      {/* 三个工具 */}
+      <div className="flex items-center gap-1" style={{ marginBottom: 4 }}>
+        <button
+          style={toolBtnStyle(meshTool === 'modify')}
+          title="修改：拖动顶点；双击顶点删除；空白处拖动框选"
+          onClick={() => setMeshTool('modify')}
+        >修改</button>
+        <button
+          style={toolBtnStyle(meshTool === 'create')}
+          title="创建：点边的中点可细分该边；点三角形内部可加顶点"
+          onClick={() => setMeshTool('create')}
+        >创建</button>
+        <button
+          style={toolBtnStyle(meshTool === 'delete')}
+          title="删除：点击顶点删除（顶点塌陷，网格保持封闭）"
+          onClick={() => setMeshTool('delete')}
+        >删除</button>
+      </div>
+
+      {/* 生成 / 吸附 / 克隆（占位）+ 三角形开关 */}
+      <div className="flex items-center gap-1" style={{ marginBottom: 4 }}>
+        <button style={placeholderStyle} title="自动补充顶点（待实现）">生成</button>
+        <button style={placeholderStyle} title="吸附到已有顶点（待实现）">吸附</button>
+        <button style={placeholderStyle} title="克隆网格（待实现）">克隆</button>
+        <button
+          style={toolBtnStyle(showTriangles)}
+          title="显示三角剖分"
+          onClick={() => setShowTriangles(!showTriangles)}
+        >三角形</button>
+      </div>
+
+      {/* 变形开关 + 顶点数 */}
+      <div className="flex items-center gap-2">
+        <label
+          className="flex items-center gap-1"
+          style={{ fontSize: 10, color: 'var(--spine-text)', cursor: 'pointer' }}
+          title="勾选：拖动顶点改变形状"
+        >
+          <input
+            type="checkbox"
+            checked={deformed}
+            onChange={(e) => setDeformed(e.target.checked)}
+            style={{ accentColor: 'var(--spine-accent)' }}
+          />
+          变形
+        </label>
+        <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--spine-text-dim)' }}>
+          顶点: {vertexCount}
+        </span>
+      </div>
+    </div>
   );
 }
