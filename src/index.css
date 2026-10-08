@@ -167,6 +167,45 @@ html, body, #root {
   cursor: pointer;
 }
 
+/* ============ 网格工具（软选择）滑块：可见轨道、左填充、无圆钮（仿 Spine） ============ */
+/* 轨道填充由行内 background: linear-gradient(...) 提供，这里只负责去掉原生外观 */
+.soft-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  outline: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  height: 16px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.soft-slider::-webkit-slider-runnable-track {
+  background: transparent;
+  height: 16px;
+  border-radius: 3px;
+}
+.soft-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 2px;
+  height: 16px;
+  background: transparent;
+  border: none;
+  margin: 0;
+}
+.soft-slider::-moz-range-track {
+  background: transparent;
+  height: 16px;
+  border-radius: 3px;
+}
+.soft-slider::-moz-range-thumb {
+  width: 2px;
+  height: 16px;
+  background: transparent;
+  border: none;
+}
+
 /* ============ TopMenu 下拉弹出动画（Spine 风格：拉伸→回弹） ============ */
 @keyframes topmenu-drop {
   0%   { transform: scaleY(0.15); opacity: 0; }

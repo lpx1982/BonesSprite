@@ -117,6 +117,8 @@ export function BoneEditor() {
           startLocal: { x: number; y: number };
           /** 位移是否已写入 store（首帧才推历史） */
           moved: boolean;
+          /** 软选择：每个顶点的位移权重（0..1）。未开软选择时 null → 只动 indices */
+          softWeights: number[] | null;
         }
       /** 网格编辑：框选顶点（修改工具，空白处拖动） */
       | {
@@ -715,6 +717,64 @@ export function BoneEditor() {
       };
 
       /**
+       * 「网格工具」软选择：算出每个顶点的位移权重（0..1）。
+       *   显式选中的顶点 = 1；
+       *   其余顶点按「到最近选中顶点的距离 d」（附件局部单位）：
+       *     d ≤ (1−羽化)·大小        → 1（完全选中）
+       *     (1−羽化)·大小 < d ≤ 大小 → 线性衰减到 0
+       *     d > 大小                 → 0
+       *   「外壳顶点」未勾选时，外壳（边界）顶点权重强制 0 —— 这样拖内部顶点
+       *   伪造 3D 时不会改变网格外形（对齐 Spine 文档）。
+       */
+      const computeSoftWeights = (
+        mesh: MeshData,
+        selected: number[],
+        size: number,
+        feather: number,
+        includeHull: boolean,
+      ): number[] => {
+        const n = Math.max(0, Math.floor(mesh.vertices.length / 2));
+        const w = new Array<number>(n).fill(0);
+        const sel = selected.filter((i) => i >= 0 && i < n);
+        for (const i of sel) w[i] = 1;
+        if (sel.length === 0 || size <= 0) return w;
+        let hull: Set<number> | null = null;
+        if (!includeHull) {
+          hull = new Set<number>();
+          for (const e of meshEdgeInfo(mesh)) {
+            if (e.n === 1) { hull.add(e.a); hull.add(e.b); }
+          }
+        }
+        const inner = Math.max(0, Math.min(feather, 0.99)) * size;   // 完全选中半径
+        const outer = Math.max(size, inner + 1e-6);
+        for (let i = 0; i < n; i++) {
+          if (w[i] === 1) continue;                  // 显式选中
+          if (hull && hull.has(i)) continue;         // 外壳顶点不参与
+          let best = Infinity;
+          const x = mesh.vertices[i * 2];
+          const y = mesh.vertices[i * 2 + 1];
+          for (const j of sel) {
+            const d = Math.hypot(x - mesh.vertices[j * 2], y - mesh.vertices[j * 2 + 1]);
+            if (d < best) best = d;
+          }
+          if (!isFinite(best) || best > outer) continue;
+          w[i] = best <= inner ? 1 : (outer - best) / (outer - inner);
+        }
+        return w;
+      };
+
+      /** 两个 0xRRGGBB 颜色按 t 线性插值（软选择顶点着色用）。 */
+      const lerpColor = (a: number, b: number, t: number): number => {
+        const k = Math.max(0, Math.min(1, t));
+        const ar = (a >> 16) & 255, ag = (a >> 8) & 255, ab = a & 255;
+        const br = (b >> 16) & 255, bg = (b >> 8) & 255, bb = b & 255;
+        const r = Math.round(ar + (br - ar) * k);
+        const g = Math.round(ag + (bg - ag) * k);
+        const bl = Math.round(ab + (bb - ab) * k);
+        return (r << 16) | (g << 8) | bl;
+      };
+
+      /**
        * 画网格的顶点 / 边 / 三角形。三种情况会画：
        *   1) 该插槽正在网格编辑 → 顶点高亮、可交互
        *   2) 该插槽被选中 → 只读显示
@@ -780,14 +840,27 @@ export function BoneEditor() {
             });
           }
 
+          // 软选择着色（仅编辑态 + 勾选软选择 + 有选中顶点）：
+          //   选中顶点 = 青色；受软选择影响的顶点在「青色 ↔ 深蓝」之间按权重取色，
+          //   直观显示羽化衰减程度（对齐 Spine「网格工具」视图文档）。
+          const softOn = isEditing && s.meshSoftSelect && selected.size > 0;
+          const softW = softOn
+            ? computeSoftWeights(mesh, [...selected], s.meshSoftSize, s.meshSoftFeather, s.meshSoftHull)
+            : null;
+          const SEL_COLOR = softOn ? 0x4FE3E3 : 0xFFD34D;
+          const SOFT_DARK = 0x1B2A4A;
+
           // 顶点
           for (let i = 0; i < pts.length; i++) {
             const p = pts[i];
             if (!p) continue;
             const sel = isEditing && selected.has(i);
-            const r = sel ? 5 : (isEditing ? 3.5 : 2.5);
+            const sw = softW ? softW[i] : 0;
+            const softHit = !sel && sw > 0.001;
+            const r = sel ? 5 : softHit ? 4 : (isEditing ? 3.5 : 2.5);
+            const color = sel ? SEL_COLOR : softHit ? lerpColor(SOFT_DARK, SEL_COLOR, sw) : 0xFFFFFF;
             meshHandles.circle(p.x, p.y, r);
-            meshHandles.fill({ color: sel ? 0xFFD34D : 0xFFFFFF, alpha: isEditing ? 1 : 0.65 });
+            meshHandles.fill({ color, alpha: isEditing ? 1 : 0.65 });
             meshHandles.circle(p.x, p.y, r);
             meshHandles.stroke({ width: 1, color: 0x1E6FBF, alpha: isEditing ? 1 : 0.5 });
           }
@@ -2559,9 +2632,20 @@ export function BoneEditor() {
               }
               if (dragState.moved) {
                 const verts = dragState.startVertices.slice();
-                for (const vi of dragState.indices) {
-                  verts[vi * 2] = dragState.startVertices[vi * 2] + dx;
-                  verts[vi * 2 + 1] = dragState.startVertices[vi * 2 + 1] + dy;
+                const sw = dragState.softWeights;
+                if (sw) {
+                  // 软选择：每个顶点按自己的权重位移（羽化衰减）
+                  for (let i = 0; i < sw.length; i++) {
+                    const k = sw[i];
+                    if (k <= 0) continue;
+                    verts[i * 2] = dragState.startVertices[i * 2] + dx * k;
+                    verts[i * 2 + 1] = dragState.startVertices[i * 2 + 1] + dy * k;
+                  }
+                } else {
+                  for (const vi of dragState.indices) {
+                    verts[vi * 2] = dragState.startVertices[vi * 2] + dx;
+                    verts[vi * 2 + 1] = dragState.startVertices[vi * 2 + 1] + dy;
+                  }
                 }
                 st.setMeshVertices(dragState.attachmentId, verts);
                 syncMeshVertices(dragState.attachmentId);
@@ -3024,6 +3108,10 @@ export function BoneEditor() {
                   startVertices: ctx.mesh.vertices.slice(),
                   startLocal: p,
                   moved: false,
+                  // 「网格工具」软选择：按下时按当前位置算一次权重（拖动中不变）
+                  softWeights: stGrid.meshSoftSelect
+                    ? computeSoftWeights(ctx.mesh, [...idxs], stGrid.meshSoftSize, stGrid.meshSoftFeather, stGrid.meshSoftHull)
+                    : null,
                 };
                 return;
               }

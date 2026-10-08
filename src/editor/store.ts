@@ -140,6 +140,18 @@ export interface PixiBonesState {
   /** 网格编辑：隔离（勾选后画布只显示正在编辑的那个插槽的图） */
   meshIsolate: boolean;
   setMeshIsolate: (v: boolean) => void;
+  /** 网格工具·软选择：勾选后拖动顶点时，附近的顶点按距离衰减一起动（仿 Spine「网格工具」视图） */
+  meshSoftSelect: boolean;
+  setMeshSoftSelect: (v: boolean) => void;
+  /** 软选择「大小」：影响半径（附件局部单位 = 图片像素） */
+  meshSoftSize: number;
+  setMeshSoftSize: (v: number) => void;
+  /** 软选择「羽化」：0..1，半径内「完全选中」的比例；之外线性衰减到 0 */
+  meshSoftFeather: number;
+  setMeshSoftFeather: (v: number) => void;
+  /** 软选择「外壳顶点」：勾选 = 外壳（边界）顶点也受软选择影响 */
+  meshSoftHull: boolean;
+  setMeshSoftHull: (v: boolean) => void;
   /** 网格「新建」描绘中：已点出的轮廓点（附件局部坐标）。
    *  null = 不在描绘；空数组 = 刚激活、还没点第一个点。
    *  点回起点即闭合 → 用该多边形重建网格（图片裁到轮廓内）。 */
@@ -585,6 +597,14 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   setMeshDim: (v) => set({ meshDim: v }),
   meshIsolate: false,
   setMeshIsolate: (v) => set({ meshIsolate: v }),
+  meshSoftSelect: false,
+  setMeshSoftSelect: (v) => set({ meshSoftSelect: v }),
+  meshSoftSize: 40,
+  setMeshSoftSize: (v) => set({ meshSoftSize: v }),
+  meshSoftFeather: 0.5,
+  setMeshSoftFeather: (v) => set({ meshSoftFeather: v }),
+  meshSoftHull: true,
+  setMeshSoftHull: (v) => set({ meshSoftHull: v }),
   meshNewPolygon: null,
   setMeshNewPolygon: (pts) => set({ meshNewPolygon: pts }),
   meshWireframe: {},
