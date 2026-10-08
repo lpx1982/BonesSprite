@@ -69,4 +69,17 @@ export interface MeshData {
   vertices: number[];
   uvs: number[];
   indices: number[];
+  /**
+   * 权重绑定数据（仿 Spine Mesh Attachment.weights）。
+   *  - `bones`：参与绑定的骨骼 id 列表（去重，顺序稳定 = 自动权重写入顺序）
+   *  - `weights`：每顶点一组，长度 = bones.length；w_i = 该顶点对 bones[i] 的权重（0..1）
+   *    数组长度 = vertices.length / 2 * bones.length；字段名命名为 flatWeights 避免误解。
+   *  - `bindPose`：绑定姿态下的顶点坐标（**附件局部坐标**）。
+   *    渲染时：v = Σ w_i · M_i · bindPose   （M_i = 骨骼 i 的世界矩阵）
+   *  未绑定（bones.length === 0）时退化为「整图跟随插槽骨骼」，
+   *  此时 vertices 直接被当作显示位置（无变形叠加）。
+   */
+  bones?: string[];
+  weights?: number[];
+  bindPose?: number[];
 }

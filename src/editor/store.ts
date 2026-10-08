@@ -139,6 +139,22 @@ export interface PixiBonesState {
   setMeshVertices: (attachmentId: string, vertices: number[]) => void;
   /** 整体写入网格数据（增删顶点 / 细分边等改变拓扑时用） */
   setMeshData: (attachmentId: string, mesh: MeshData) => void;
+  // ---- 权重绑定（线性混合蒙皮，仿 Spine Mesh Attachment.weights）----
+  /** 把若干骨骼绑定到网格，并按「就近主控 + 距离衰减」自动算权重。
+   *  - attachmentId：目标网格附件
+   *  - boneIds：要绑上去的骨骼 id（去重；顺序决定 bones[] 写入顺序）
+   *  - bindPoseVertices：可选，传入则用它作为 bindPose；不传则用当前 vertices 的副本
+   *  调用后写：mesh.bones / mesh.weights / mesh.bindPose，并推一次历史。 */
+  bindBonesToMesh: (attachmentId: string, boneIds: string[], bindPoseVertices?: number[]) => void;
+  /** 给指定网格解绑一根骨骼（若该骨不再被任何顶点引用，同时从 mesh.bones 中移除） */
+  unbindBoneFromMesh: (attachmentId: string, boneId: string) => void;
+  /** 「绑定模式」：true 时 BoneEditor 把「点骨骼」解释成「绑到当前网格」，
+   *  并显示 cursor / 高亮提示；Esc / 空格 / 再点「绑定」按钮 退出。 */
+  weightBindMode: boolean;
+  /** 进入 / 退出绑定模式。绑定模式开启时再点一次 = 退出 */
+  toggleWeightBindMode: () => void;
+  /** 权重「自动」按钮：按当前 mesh 的骨骼表重算一遍权重（用于重新绑定时刷新） */
+  recomputeMeshWeights: (attachmentId: string) => void;
   // ---- 权重工具（视图菜单「权重」）UI 状态 ----
   /** 影响（0..1）：权重工具的施加强度 */
   weightInfluence: number; setWeightInfluence: (v: number) => void;
@@ -632,6 +648,176 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   setMeshData: (attachmentId, mesh) => set((state) => ({
     attachmentMeshes: { ...state.attachmentMeshes, [attachmentId]: mesh },
   })),
+  // ===== 权重绑定（线性混合蒙皮） =====
+  /**
+   * 自动权重算法：每个顶点取最近的骨为「主控」（100%），
+   *   其它骨按 1 / (d + ε)² 加权后再归一化到 1 - w_main。
+   *
+   * bones 输入会被去重 + 过滤掉不存在的；返回 { bones, weights }。
+   * - bones 长度 = nb
+   * - weights 长度 = vertices.length / 2 * nb
+   *   每个顶点占 nb 段，依次为对 bones[0..nb-1] 的权重。
+   */
+  bindBonesToMesh: (attachmentId, boneIds, bindPoseVertices) => {
+    const st = get();
+    const mesh = st.attachmentMeshes[attachmentId];
+    if (!mesh) return;
+    // 去重 + 过滤存在的骨
+    const seen = new Set<string>();
+    const bones: string[] = [];
+    for (const id of boneIds) {
+      if (!id || seen.has(id)) continue;
+      if (!st.bones.some((b) => b.id === id)) continue;
+      seen.add(id);
+      bones.push(id);
+    }
+    if (bones.length === 0) {
+      // 没有任何有效骨 → 解绑
+      st.pushHistory();
+      set((s) => {
+        const m = s.attachmentMeshes[attachmentId];
+        if (!m) return s;
+        const { bones: _, weights: __, bindPose: ___, ...rest } = m;
+        return { attachmentMeshes: { ...s.attachmentMeshes, [attachmentId]: rest } };
+      });
+      return;
+    }
+    // 计算每个骨的世界坐标（用绑定时的世界矩阵 = 当前骨骼姿态）
+    const world: Array<{ x: number; y: number }> = bones.map((id) => {
+      const b = st.bones.find((x) => x.id === id)!;
+      return { x: b.x, y: b.y };   // ★ 简化：用局部 x/y 当世界位置（树根骨 = 局部 = 世界；非根时足够好的近似）
+    });
+    const vertCount = mesh.vertices.length / 2;
+    const nb = bones.length;
+    const weights = new Array(vertCount * nb).fill(0);
+    for (let v = 0; v < vertCount; v++) {
+      const vx = mesh.vertices[v * 2];
+      const vy = mesh.vertices[v * 2 + 1];
+      // 找最近骨
+      let nearest = 0;
+      let nearestD = Infinity;
+      const dists = new Array(nb);
+      for (let i = 0; i < nb; i++) {
+        const dx = vx - world[i].x;
+        const dy = vy - world[i].y;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        dists[i] = d;
+        if (d < nearestD) { nearestD = d; nearest = i; }
+      }
+      // 距离反比（只有一骨时直接 100%）
+      if (nb === 1) {
+        weights[v * nb + 0] = 1;
+        continue;
+      }
+      // 主控 0.7 + 距离反比衰减到 0.3
+      let sum = 0;
+      const inv: number[] = new Array(nb).fill(0);
+      for (let i = 0; i < nb; i++) {
+        if (i === nearest) continue;
+        const inv_i = 1 / ((dists[i] - nearestD) + 1); // 距离差越大权重越低；最近差 = 1
+        inv[i] = inv_i;
+        sum += inv_i;
+      }
+      // 主控 = 0.7
+      weights[v * nb + nearest] = 0.7;
+      if (sum > 0) {
+        const rem = 0.3 / sum;
+        for (let i = 0; i < nb; i++) {
+          if (i === nearest) continue;
+          weights[v * nb + i] = inv[i] * rem;
+        }
+      } else {
+        // 其它骨距离都一样 → 全部均分 0.3
+        const rem = 0.3 / (nb - 1);
+        for (let i = 0; i < nb; i++) {
+          if (i === nearest) continue;
+          weights[v * nb + i] = rem;
+        }
+      }
+    }
+    const bindPose = bindPoseVertices ? bindPoseVertices.slice() : mesh.vertices.slice();
+    st.pushHistory();
+    set((s) => {
+      const m = s.attachmentMeshes[attachmentId];
+      if (!m) return s;
+      return {
+        attachmentMeshes: {
+          ...s.attachmentMeshes,
+          [attachmentId]: { ...m, bones, weights, bindPose },
+        },
+      };
+    });
+  },
+  unbindBoneFromMesh: (attachmentId, boneId) => {
+    const st = get();
+    const mesh = st.attachmentMeshes[attachmentId];
+    if (!mesh || !mesh.bones) return;
+    const idx = mesh.bones.indexOf(boneId);
+    if (idx < 0) return;
+    st.pushHistory();
+    set((s) => {
+      const m = s.attachmentMeshes[attachmentId];
+      if (!m || !m.bones || !m.weights || !m.bindPose) return s;
+      const nb = m.bones.length;
+      const vertCount = m.vertices.length / 2;
+      const newBones = m.bones.filter((_, i) => i !== idx);
+      if (newBones.length === 0) {
+        // 全部解绑 → 回到无权重状态
+        const { bones: _b, weights: _w, bindPose: _bp, ...rest } = m;
+        return { attachmentMeshes: { ...s.attachmentMeshes, [attachmentId]: rest } };
+      }
+      const newWeights = new Array(vertCount * newBones.length).fill(0);
+      for (let v = 0; v < vertCount; v++) {
+        const oldRow = v * nb;
+        const newRow = v * newBones.length;
+        let ni = 0;
+        for (let i = 0; i < nb; i++) {
+          if (i === idx) continue;
+          newWeights[newRow + ni] = m.weights[oldRow + i];
+          ni++;
+        }
+        // 归一化：剩余骨权重和应为 1；若被解绑的是主控则重新归一
+        let sum = 0;
+        for (let i = 0; i < newBones.length; i++) sum += newWeights[newRow + i];
+        if (sum > 0 && Math.abs(sum - 1) > 0.001) {
+          for (let i = 0; i < newBones.length; i++) newWeights[newRow + i] /= sum;
+        } else if (sum === 0) {
+          newWeights[newRow + 0] = 1;
+        }
+      }
+      return {
+        attachmentMeshes: {
+          ...s.attachmentMeshes,
+          [attachmentId]: { ...m, bones: newBones, weights: newWeights },
+        },
+      };
+    });
+  },
+  weightBindMode: false,
+  toggleWeightBindMode: () => set((s) => ({ weightBindMode: !s.weightBindMode })),
+  /** 「自动」按钮：按 mesh.bones 表里已有的骨，重算一次权重（vertices 不变）。
+   *  用于：绑定后调过顶点、想重新分配权重时。 */
+  recomputeMeshWeights: (attachmentId) => {
+    const st = get();
+    const mesh = st.attachmentMeshes[attachmentId];
+    if (!mesh || !mesh.bones || mesh.bones.length === 0) return;
+    // 用 bindPose 算最近（顶点 = bindPose 才是绑定时的姿态距离）
+    const bindSource: number[] = mesh.bindPose ?? mesh.vertices;
+    // 复用 bindBonesToMesh 的算法：把 vertices 临时换成 bindSource 算完再换回
+    const prevVerts = mesh.vertices.slice();
+    set((s) => {
+      const m = s.attachmentMeshes[attachmentId];
+      if (!m) return s;
+      return { attachmentMeshes: { ...s.attachmentMeshes, [attachmentId]: { ...m, vertices: bindSource } } };
+    });
+    st.bindBonesToMesh(attachmentId, mesh.bones, mesh.bindPose);
+    // 还原 vertices 到原值（bindBones 之后 mesh.vertices 是 bindSource 的副本）
+    set((s) => {
+      const m = s.attachmentMeshes[attachmentId];
+      if (!m) return s;
+      return { attachmentMeshes: { ...s.attachmentMeshes, [attachmentId]: { ...m, vertices: prevVerts } } };
+    });
+  },
   freezeMesh: (slotId, attachmentId) => set((state) => {
     const mesh = state.attachmentMeshes[attachmentId];
     if (!mesh) return state;

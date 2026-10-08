@@ -64,6 +64,10 @@ export function Editor() {
           if (s.attachingSlotId) {
             e.preventDefault();
             s.cancelAttach();
+          } else if (s.weightBindMode) {
+            // 退出权重绑定模式
+            e.preventDefault();
+            s.toggleWeightBindMode();
           } else if (s.meshNewPolygon) {
             e.preventDefault();
             s.setMeshNewPolygon(null);
@@ -72,6 +76,15 @@ export function Editor() {
             s.setMeshEditSlot(null);
           }
           return;
+        }
+        // 空格：也退出权重绑定模式
+        if (key === ' ' || key === 'Spacebar') {
+          const s = usePixiBonesStore.getState();
+          if (s.weightBindMode) {
+            e.preventDefault();
+            s.toggleWeightBindMode();
+            return;
+          }
         }
         if (key === 'Delete' || key === 'Backspace') {
           const s = usePixiBonesStore.getState();
@@ -423,6 +436,29 @@ function WeightsPanel() {
   const setOverlay    = usePixiBonesStore((s) => s.setWeightOverlay);
   const selectedOnly  = usePixiBonesStore((s) => s.weightSelectedOnly);
   const setSelOnly    = usePixiBonesStore((s) => s.setWeightSelectedOnly);
+  // 绑定模式相关
+  const bindMode      = usePixiBonesStore((s) => s.weightBindMode);
+  const toggleBind    = usePixiBonesStore((s) => s.toggleWeightBindMode);
+  // 当前选中状态（用于决定「绑定」按钮走哪条流程）
+  const selectedBoneIds    = usePixiBonesStore((s) => s.selectedBoneIds);
+  const selectedSlotIds    = usePixiBonesStore((s) => s.selectedSlotIds);
+  const selectedAttachment = usePixiBonesStore((s) => s.selectedAttachmentId);
+  const slots              = usePixiBonesStore((s) => s.slots);
+  const meshes             = usePixiBonesStore((s) => s.attachmentMeshes);
+  const bones              = usePixiBonesStore((s) => s.bones);
+  const unbindBoneFromMesh = usePixiBonesStore((s) => s.unbindBoneFromMesh);
+  const recomputeWeights   = usePixiBonesStore((s) => s.recomputeMeshWeights);
+  // 当前网格 attachmentId（用于骨骼列表 + 「删除」按钮）
+  const currentAttachmentId: string | null = (() => {
+    if (selectedAttachment) return selectedAttachment;
+    if (selectedSlotIds.length === 1) {
+      const s = slots.find((x) => x.id === selectedSlotIds[0]);
+      return s?.activeAttachmentId ?? null;
+    }
+    return null;
+  })();
+  const currentMesh = currentAttachmentId ? meshes[currentAttachmentId] ?? null : null;
+  const boundBoneIds = currentMesh?.bones ?? [];
   // 宽度由左边缘的拖动分隔条控制（store 里的 dockPanelWidths）
   const width = usePixiBonesStore((s) => s.dockPanelWidths.weights ?? DOCK_PANEL_DEFAULT_WIDTH.weights);
 
@@ -521,7 +557,20 @@ function WeightsPanel() {
           {/* 平滑 / 自动 / 焊接 */}
           <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
             <ProBtn label="平滑" icon={<IconDroplet />} />
-            <ProBtn label="自动" icon={<IconRefresh />} />
+            {/* 自动：按当前 mesh 的骨骼表重算权重 */}
+            <button
+              type="button"
+              title={boundBoneIds.length > 0
+                ? '按当前网格的骨骼重新计算权重（就近主控 + 距离衰减）'
+                : '当前网格未绑定骨骼，无可计算的权重'}
+              disabled={boundBoneIds.length === 0}
+              onClick={() => { if (currentAttachmentId) recomputeWeights(currentAttachmentId); }}
+              style={{
+                ...weightBtn,
+                opacity: boundBoneIds.length === 0 ? 0.55 : 1,
+                cursor: boundBoneIds.length === 0 ? 'not-allowed' : 'pointer',
+              }}
+            ><IconRefresh />自动</button>
             <ProBtn label="焊接" icon={<IconWand />} />
           </div>
 
@@ -554,21 +603,104 @@ function WeightsPanel() {
             </div>
           </div>
 
-          {/* 骨骼列表（绑定后在此显示骨骼；绑定功能待实现，暂为空） */}
+          {/* 骨骼列表（显示当前网格绑定的骨骼；选中骨骼在此可选 / 右键定位到画布） */}
           <div
             style={{
               flex: 1, minHeight: 120, background: '#2b2b2b',
               border: '1px solid var(--spine-border)', borderRadius: 2, overflow: 'auto',
+              padding: 4,
             }}
-          />
+          >
+            {!currentMesh || boundBoneIds.length === 0 ? (
+              <div style={{ padding: '12px 6px', textAlign: 'center', fontSize: 11, color: 'var(--spine-text-dim)' }}>
+                {currentMesh ? '未绑定骨骼' : '先在层级树选中一个网格'}
+              </div>
+            ) : (
+              <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+                {boundBoneIds.map((bid, i) => {
+                  const bone = bones.find((b) => b.id === bid);
+                  const color = boneColor(i);
+                  const isSelected = selectedBoneIds.includes(bid);
+                  return (
+                    <li
+                      key={bid}
+                      title={`${bone?.name ?? bid}\n左键：选中；右键：在画布上选中并跳转视角`}
+                      onClick={(e) => {
+                        // 仿 Spine：左键替换选中集（可配合 Shift 加选）
+                        const s = usePixiBonesStore.getState();
+                        if (e.shiftKey) s.selectBones([bid], true);
+                        else s.selectBone(bid);
+                      }}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        const s = usePixiBonesStore.getState();
+                        s.selectBone(bid);
+                      }}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 6,
+                        padding: '3px 5px', borderRadius: 2, cursor: 'pointer',
+                        background: isSelected ? '#3a5a8a' : 'transparent',
+                        color: 'var(--spine-text)', fontSize: 11,
+                      }}
+                    >
+                      <span style={{
+                        display: 'inline-block', width: 10, height: 10, borderRadius: 2,
+                        background: color,
+                      }} />
+                      <span style={{ flex: 1 }}>{bone?.name ?? bid}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
 
           {/* 绑定 / 交换 / 删除 */}
           <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
-            <ProBtn label="绑定" icon={<IconBind />} />
+            {/* 绑定：两种流程都走「再点一次 = 退出绑定模式」的开关式按钮 */}
+            <button
+              type="button"
+              title={bindMode
+                ? '退出绑定模式（Esc）'
+                : '进入绑定模式：先选网格则点骨骼绑定；先选骨骼则点网格绑全部骨骼'}
+              onClick={() => {
+                // 关闭绑定模式前：若当前是「先选骨骼」且开着绑定、且用户又点了一次，
+                // 就只退出绑定模式（不绑）。否则按当前选中的皮肤决定走哪条流程。
+                if (bindMode) { toggleBind(); return; }
+                if (selectedBoneIds.length > 0 && !selectedAttachment && selectedSlotIds.length === 0) {
+                  // 流程 B：先选骨骼（且没选网格）→ 进入绑定模式，等用户点网格
+                  toggleBind();
+                } else if (currentAttachmentId) {
+                  // 流程 A：先选网格 → 进入绑定模式，等用户点骨骼
+                  toggleBind();
+                } else {
+                  // 啥也没选 → 当作流程 A 进入绑定模式（让用户之后点骨骼）
+                  toggleBind();
+                }
+              }}
+              style={{
+                ...weightBtn,
+                background: bindMode ? '#2E8BD8' : '#4A4A4A',
+                borderColor: bindMode ? '#2E7FC0' : '#555555',
+                color: bindMode ? '#FFFFFF' : '#DDDDDD',
+              }}
+            ><IconBind />{bindMode ? '退出' : '绑定'}</button>
             <ProBtn label="交换" icon={<IconSwap />} />
             <button
-              type="button" disabled title="解绑选中的骨骼（待实现）"
-              style={{ ...weightBtn, opacity: 0.55, cursor: 'not-allowed' }}
+              type="button"
+              title={boundBoneIds.length > 0
+                ? '解绑当前选中的骨骼（多选则全部解绑）'
+                : '当前网格未绑定任何骨骼'}
+              disabled={boundBoneIds.length === 0 || selectedBoneIds.length === 0}
+              onClick={() => {
+                if (!currentAttachmentId) return;
+                for (const bid of selectedBoneIds) unbindBoneFromMesh(currentAttachmentId, bid);
+              }}
+              style={{
+                ...weightBtn,
+                opacity: (boundBoneIds.length === 0 || selectedBoneIds.length === 0) ? 0.55 : 1,
+                cursor: (boundBoneIds.length === 0 || selectedBoneIds.length === 0) ? 'not-allowed' : 'pointer',
+              }}
             >
               <IconCross />删除
             </button>
@@ -730,6 +862,18 @@ function IconCross() {
 function trackBg(v: number, min: number, max: number) {
   const pct = Math.max(0, Math.min(1, (v - min) / (max - min))) * 100;
   return `linear-gradient(to right, #8b8b8b 0 ${pct}%, #464646 ${pct}% 100%)`;
+}
+
+/**
+ * 骨骼颜色（仿 Spine 给每个骨骼一个稳定颜色）。
+ * 索引 → 色：循环 12 种区分度高的色。
+ */
+const BONE_PALETTE = [
+  '#E61E1E', '#1E78E6', '#2EC75E', '#F0A020', '#9B59B6', '#16A085',
+  '#E67E22', '#3498DB', '#E84393', '#27AE60', '#8E44AD', '#D35400',
+];
+function boneColor(index: number): string {
+  return BONE_PALETTE[index % BONE_PALETTE.length];
 }
 // =================================================================================
 //  header 右上角：hideviews.png（隐藏所有视图）+ ViewMenu 组件（11 项 toggle）

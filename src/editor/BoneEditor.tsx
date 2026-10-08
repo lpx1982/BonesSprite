@@ -22,6 +22,15 @@ import { CanvasOverlay } from './CanvasOverlay';
 import { ConfirmDialog } from './ConfirmDialog';
 
 /**
+ * 骨骼调色板（按绑定顺序循环取色，权重面板 / 饼图 / 叠加 共用）。
+ * 与 Editor.tsx 中的 BONE_PALETTE 保持一致。
+ */
+const BONE_PALETTE = [
+  '#E61E1E', '#1E78E6', '#2EC75E', '#F0A020', '#9B59B6', '#16A085',
+  '#E67E22', '#3498DB', '#E84393', '#27AE60', '#8E44AD', '#D35400',
+];
+
+/**
  * Day 3.5 · 主编辑器画布（Spine 风格）
  *
  * 视觉：
@@ -884,6 +893,103 @@ export function BoneEditor() {
         const editLayer = editSlot?.activeAttachmentId
           ? byId.get(editSlot.activeAttachmentId) ?? null
           : null;
+
+        // ---- 权重可视化：饼图 / 叠加 / 已选 ----
+        //   - weightPie：为每个顶点画权重饼图（选中的顶点饼图更大）
+        //   - weightOverlay：用骨骼颜色填充网格
+        //   - weightSelectedOnly：仅对选中顶点 / 选中骨骼绘制（叠加时未选骨用黑色）
+        const showPie = s.weightPie && !newPoly;
+        const showOverlay = s.weightOverlay && !newPoly;
+        if (showPie || showOverlay) {
+          for (const slot of s.slots) {
+            const aid = slot.activeAttachmentId;
+            if (!aid) continue;
+            const mesh = s.attachmentMeshes[aid];
+            if (!mesh || !mesh.bones || mesh.bones.length === 0) continue;
+            if (s.slotVisibility[slot.id] === false) continue;
+            const layer = byId.get(aid);
+            if (!layer) continue;
+            const nb = mesh.bones.length;
+            const vertCount = Math.floor(mesh.vertices.length / 2);
+            // 找出每个骨骼的稳定颜色：按 mesh.bones 顺序，从 BONE_PALETTE 取
+            const boneColorArr: number[] = mesh.bones.map((_, i) => {
+              const hex = BONE_PALETTE[i % BONE_PALETTE.length];
+              return parseInt(hex.replace('#', ''), 16);
+            });
+            // 选取中骨骼列表（用于「已选」过滤）
+            const selBones = new Set(s.selectedBoneIds);
+            const onlySel = s.weightSelectedOnly;
+
+            // 顶点屏幕坐标（走 meshVerticesScreen 拿到 root 坐标）
+            const pts = meshVerticesScreen(slot.id, layer, mesh);
+
+            // 叠加：每个三角形内部按该三角形顶点权重均值上色
+            if (showOverlay) {
+              const idx = mesh.indices;
+              for (let t = 0; t + 2 < idx.length; t += 3) {
+                const a = idx[t], b = idx[t + 1], c = idx[t + 2];
+                if (a >= vertCount || b >= vertCount || c >= vertCount) continue;
+                const pa = pts[a], pb = pts[b], pc = pts[c];
+                if (!pa || !pb || !pc) continue;
+                // 三角形颜色 = 三个顶点权重向量中最大权重的骨骼（按"权重最大"决定颜色，仿 Spine 三角形顺序逻辑）
+                // 取 a 顶点的最大权重骨作为三角形主色
+                const ar = a * nb;
+                let maxW2 = -1, maxBj = 0;
+                for (let j = 0; j < nb; j++) {
+                  const w = mesh.weights![ar + j];
+                  if (onlySel && !selBones.has(mesh.bones[j])) continue;
+                  if (w > maxW2) { maxW2 = w; maxBj = j; }
+                }
+                const color = onlySel && maxW2 < 0 ? 0x000000 : boneColorArr[maxBj];
+                meshHandles.poly([pa.x, pa.y, pb.x, pb.y, pc.x, pc.y]);
+                meshHandles.fill({ color, alpha: 0.35 });
+              }
+            }
+
+            // 饼图：每个顶点画饼图（按权重比例切扇形）
+            if (showPie) {
+              for (let i = 0; i < vertCount; i++) {
+                // 「已选」过滤：仅选中顶点 + 其权重中包含选中骨骼的顶点
+                const isVertexSelected = selected.has(i);
+                const row = i * nb;
+                let hasSelectedBone = false;
+                if (onlySel) {
+                  for (let j = 0; j < nb; j++) {
+                    if (selBones.has(mesh.bones[j]) && mesh.weights![row + j] > 0) {
+                      hasSelectedBone = true; break;
+                    }
+                  }
+                  if (!isVertexSelected && !hasSelectedBone) continue;
+                }
+                const p = pts[i];
+                if (!p) continue;
+                const r = isVertexSelected ? 8 : 5;
+                // 累计扇形：起点角度 0，依次按权重叠加
+                let startAngle = -Math.PI / 2;
+                for (let j = 0; j < nb; j++) {
+                  const w = mesh.weights![row + j];
+                  if (w <= 0) continue;
+                  const endAngle = startAngle + w * Math.PI * 2;
+                  // 三角形扇形用 poly 近似：12 段
+                  const segs = 12;
+                  const pts3: number[] = [p.x, p.y];
+                  for (let k = 0; k <= segs; k++) {
+                    const a = startAngle + (endAngle - startAngle) * (k / segs);
+                    pts3.push(p.x + Math.cos(a) * r, p.y + Math.sin(a) * r);
+                  }
+                  meshHandles.poly(pts3);
+                  meshHandles.fill({ color: boneColorArr[j], alpha: 0.85 });
+                  meshHandles.stroke({ width: 0.5, color: 0x000000, alpha: 0.5 });
+                  startAngle = endAngle;
+                }
+                // 边框
+                meshHandles.circle(p.x, p.y, r);
+                meshHandles.stroke({ width: isVertexSelected ? 1.4 : 0.8, color: 0xFFFFFF, alpha: 0.9 });
+              }
+            }
+          }
+        }
+
         if (newPoly && editSlot && editLayer) {
           // 图片原始边界的白色虚线框（提示描绘范围）
           const c0 = attachmentLocalToScreen(editSlot.id, editLayer, 0, 0);
@@ -1053,6 +1159,125 @@ export function BoneEditor() {
           }
         }
       };
+
+      /**
+       * 骨骼蒙皮（线性混合蒙皮）—— 把 mesh.bones / mesh.weights / mesh.bindPose 烘焙到 PIXI Mesh。
+       *
+       * 公式：每个顶点 v  →  v_world = Σ w_j · M_j · bindPose[j]
+       *  其中 M_j = bone.worldMatrix 的 6 元仿射（root 坐标系）。
+       *
+       * 实现策略：
+       *  - wrap.matrix 在「绑了骨骼」时**不再**用于骨骼驱动；改为 **identity** + view.position = 0，
+       *    把骨骼驱动的部分完全交给顶点权重；
+       *  - wrap 仍保留 slot 变换（tx/ty/rotation/scale/shear）—— 这些都和 vertex weight 正交，
+       *    所以一并保留在 wrap 上；
+       *  - 但目前 applyBindings 把 bone_matrix 与 slotLocal **相乘**后写到 wrap.matrix，
+       *    因此「绑了骨骼」时我们要剥离掉骨骼部分。
+       *
+       * 简化做法：
+       *  - 直接清空 wrap.matrix（identity），把所有 slot transform 信息也按 root 坐标直接喂给 view.positions
+       *    之前的实现（无骨骼时 wrap.matrix = slotLocal + bone_matrix），网格没有骨骼时仍走原路径；
+       *    有骨骼时**整图位置 + slot 变换**也按权重叠加到顶点上。
+       *  - 这样 hit-test 用的 wrapMatrixBySlot 不再反映 wrap 矩阵本身，需要单独处理（先看代码……）。
+       *
+       * ★ 为了改动最小、且不影响 hit-test：
+       *  - 保留 wrap.matrix 现有逻辑（applyBindings 照旧）
+       *  - 但**有骨骼绑定时**反向：把 view.position 移到 wrap 当前 root 坐标的位置，
+       *    wrap.position 归 0，wrap.matrix 设回 identity，view.positions 直接写 root 坐标。
+       *  - 网格的 hit-test 走 PIXI 内置（不需要 wrapMatrixBySlot.forEach），所以 wrap 矩阵变化不影响点击。
+       *    唯一影响：wrapMatrixBySlot 仍然记录旧的 wrap.matrix → 仅用于「已勾选叠加时按骨骼颜色填充网格」
+       *    这类需要 wrap 矩阵的功能 —— 我们暂时不实现叠加填充，所以不冲突。
+       */
+      const applySkinning = (slotId: string) => {
+        const s = usePixiBonesStore.getState();
+        const slot = s.slots.find((x) => x.id === slotId);
+        if (!slot) return;
+        const aid = slot.activeAttachmentId;
+        if (!aid) return;
+        const mesh = s.attachmentMeshes[aid];
+        if (!mesh || !mesh.bones || mesh.bones.length === 0 || !mesh.weights || !mesh.bindPose) {
+          // 无权重绑定 → 不做事（保持 wrap 现有矩阵不变）
+          return;
+        }
+        const wrap = viewBySlotId.get(slotId);
+        if (!wrap) return;
+        const view = wrap.children[0];
+        if (!view || !(view instanceof Mesh)) return;
+        const geo = view.geometry as MeshGeometry;
+        const pos = geo.positions;
+        const bindPose = mesh.bindPose;
+        const bones = mesh.bones;
+        const weights = mesh.weights;
+        const nb = bones.length;
+        const vertCount = Math.floor(pos.length / 2);
+        if (bindPose.length !== pos.length || weights.length !== vertCount * nb) {
+          // 长度不一致 → 跳过（说明网格拓扑刚改过，rebuildAssets 会接管）
+          return;
+        }
+        // 收集每个骨骼的世界矩阵（6 元仿射）
+        const m: number[][] = new Array(nb);
+        for (let j = 0; j < nb; j++) {
+          const boneNode = skeletonRef
+            ? findBoneByRefWorld(skeletonRef, bones[j])
+            : null;
+          if (!boneNode) {
+            // 找不到骨 → 用单位矩阵（避免崩）
+            m[j] = [1, 0, 0, 1, 0, 0];
+            continue;
+          }
+          const e = boneNode.worldMatrix.elements;
+          m[j] = [e[0], e[1], e[3], e[4], e[6], e[7]];
+        }
+        // 算每个顶点的 root 坐标：v_root = Σ w_j · M_j · bindPose
+        for (let i = 0; i < vertCount; i++) {
+          const bx = bindPose[i * 2];
+          const by = bindPose[i * 2 + 1];
+          let vx = 0;
+          let vy = 0;
+          const row = i * nb;
+          for (let j = 0; j < nb; j++) {
+            const w = weights[row + j];
+            if (w === 0) continue;
+            const mj = m[j];
+            // M_j · bindPose：列主序 6 元 (a, b, c, d, tx, ty)
+            const px = mj[0] * bx + mj[2] * by + mj[4];
+            const py = mj[1] * bx + mj[3] * by + mj[5];
+            vx += w * px;
+            vy += w * py;
+          }
+          pos[i * 2] = vx;
+          pos[i * 2 + 1] = vy;
+        }
+        geo.getBuffer('aPosition').update();
+        // 蒙皮后：把 wrap 自身拉直，让 view 直接显示 root 坐标
+        //   - wrap.matrix 设回 identity
+        //   - wrap.position = (0, 0)
+        //   - view.position = (0, 0)（wrap 局部）
+        wrap.setFromMatrix(new Matrix(1, 0, 0, 1, 0, 0));
+        wrap.position.set(0, 0);
+        view.position.set(0, 0);
+        // wrapMatrixBySlot 同步置为单位（之前记录的旧矩阵已不再使用）
+        wrapMatrixBySlot.set(slotId, [1, 0, 0, 1, 0, 0]);
+      };
+
+      /** 在 skeleton 里按 id 反查 Bone 节点（用 bone 的引用比对）。 */
+      function findBoneByRefWorld(skel: Skeleton, id: string): EngineBone | null {
+        // EngineBone 暴露 worldMatrix 属性，我们遍历树查找带有 _id 字段的骨节点。
+        // 为避免破坏封装，用 try/catch + 数据属性查找。
+        const root = (skel as unknown as { root?: EngineBone }).root;
+        if (!root) return null;
+        const walk = (b: EngineBone): EngineBone | null => {
+          const bid = (b as unknown as { _id?: string })._id;
+          if (bid === id) return b;
+          const children = (b as unknown as { children?: EngineBone[] }).children ?? [];
+          for (const c of children) {
+            const r = walk(c);
+            if (r) return r;
+          }
+          return null;
+        };
+        return walk(root);
+      }
 
       // ===== 网格顶点编辑：拓扑操作 =====
 
@@ -1865,6 +2090,26 @@ export function BoneEditor() {
                     ref: [el[0], el[1], el[3], el[4], el[6], el[7]],
                   });
                 }
+                return;
+              }
+              // ★ 权重「绑定模式」：点击骨骼 → 绑到当前选中网格（流程 A：先选网格）
+              //   若当前已选骨骼 + 又点骨骼 → 累加绑定（多根一起绑）
+              const stBind = usePixiBonesStore.getState();
+              if (stBind.weightBindMode) {
+                const currentAid = stBind.selectedAttachmentId
+                  ?? (stBind.selectedSlotIds.length === 1
+                        ? stBind.slots.find((x) => x.id === stBind.selectedSlotIds[0])?.activeAttachmentId ?? null
+                        : null);
+                if (currentAid) {
+                  const mesh = stBind.attachmentMeshes[currentAid];
+                  // 已有 → 累加，否则 = 新绑
+                  const existing: string[] = mesh?.bones ?? [];
+                  const merged = existing.includes(node.id) ? existing : [...existing, node.id];
+                  stBind.bindBonesToMesh(currentAid, merged);
+                  // 不退出绑定模式，让用户继续点别的骨骼
+                  return;
+                }
+                // 没选网格 → 不做事（用户该走流程 B：先选骨骼再点网格）
                 return;
               }
               const mode = usePixiBonesStore.getState().editorMode;
@@ -3200,6 +3445,24 @@ export function BoneEditor() {
           } as typeof dragState & { parentWorld: { x: number; y: number } };
         } else if (ev.target === a.stage || isSlotSprite(ev.target)) {
           const st0p = usePixiBonesStore.getState();
+          // ★ 权重「绑定模式」流程 B：先选骨骼 → 点网格 → 把所选骨骼绑到该网格
+          if (
+            st0p.weightBindMode
+            && isSlotSprite(ev.target)
+            && st0p.selectedBoneIds.length > 0
+          ) {
+            const clickedSlotId = (ev.target as { __slotId?: string } | null)?.__slotId ?? null;
+            if (clickedSlotId) {
+              const slot = st0p.slots.find((s) => s.id === clickedSlotId) ?? null;
+              const aid = slot?.activeAttachmentId ?? null;
+              if (aid && st0p.attachmentMeshes[aid]) {
+                ev.stopPropagation();
+                st0p.bindBonesToMesh(aid, st0p.selectedBoneIds);
+                st0p.toggleWeightBindMode();   // 流程 B 完成即退出绑定模式
+                return;
+              }
+            }
+          }
           // ★ 选中插槽 + 4 个变换工具激活时，且点在「该插槽画出来的图」上：走 layer-transform，不进框选
           const clickedSlotId = (ev.target as { __slotId?: string } | null)?.__slotId ?? null;
           if (
@@ -3406,8 +3669,19 @@ export function BoneEditor() {
             applyVisibility(state.psd, state.images, state.slots, state.slotVisibility);
             applyBindings(state.psd, state.images, state.slots, state.slotBindings, state.slotTransforms);
             applySlotStyles(state.psd, state.images, state.slots, state.slotStyle, state.attachmentStyle);
+            // 新建的 mesh 没重建了 → 蒙皮（如果该插槽已绑骨骼）
+            for (const slot of state.slots) {
+              const aid = slot.activeAttachmentId;
+              const mesh = aid ? state.attachmentMeshes[aid] : null;
+              if (mesh && mesh.bones && mesh.bones.length > 0) applySkinning(slot.id);
+            }
           } else {
-            for (const k of Object.keys(state.attachmentMeshes)) syncMeshVertices(k);
+            for (const k of Object.keys(state.attachmentMeshes)) {
+              const m = state.attachmentMeshes[k];
+              // ★ 有骨骼绑定时跳过 syncMeshVertices——顶点由 applySkinning 算
+              if (m && m.bones && m.bones.length > 0) continue;
+              syncMeshVertices(k);
+            }
           }
         }
         if (state.psd !== prev.psd) {
@@ -3419,7 +3693,15 @@ export function BoneEditor() {
             }
           });
         }
-        if (state.bones !== prev.bones) buildSkeleton(state.bones);
+        if (state.bones !== prev.bones) {
+          buildSkeleton(state.bones);
+          // ★ 骨骼平移 / 旋转 / 缩放 → 重算所有已绑定网格的顶点蒙皮
+          for (const slot of state.slots) {
+            const aid = slot.activeAttachmentId;
+            const mesh = aid ? state.attachmentMeshes[aid] : null;
+            if (mesh && mesh.bones && mesh.bones.length > 0) applySkinning(slot.id);
+          }
+        }
         // 离开创建模式时清掉素材悬停虚线框（避免残留）
         if (state.editorMode !== prev.editorMode && state.editorMode !== 'create') {
           attachmentHover.clear();
