@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect, useRef } from 'react';
-import { usePixiBonesStore, findBone, orderLayers, type BoneNode, type LayerBinding } from './store';
-import { flattenLayers, type PixiBonesLayer } from '@psd/index';
+import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, type BoneNode, type LayerBinding } from './store';
+import { type PixiBonesLayer, type PixiBonesSlot } from '@psd/index';
 import { importAssetFile } from './importAsset';
 
 /**
@@ -42,19 +42,36 @@ const SECTIONS: Array<{ key: string; label: string; icon: string }> = [
 /** 树里的一行（扁平行数组，左列 / 右列共用，保证行对齐） */
 interface TreeRow {
   key: string;
-  /** slot = 图层插槽节点（◉ 图层名），其下挂一个 asset 行（▪ 图片）—— 仿 Spine */
+  /**
+   * slot  = 插槽行（◉ 插槽名），其下挂它全部附件行
+   * asset = 附件行（🖼 图片名）
+   */
   kind: 'project' | 'bone' | 'section' | 'asset' | 'slot';
-  /** 缩进层级：project=0，根骨/分区=1，更深 = 子骨 / 素材 */
+  /** 缩进层级：project=0，根骨/分区=1，更深 = 子骨 / 插槽 / 附件 */
   depth: number;
   /** 是否是同层最后一个（决定连线画「└」还是「├」） */
   isLast: boolean;
   node?: BoneNode;
-  /** 素材行（PSD 图层 / 单独导入的图片）对应的数据 */
+  /** 插槽行（kind='slot'）对应的数据 */
+  slot?: PixiBonesSlot;
+  /** 附件行（kind='asset'）对应的数据 */
   asset?: PixiBonesLayer;
+  /** 附件行所属的插槽 id */
+  slotId?: string;
+  /** 附件行是否是所属插槽「当前显示」的附件 */
+  attachmentActive?: boolean;
+  /** 是否可拖拽（「绘制顺序」里的插槽行） */
+  draggableRow?: boolean;
   icon: string;
   label: string;
   /** 是否可折叠（有子节点才显示 ⊖/⊕） */
   collapsible: boolean;
+}
+
+/** 按附件 id 反查插槽 id（本地版，避免 import 顺序问题）。 */
+function slotIdOfSlot(slots: PixiBonesSlot[], attachmentId: string): string | null {
+  for (const s of slots) if (s.attachmentIds.includes(attachmentId)) return s.id;
+  return null;
 }
 
 /** 素材缩略图 dataURL 缓存（toDataURL 较贵，按素材 id 缓存一次）。 */
@@ -88,9 +105,13 @@ export function HierarchyPanel() {
   /** 折叠的节点（工程节点 / 骨 id）——折叠后其子树不显示 */
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const projectName = usePixiBonesStore((s) => s.projectName);
-  // 素材（PSD 图层 + 单独导入的图片）相关
+  // 素材（附件）与插槽相关
   const psd = usePixiBonesStore((s) => s.psd);
   const images = usePixiBonesStore((s) => s.images);
+  const slots = usePixiBonesStore((s) => s.slots);
+  const setActiveAttachment = usePixiBonesStore((s) => s.setActiveAttachment);
+  const addAttachmentToSlot = usePixiBonesStore((s) => s.addAttachmentToSlot);
+  const detachAttachment = usePixiBonesStore((s) => s.detachAttachment);
   const layerVisibility = usePixiBonesStore((s) => s.layerVisibility);
   const layerOrder = usePixiBonesStore((s) => s.layerOrder);
   const setLayerOrder = usePixiBonesStore((s) => s.setLayerOrder);
@@ -142,17 +163,27 @@ export function HierarchyPanel() {
   const rootNodes = childMap.get(null) ?? [];
 
   const selectedBone = selectedBoneId ? findBone(bones, selectedBoneId) : null;
-  /** 当前选中的素材（PSD 图层 或 单独导入的图片） */
-  const selectedAsset = useMemo<PixiBonesLayer | null>(() => {
-    if (!selectedLayerId) return null;
-    const inPsd = psd ? flattenLayers(psd).find((l) => l.id === selectedLayerId) : undefined;
-    return inPsd ?? images.find((l) => l.id === selectedLayerId) ?? null;
-  }, [selectedLayerId, psd, images]);
 
-  /** 所有素材（按绘制顺序排列）——层级树 & 「绘制顺序」拖拽排序共用 */
-  const orderedAssets = useMemo<PixiBonesLayer[]>(
-    () => orderLayers([...(psd ? flattenLayers(psd) : []), ...images], layerOrder),
-    [psd, images, layerOrder],
+  /** 全部附件（可渲染素材），按 id 索引 */
+  const attachments = useMemo<PixiBonesLayer[]>(
+    () => attachmentLayers(psd, images),
+    [psd, images],
+  );
+  const attachmentById = useMemo(
+    () => new Map(attachments.map((l) => [l.id, l])),
+    [attachments],
+  );
+  /** 当前选中的插槽 */
+  const selectedSlot = selectedLayerId ? slots.find((s) => s.id === selectedLayerId) ?? null : null;
+  /** 当前选中插槽的激活附件（用于底部面板标题等） */
+  const selectedSlotActive = selectedSlot?.activeAttachmentId
+    ? attachmentById.get(selectedSlot.activeAttachmentId) ?? null
+    : null;
+
+  /** 插槽按绘制顺序排列（层级树 & 「绘制顺序」拖拽排序共用） */
+  const orderedSlots = useMemo<PixiBonesSlot[]>(
+    () => orderLayers(slots, layerOrder),
+    [slots, layerOrder],
   );
 
   // ===== 「绘制顺序」分区的拖拽排序状态 =====
@@ -165,7 +196,7 @@ export function HierarchyPanel() {
     setDragLayerId(null);
     setDropTargetId(null);
     if (!from || from === targetId) return;
-    const ids = orderedAssets.map((l) => l.id);
+    const ids = orderedSlots.map((s) => s.id);
     if (!ids.includes(from)) return;
     const rest = ids.filter((id) => id !== from);
     const lastId = ids[ids.length - 1];
@@ -252,25 +283,57 @@ export function HierarchyPanel() {
     type Desc =
       | { kind: 'bone'; node: BoneNode }
       | { kind: 'section'; section: typeof SECTIONS[number] }
-      /** 图层（会在树里展开成 插槽 ◉ + 图片 🖼 两行） */
-      | { kind: 'layer'; layer: PixiBonesLayer };
-    // 所有素材（已按绘制顺序排列）
-    const assets: PixiBonesLayer[] = orderedAssets;
-    // 按绑定关系分组：绑定了骨骼的图层挂到该骨骼下（骨骼 = 插槽的父级）；未绑定的挂 root 下
+      /** 插槽：展开成「◉ 插槽行 + 它全部附件行 🖼」 */
+      | { kind: 'slot'; slot: PixiBonesSlot };
+    // 按绑定关系分组：绑定了骨骼的插槽挂到该骨骼下（骨骼 = 插槽的父级）；未绑定的挂 root 下
     const boneIdSet = new Set(bones.map((b) => b.id));
-    const layersByBone = new Map<string, PixiBonesLayer[]>();
-    const unboundLayers: PixiBonesLayer[] = [];
-    for (const l of assets) {
-      const b = layerBindings[l.id];
+    const slotsByBone = new Map<string, PixiBonesSlot[]>();
+    const unboundSlots: PixiBonesSlot[] = [];
+    for (const s of orderedSlots) {
+      const b = layerBindings[s.id];
       if (b && boneIdSet.has(b.boneId)) {
-        const arr = layersByBone.get(b.boneId) ?? [];
-        arr.push(l);
-        layersByBone.set(b.boneId, arr);
+        const arr = slotsByBone.get(b.boneId) ?? [];
+        arr.push(s);
+        slotsByBone.set(b.boneId, arr);
       } else {
-        unboundLayers.push(l);
+        unboundSlots.push(s);
       }
     }
-    const layerDesc = (l: PixiBonesLayer): Desc => ({ kind: 'layer', layer: l });
+    const slotDesc = (s: PixiBonesSlot): Desc => ({ kind: 'slot', slot: s });
+
+    /** 一个插槽 → 插槽行 + 它的附件行 */
+    const pushSlot = (slot: PixiBonesSlot, depth: number, isLast: boolean) => {
+      const slotKey = 'slot:' + slot.id;
+      const isCollapsed = collapsed.has(slotKey);
+      out.push({
+        key: slotKey,
+        kind: 'slot',
+        depth,
+        isLast,
+        slot,
+        icon: '◉',
+        label: slot.name,
+        collapsible: true,
+      });
+      if (isCollapsed) return;
+      slot.attachmentIds.forEach((aid, j) => {
+        const l = attachmentById.get(aid);
+        if (!l) return;
+        out.push({
+          key: 'slotatt:' + slot.id + ':' + aid,
+          kind: 'asset',
+          depth: depth + 1,
+          isLast: j === slot.attachmentIds.length - 1,
+          asset: l,
+          slotId: slot.id,
+          attachmentActive: aid === slot.activeAttachmentId,
+          icon: '🖼',
+          label: l.name,
+          collapsible: false,
+        });
+      });
+    };
+
     const emit = (list: Desc[], depth: number) => {
       list.forEach((d, i) => {
         const isLast = i === list.length - 1;
@@ -279,7 +342,7 @@ export function HierarchyPanel() {
           const isDrawOrderNode = d.section.key === 'drawOrder';
           const sectionKey = 'section:' + d.section.key;
           const isCollapsed = collapsed.has(sectionKey);
-          const kids = (isImagesNode || isDrawOrderNode) ? assets : [];
+          const kids = (isImagesNode || isDrawOrderNode) ? orderedSlots : [];
           out.push({
             key: sectionKey,
             kind: 'section',
@@ -289,75 +352,56 @@ export function HierarchyPanel() {
             label: d.section.label,
             collapsible: kids.length > 0,
           });
-          // 素材行挂在「图片」节点下（一层缩进）
+          // 「图片」分区 = 素材库：列出全部附件（点它 = 选中所属插槽）
           if (isImagesNode && !isCollapsed) {
-            kids.forEach((l, j) => {
+            attachments.forEach((l, j) => {
+              const sid = slotIdOfSlot(orderedSlots, l.id);
               out.push({
                 key: 'asset:' + l.id,
                 kind: 'asset',
                 depth: depth + 1,
-                isLast: j === kids.length - 1,
+                isLast: j === attachments.length - 1,
                 asset: l,
+                slotId: sid ?? undefined,
+                attachmentActive: sid ? orderedSlots.find((s) => s.id === sid)?.activeAttachmentId === l.id : false,
                 icon: '🖼',
                 label: l.name,
                 collapsible: false,
               });
             });
           }
-          // 「绘制顺序」节点下：只列图层插槽（◉ 图层名），可拖拽排序
+          // 「绘制顺序」节点下：只列插槽（◉ 插槽名），可拖拽排序
           if (isDrawOrderNode && !isCollapsed) {
-            kids.forEach((l, j) => {
+            orderedSlots.forEach((s, j) => {
               out.push({
-                key: 'drawslot:' + l.id,
+                key: 'drawslot:' + s.id,
                 kind: 'slot',
                 depth: depth + 1,
-                isLast: j === kids.length - 1,
-                asset: l,
+                isLast: j === orderedSlots.length - 1,
+                slot: s,
                 icon: '◉',
-                label: l.name,
+                label: s.name,
                 collapsible: false,
+                draggableRow: true,
               });
             });
           }
           return;
         }
-        // 图层：展开成「◉ 插槽」+「🖼 图片」两行
-        if (d.kind === 'layer') {
-          const layer = d.layer;
-          const slotKey = 'slot:' + layer.id;
-          out.push({
-            key: slotKey,
-            kind: 'slot',
-            depth,
-            isLast,
-            asset: layer,
-            icon: '◉',
-            label: layer.name,
-            collapsible: true,
-          });
-          if (!collapsed.has(slotKey)) {
-            out.push({
-              key: 'rootimg:' + layer.id,   // 与「图片」分区里的 asset 行区分开（避免 key 重复）
-              kind: 'asset',
-              depth: depth + 1,
-              isLast: true,
-              asset: layer,
-              icon: '🖼',
-              label: layer.name,
-              collapsible: false,
-            });
-          }
+        // 插槽：插槽行 + 附件行
+        if (d.kind === 'slot') {
+          pushSlot(d.slot, depth, isLast);
           return;
         }
         const node = d.node;
         const boneKids: Desc[] = (childMap.get(node.id) ?? []).map((k) => ({ kind: 'bone', node: k }));
         const isRootBone = node.parentId === null;
-        // ★ 仿 Spine：图层插槽排在子骨骼之前
-        //   - 绑定了本骨骼的图层：挂在本骨骼下（骨骼 = 插槽的父级）
-        //   - 未绑定任何骨骼的图层：挂在 root 下
-        const boundHere = (layersByBone.get(node.id) ?? []).map(layerDesc);
+        // ★ 仿 Spine：插槽排在子骨骼之前
+        //   - 绑定了本骨骼的插槽：挂在本骨骼下（骨骼 = 插槽的父级）
+        //   - 未绑定任何骨骼的插槽：挂在 root 下
+        const boundHere = (slotsByBone.get(node.id) ?? []).map(slotDesc);
         const kids: Desc[] = isRootBone
-          ? [...unboundLayers.map(layerDesc), ...boundHere, ...boneKids]
+          ? [...unboundSlots.map(slotDesc), ...boundHere, ...boneKids]
           : [...boundHere, ...boneKids];
         out.push({
           key: node.id,
@@ -380,7 +424,7 @@ export function HierarchyPanel() {
       1,
     );
     return out;
-  }, [projectName, collapsed, childMap, filteredRoots, orderedAssets, bones, layerBindings]);
+  }, [projectName, collapsed, childMap, filteredRoots, orderedSlots, attachments, attachmentById, bones, layerBindings]);
 
   // ===== Spine 暗灰配色（直接读 CSS 变量，避免改 Tailwind 主题）=====
   const C = {
@@ -554,19 +598,20 @@ export function HierarchyPanel() {
               style={{ background: C.panelDk, borderRight: '1px solid ' + C.border }}
             >
               {rows.map((r) => {
-                if (r.kind === 'asset' && r.asset) {
-                  const vis = layerVisibility[r.asset.id] ?? r.asset.visible;
-                  const sel = selectedLayerId === r.asset.id;
+                // 插槽行：👁 显隐（key = slotId）
+                if (r.kind === 'slot' && r.slot) {
+                  const vis = layerVisibility[r.slot.id] ?? true;
+                  const sel = selectedLayerId === r.slot.id;
                   return (
                     <button
                       key={r.key}
                       className="h-[22px] flex items-center justify-center text-[10px] shrink-0"
-                      title={vis ? '隐藏' : '显示'}
+                      title={vis ? '隐藏插槽' : '显示插槽'}
                       style={{
                         background: 'transparent', border: 'none', cursor: 'pointer',
                         color: sel ? C.accent : (vis ? C.dim : 'rgba(255,255,255,0.25)'),
                       }}
-                      onClick={() => toggleLayerVisibility(r.asset!.id)}
+                      onClick={() => toggleLayerVisibility(r.slot!.id)}
                     >
                       {vis ? '👁' : '🚫'}
                     </button>
@@ -622,7 +667,8 @@ export function HierarchyPanel() {
                       search={search}
                       C={C}
                       selectedLayerIds={selectedLayerIds}
-                      onSelectAsset={selectLayer}
+                      onSelectSlot={selectLayer}
+                      onActivateAttachment={setActiveAttachment}
                       selectedSectionKey={selectedSectionKey}
                       onSelectSection={selectSection}
                       layerBindings={layerBindings}
@@ -671,13 +717,19 @@ export function HierarchyPanel() {
           C={C}
         />
       ) : selectedLayerId ? (
-        <AssetPropsBlock
-          asset={selectedAsset}
+        <SlotPropsBlock
+          slot={selectedSlot}
+          activeAttachment={selectedSlotActive}
+          attachments={attachments}
+          attachmentById={attachmentById}
           bindingBoneName={
             layerBindings[selectedLayerId]
               ? new Map(bones.map((b) => [b.id, b.name])).get(layerBindings[selectedLayerId].boneId) ?? null
               : null
           }
+          onSetActive={(aid) => setActiveAttachment(selectedLayerId, aid)}
+          onAddAttachment={(aid) => addAttachmentToSlot(selectedLayerId, aid)}
+          onDetach={(aid) => detachAttachment(selectedLayerId, aid)}
           onParent={() => startAttach(selectedLayerId)}
           onUnbind={() => unbindLayer(selectedLayerId)}
           onOpen={() => toggleLayerVisibility(selectedLayerId)}
@@ -762,9 +814,12 @@ interface TreeRowViewProps {
   onToggleCollapse: (key: string) => void;
   search: string;
   C: any;
-  /** 素材相关：多选素材（画布框选 / Shift 加选） */
+  /** 插槽相关：多选插槽（画布框选 / Shift 加选） */
   selectedLayerIds: string[];
-  onSelectAsset: (id: string) => void;
+  /** 选中一个插槽（key = slotId） */
+  onSelectSlot: (slotId: string) => void;
+  /** 切换插槽当前显示的附件 */
+  onActivateAttachment: (slotId: string, attachmentId: string) => void;
   /** 分区节点（约束 / 图片 / …）相关 */
   selectedSectionKey: string | null;
   onSelectSection: (key: string) => void;
@@ -787,28 +842,31 @@ interface TreeRowViewProps {
 function TreeRowView(props: TreeRowViewProps) {
   const {
     row, selectedBoneId, onSelect, onAddChild, collapsed, onToggleCollapse, search, C,
-    selectedLayerIds, onSelectAsset, selectedSectionKey, onSelectSection,
+    selectedLayerIds, onSelectSlot, onActivateAttachment, selectedSectionKey, onSelectSection,
     layerBindings, boneNameById, onImport, dnd,
   } = props;
   const isBone = row.kind === 'bone';
+  /** 附件行（🖼） */
   const isAsset = row.kind === 'asset';
   const isSection = row.kind === 'section';
-  /** 图层插槽行（◉ 图层名）：只是个折叠容器，点它 = 展开/收起 */
+  /** 插槽行（◉） */
   const isSlot = row.kind === 'slot';
   /** 分区原始 key（'section:images' → 'images'） */
   const sectionKey = isSection && row.key.startsWith('section:') ? row.key.slice('section:'.length) : null;
   const node = row.node;
   const asset = row.asset;
-  /** 「绘制顺序」里的插槽行（不可折叠 + 有素材）：点击 = 选中该图层 */
-  const isDrawSlot = isSlot && !row.collapsible && !!row.asset;
+  const slot = row.slot;
+  /** 附件行归属的插槽 id */
+  const assetSlotId = row.slotId ?? null;
   const isSelected =
     (isBone && !!node && selectedBoneId === node.id) ||
-    (isAsset && !!asset && selectedLayerIds.includes(asset.id)) ||
+    (isSlot && !!slot && selectedLayerIds.includes(slot.id)) ||
     (isSection && sectionKey !== null && selectedSectionKey === sectionKey) ||
-    (isDrawSlot && selectedLayerIds.includes(row.asset!.id));
+    // 附件行：所属插槽被选中时高亮
+    (isAsset && !!assetSlotId && selectedLayerIds.includes(assetSlotId));
 
-  // 绑定信息（仅素材行）
-  const binding = isAsset && asset ? layerBindings[asset.id] : undefined;
+  // 绑定信息（按插槽查；附件行显示它所属插槽的绑定）
+  const binding = assetSlotId ? layerBindings[assetSlotId] : (slot ? layerBindings[slot.id] : undefined);
   const boundBoneName = binding ? boneNameById.get(binding.boneId) ?? null : null;
 
   // 搜索命中片段高亮（仅骨行）
@@ -821,12 +879,14 @@ function TreeRowView(props: TreeRowViewProps) {
   const thumb = isAsset && asset ? layerThumb(asset) : null;
   const clickable = isBone || isAsset || isSection || isSlot;
 
+  /** 绑定/解绑「该行对应的插槽」 */
   const doBindToggle = () => {
-    if (!asset) return;
+    const sid = assetSlotId ?? slot?.id ?? null;
+    if (!sid) return;
     if (binding) {
-      window.dispatchEvent(new CustomEvent('spine:unbind-layer', { detail: { layerId: asset.id } }));
+      window.dispatchEvent(new CustomEvent('spine:unbind-layer', { detail: { layerId: sid } }));
     } else if (selectedBoneId) {
-      window.dispatchEvent(new CustomEvent('spine:bind-layer', { detail: { layerId: asset.id } }));
+      window.dispatchEvent(new CustomEvent('spine:bind-layer', { detail: { layerId: sid } }));
     }
   };
 
@@ -853,12 +913,14 @@ function TreeRowView(props: TreeRowViewProps) {
       onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = 'transparent'; }}
       onClick={() => {
         if (isBone && node) onSelect(node.id);
-        else if (isAsset && asset) onSelectAsset(asset.id);
         else if (isSection && sectionKey !== null) onSelectSection(sectionKey);
-        else if (isSlot) {
-          // 可折叠的插槽（root 下）点 = 展开/收起；「绘制顺序」里的插槽点 = 选中图层
-          if (row.collapsible) onToggleCollapse(row.key);
-          else if (asset) onSelectAsset(asset.id);
+        else if (isSlot && slot) onSelectSlot(slot.id);
+        else if (isAsset && asset) {
+          // 附件行：切换为「当前显示」+ 选中它所属的插槽
+          if (assetSlotId) {
+            onActivateAttachment(assetSlotId, asset.id);
+            onSelectSlot(assetSlotId);
+          }
         }
       }}
     >
@@ -919,8 +981,15 @@ function TreeRowView(props: TreeRowViewProps) {
         {nameEl}
       </span>
 
-      {/* 素材行：绑定状态 / 绑定按钮 */}
-      {isAsset && asset && (
+      {/* 附件行：标记「当前显示」 */}
+      {isAsset && row.attachmentActive && (
+        <span className="shrink-0 text-[9px] px-1 rounded mr-0.5" style={{ color: C.accent, border: '1px solid ' + C.accent }} title="该插槽当前显示的附件">
+          当前
+        </span>
+      )}
+
+      {/* 插槽行 / 附件行：绑定状态 / 绑定按钮（都作用于插槽） */}
+      {(isSlot && slot) || (isAsset && assetSlotId) ? (
         boundBoneName ? (
           <button
             className="shrink-0 text-[10px] px-1 rounded"
@@ -940,7 +1009,7 @@ function TreeRowView(props: TreeRowViewProps) {
             🔗
           </button>
         )
-      )}
+      ) : null}
 
       {/* 「图片」节点上的 ＋ 导入素材 */}
       {onImport && (
@@ -1152,21 +1221,35 @@ function CheckChip({ label, defaultChecked, C }: { label: string; defaultChecked
 }
 
 // =================================================================================
-//  选中素材的属性块（Spine "图片文件: crosshair" + 父级 / 打开 / 文件夹）
+//  选中插槽的属性块（Spine 风格：插槽名 + 附件列表 / 添加附件 + 父级 / 显示 / 解除绑定）
 // =================================================================================
-interface AssetPropsBlockProps {
-  asset: PixiBonesLayer | null;
+interface SlotPropsBlockProps {
+  slot: PixiBonesSlot | null;
+  /** 插槽当前显示的附件 */
+  activeAttachment: PixiBonesLayer | null;
+  /** 全部附件（供「添加附件」挑选） */
+  attachments: PixiBonesLayer[];
+  attachmentById: Map<string, PixiBonesLayer>;
   /** 已绑定的父级骨骼名（null = 未绑定） */
   bindingBoneName: string | null;
+  onSetActive: (attachmentId: string) => void;
+  onAddAttachment: (attachmentId: string) => void;
+  onDetach: (attachmentId: string) => void;
   onParent: () => void;
   onUnbind: () => void;
   onOpen: () => void;
   C: any;
 }
 
-function AssetPropsBlock(props: AssetPropsBlockProps) {
-  const { asset, bindingBoneName, onParent, onUnbind, onOpen, C } = props;
-  const name = asset?.name ?? '（未知素材）';
+function SlotPropsBlock(props: SlotPropsBlockProps) {
+  const {
+    slot, activeAttachment, attachments, attachmentById,
+    bindingBoneName, onSetActive, onAddAttachment, onDetach, onParent, onUnbind, onOpen, C,
+  } = props;
+  // 「添加附件」选择器：插槽之外的附件
+  const [picking, setPicking] = useState(false);
+  const candidates = attachments.filter((l) => !slot?.attachmentIds.includes(l.id));
+  const name = slot?.name ?? '（未知插槽）';
   const btnStyle: React.CSSProperties = {
     background: C.panel,
     color: C.text,
@@ -1175,10 +1258,13 @@ function AssetPropsBlock(props: AssetPropsBlockProps) {
   };
   return (
     <div style={{ borderTop: '1px solid ' + C.border, background: C.panelDk }}>
-      {/* 标题行：图片文件: <name> */}
+      {/* 标题行：插槽: <name> */}
       <div className="flex items-center px-2 py-1.5 gap-1" style={{ background: C.toolbar, borderBottom: '1px solid ' + C.border }}>
-        <span className="text-xs shrink-0" style={{ color: C.dim }}>图片文件:</span>
+        <span className="text-xs shrink-0" style={{ color: C.dim }}>插槽:</span>
         <span className="text-xs font-semibold truncate" style={{ color: C.selected }} title={name}>{name}</span>
+        <span className="ml-auto text-[10px] shrink-0" style={{ color: C.dim }}>
+          {slot ? `${slot.attachmentIds.length} 附件` : ''}
+        </span>
       </div>
 
       {/* 已绑定的父级骨骼 */}
@@ -1193,8 +1279,83 @@ function AssetPropsBlock(props: AssetPropsBlockProps) {
         </div>
       )}
 
-      {/* 操作按钮：父级 / 打开 / 文件夹 */}
-      <div className="px-2 pb-2 pt-1 grid grid-cols-3 gap-1 text-[10px]">
+      {/* 附件列表：当前显示的附件高亮；点其他附件 = 切换成它 */}
+      <div className="px-2 py-1" style={{ borderTop: '1px solid ' + C.border }}>
+        <div className="flex items-center gap-1 text-[10px] mb-1" style={{ color: C.dim }}>
+          <span>附件</span>
+          <span className="text-[9px] opacity-70">（点击切换当前显示）</span>
+          <button
+            className="ml-auto rounded px-1"
+            style={{ ...btnStyle, fontSize: 10, padding: '0 4px' }}
+            onClick={() => setPicking((v) => !v)}
+            onMouseEnter={(e) => (e.currentTarget.style.background = C.toolbar)}
+            onMouseLeave={(e) => (e.currentTarget.style.background = C.panel)}
+            title="把已有素材加进这个插槽"
+          >
+            {picking ? '收起' : '＋ 添加附件'}
+          </button>
+        </div>
+
+        {/* 选择要加入的附件 */}
+        {picking && (
+          <div className="mb-1 rounded" style={{ background: C.panel, border: '1px solid ' + C.border, maxHeight: 132, overflowY: 'auto' }}>
+            {candidates.length === 0 ? (
+              <div className="px-2 py-1 text-[10px]" style={{ color: C.dim }}>没有可添加的素材</div>
+            ) : candidates.map((l) => (
+              <button
+                key={l.id}
+                className="w-full flex items-center gap-1 px-2 py-1 text-[10px] text-left"
+                style={{ background: 'transparent', border: 'none', color: C.text, cursor: 'pointer' }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = C.toolbar)}
+                onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                onClick={() => { onAddAttachment(l.id); setPicking(false); }}
+                title="加入该插槽并设为当前显示"
+              >
+                <span>🖼</span>
+                <span className="truncate">{l.name}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* 当前附件列表 */}
+        {slot?.attachmentIds.map((aid) => {
+          const l = attachmentById.get(aid);
+          if (!l) return null;
+          const isActive = aid === slot.activeAttachmentId;
+          return (
+            <div
+              key={aid}
+              className="group flex items-center gap-1 rounded px-1 py-[2px] text-[10px]"
+              style={{
+                background: isActive ? C.accentDk : 'transparent',
+                color: isActive ? '#fff' : C.text,
+                cursor: 'pointer',
+              }}
+              onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; }}
+              onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}
+              onClick={() => { if (!isActive) onSetActive(aid); }}
+              title={isActive ? '当前显示' : '点击切换为当前显示'}
+            >
+              <span style={{ color: isActive ? '#fff' : C.accent }}>{isActive ? '◉' : '○'}</span>
+              <span className="truncate flex-1">{l.name}</span>
+              {/* 从插槽移出（放回独立插槽） */}
+              <button
+                className="shrink-0 opacity-0 group-hover:opacity-100"
+                style={{ background: 'transparent', border: 'none', color: C.dim, cursor: 'pointer' }}
+                onClick={(e) => { e.stopPropagation(); onDetach(aid); }}
+                title="移出插槽（变成独立插槽）"
+              >✕</button>
+            </div>
+          );
+        })}
+        {activeAttachment === null && (
+          <div className="text-[10px] py-1" style={{ color: C.dim }}>该插槽当前不显示任何附件</div>
+        )}
+      </div>
+
+      {/* 操作按钮：父级 / 显示 */}
+      <div className="px-2 pb-2 pt-1 grid grid-cols-2 gap-1 text-[10px]">
         <button
           onClick={onParent}
           className="rounded px-1 py-1 flex items-center justify-center gap-0.5"
@@ -1211,18 +1372,9 @@ function AssetPropsBlock(props: AssetPropsBlockProps) {
           style={btnStyle}
           onMouseEnter={(e) => (e.currentTarget.style.background = C.toolbar)}
           onMouseLeave={(e) => (e.currentTarget.style.background = C.panel)}
-          title="打开 / 关闭该素材"
+          title="显示 / 隐藏该插槽"
         >
-          <span>📂</span> 打开
-        </button>
-        <button
-          className="rounded px-1 py-1 flex items-center justify-center gap-0.5"
-          style={btnStyle}
-          onMouseEnter={(e) => (e.currentTarget.style.background = C.toolbar)}
-          onMouseLeave={(e) => (e.currentTarget.style.background = C.panel)}
-          title="在文件夹中显示（暂未实现）"
-        >
-          <span>📁</span> 文件夹
+          <span>📂</span> 显示
         </button>
       </div>
     </div>

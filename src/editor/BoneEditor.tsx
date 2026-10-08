@@ -10,10 +10,10 @@ import {
   FederatedPointerEvent,
   FederatedWheelEvent,
 } from 'pixi.js';
-import { usePixiBonesStore, findBone, orderLayers, type BoneNode, type LayerBinding } from './store';
+import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, slotIdOf, type BoneNode, type LayerBinding } from './store';
 import { Bone as EngineBone } from '@engine/Bone';
 import { Skeleton } from '@engine/Skeleton';
-import { flattenLayers, parsePsd, type PixiBonesLayer, type PixiBonesPsd } from '@psd/index';
+import { parsePsd, type PixiBonesLayer, type PixiBonesPsd, type PixiBonesSlot } from '@psd/index';
 import { importAssetFile } from './importAsset';
 import { CanvasOverlay } from './CanvasOverlay';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -288,15 +288,32 @@ export function BoneEditor() {
         host.removeEventListener('drop', onHostDrop);
       });
 
-      /** PSD 图层 + 单独导入的图片，合成一份「所有素材」列表（层级树 / 渲染共用）。
-       *  顺序按「绘制顺序」layerOrder 排列（索引 0 最先绘制 = 最底层）。 */
-      const allLayersOf = (psd: PixiBonesPsd | null, images: PixiBonesLayer[]): PixiBonesLayer[] =>
-        orderLayers(
-          [...(psd ? flattenLayers(psd) : []), ...images],
-          usePixiBonesStore.getState().layerOrder,
-        );
+      /** PSD 图层 + 单独导入的图片 → 全部「附件」（可渲染的）。 */
+      const allAttachmentsOf = (psd: PixiBonesPsd | null, images: PixiBonesLayer[]): PixiBonesLayer[] =>
+        attachmentLayers(psd, images);
 
-      /** 为一个素材创建 sprite（包一层 wrap，方便绑定骨骼时整体变换）。 */
+      /**
+       * 当前「要绘制的插槽 → 激活附件」列表，按绘制顺序（layerOrder，索引 0 = 最底层）排列。
+       * 只有插槽的 activeAttachmentId 指向的那个附件会被绘制。
+       */
+      const renderablesOf = (
+        psd: PixiBonesPsd | null,
+        images: PixiBonesLayer[],
+        slots: PixiBonesSlot[],
+      ): Array<{ slot: PixiBonesSlot; layer: PixiBonesLayer }> => {
+        const byId = new Map(allAttachmentsOf(psd, images).map((l) => [l.id, l]));
+        const ordered = orderLayers(slots, usePixiBonesStore.getState().layerOrder);
+        const out: Array<{ slot: PixiBonesSlot; layer: PixiBonesLayer }> = [];
+        for (const slot of ordered) {
+          const id = slot.activeAttachmentId;
+          if (!id) continue;
+          const layer = byId.get(id);
+          if (layer) out.push({ slot, layer });
+        }
+        return out;
+      };
+
+      /** 为一个附件创建 sprite（包一层 wrap，方便绑定骨骼时整体变换）。 */
       const addLayerSprite = (layer: PixiBonesLayer) => {
         if (!layer.canvas) return;
         if (layer.canvas.width === 0 || layer.canvas.height === 0) return;
@@ -308,14 +325,12 @@ export function BoneEditor() {
         sprite.x = layer.left;
         sprite.y = layer.top;
         sprite.alpha = layer.opacity;
-        sprite.visible = layer.visible;
+        sprite.visible = true;
         (sprite as unknown as { blendMode: string }).blendMode = layer.blendMode;
         sprite.eventMode = 'static';
         sprite.cursor = 'pointer';
-        // 标记：让 stage 的 pointerdown 能识别「点在哪个素材上」。
-        // 素材自身不再拦截事件（不 stopPropagation），统一交给 stage 处理：
-        //   - 单击素材 = 选中；Shift+单击 = 加选
-        //   - 在素材上拖动 = 框选（跟骨骼一致）
+        // 标记：让 stage 的 pointerdown 能识别「点在哪个附件上」。
+        // 附件自身不拦截事件，统一交给 stage 处理（单击=选中其插槽 / 拖动=框选）。
         (sprite as unknown as { __layerId: string }).__layerId = layer.id;
 
         const wrap = new Container();
@@ -327,8 +342,12 @@ export function BoneEditor() {
         canvasRefs.add(layer.canvas);
       };
 
-      /** 重建全部素材 sprite（PSD 图层 + 单独导入的图片）。 */
-      const rebuildAssets = (psd: PixiBonesPsd | null, images: PixiBonesLayer[]) => {
+      /** 重建全部附件 sprite（按「插槽绘制顺序 → 槽内附件顺序」构建 root 的 z 序）。 */
+      const rebuildAssets = (
+        psd: PixiBonesPsd | null,
+        images: PixiBonesLayer[],
+        slots: PixiBonesSlot[],
+      ) => {
         while (root.children.length > 0) {
           const c = root.children[0];
           root.removeChild(c);
@@ -337,109 +356,122 @@ export function BoneEditor() {
         spriteByLayerId.clear();
         canvasRefs.clear();
 
-        for (const layer of allLayersOf(psd, images)) addLayerSprite(layer);
-      };
-
-      const applyVisibility = (
-        psd: PixiBonesPsd | null,
-        images: PixiBonesLayer[],
-        overrides: Record<string, boolean>,
-      ) => {
-        for (const layer of allLayersOf(psd, images)) {
-          const wrap = spriteByLayerId.get(layer.id);
-          if (!wrap) continue;
-          const o = overrides[layer.id];
-          wrap.visible = o === undefined ? layer.visible : o;
+        const byId = new Map(allAttachmentsOf(psd, images).map((l) => [l.id, l]));
+        const ordered = orderLayers(slots, usePixiBonesStore.getState().layerOrder);
+        for (const slot of ordered) {
+          for (const aid of slot.attachmentIds) {
+            const layer = byId.get(aid);
+            if (layer) addLayerSprite(layer);
+          }
         }
       };
 
       /**
-       * 应用「图层 → 骨骼」绑定 + 用户的 slot 局部变换。
+       * 应用显隐：只有「插槽可见 且 该附件是插槽当前激活的附件」才绘制。
+       * 插槽可见性默认取激活附件自身的 visible（保留 PSD 里隐藏图层的语义）。
+       */
+      const applyVisibility = (
+        psd: PixiBonesPsd | null,
+        images: PixiBonesLayer[],
+        slots: PixiBonesSlot[],
+        overrides: Record<string, boolean>,
+      ) => {
+        const byId = new Map(allAttachmentsOf(psd, images).map((l) => [l.id, l]));
+        for (const slot of slots) {
+          const active = slot.activeAttachmentId ? byId.get(slot.activeAttachmentId) ?? null : null;
+          const slotVisible = overrides[slot.id] ?? active?.visible ?? true;
+          for (const aid of slot.attachmentIds) {
+            const wrap = spriteByLayerId.get(aid);
+            if (!wrap) continue;
+            wrap.visible = slotVisible && aid === slot.activeAttachmentId;
+          }
+        }
+      };
+
+      /**
+       * 应用「插槽 → 骨骼」绑定 + 插槽的局部变换（key 都是 slotId）。
        *
        * 绑定表里存的是「绑定那一刻骨骼的世界矩阵 ref」。
        *   渲染时用增量 delta = 当前世界矩阵 × ref⁻¹ 驱动 wrap：
-       *     sprite 世界位置 = delta × 原始位置
        *   所以绑定动作本身不会让图层跳动（delta = I），之后骨骼怎么动图层就怎么跟。
-       *   未绑定的图层：wrap 复位为单位矩阵，sprite 回到原始 (left, top)。
        *
-       * 用户在 slot 上做的旋转/缩放/倾斜/平移（layerTransforms）会**叠加在**骨骼矩阵之后：
-       *   视觉上 = (骨骼世界 × ref⁻¹) × slotLocal
-       *   即移动/旋转图层时不影响骨骼本身；绑骨后再调这些值也不会让图跳到奇怪位置。
-       *
-       * 锚点：sprite 的 (left, top) + slot.tx, slot.ty，旋转/缩放/倾斜绕该锚点。
+       * 插槽的旋转/缩放/倾斜/平移（layerTransforms）**叠加在**骨骼矩阵之后，
+       * 枢轴 = 该插槽**当前激活附件**的中心。
+       * 非激活附件保持原位（它们本来就不显示）。
        */
       const applyBindings = (
         psd: PixiBonesPsd | null,
         images: PixiBonesLayer[],
+        slots: PixiBonesSlot[],
         bindings: Record<string, LayerBinding>,
         layerTransforms: Record<string, { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }>,
       ) => {
-        for (const layer of allLayersOf(psd, images)) {
-          const wrap = spriteByLayerId.get(layer.id);
-          if (!wrap) continue;
-          const sprite = wrap.children[0] as Sprite | undefined;
-          const binding = bindings[layer.id];
-          const bone = binding ? boneById.get(binding.boneId) : null;
-          const lt = layerTransforms[layer.id];
-          // 1) 计算骨骼驱动矩阵（列主序 6 元组）
-          let m = [1, 0, 0, 1, 0, 0]; // 单位
-          if (binding && bone) {
-            const inv = invAffine(binding.ref);
-            if (inv) {
-              const e = bone.worldMatrix.elements;
-              const cur = [e[0], e[1], e[3], e[4], e[6], e[7]];
-              m = mulAffine(cur, inv);
+        const byId = new Map(allAttachmentsOf(psd, images).map((l) => [l.id, l]));
+        for (const slot of slots) {
+          for (const aid of slot.attachmentIds) {
+            const wrap = spriteByLayerId.get(aid);
+            if (!wrap) continue;
+            const layer = byId.get(aid);
+            if (!layer) continue;
+            const sprite = wrap.children[0] as Sprite | undefined;
+            // 非激活附件：复位（不套插槽变换）
+            if (aid !== slot.activeAttachmentId) {
+              wrap.setFromMatrix(Matrix.IDENTITY);
+              if (sprite) sprite.position.set(layer.left, layer.top);
+              continue;
             }
+            const binding = bindings[slot.id];
+            const bone = binding ? boneById.get(binding.boneId) : null;
+            const lt = layerTransforms[slot.id];
+            // 1) 计算骨骼驱动矩阵（列主序 6 元组）
+            let m = [1, 0, 0, 1, 0, 0]; // 单位
+            if (binding && bone) {
+              const inv = invAffine(binding.ref);
+              if (inv) {
+                const e = bone.worldMatrix.elements;
+                const cur = [e[0], e[1], e[3], e[4], e[6], e[7]];
+                m = mulAffine(cur, inv);
+              }
+            }
+            // 2) 叠加插槽的局部变换（平移 = C − L×(w/2, h/2)，枢轴 = 激活附件中心）
+            const txL = lt?.tx ?? 0;
+            const tyL = lt?.ty ?? 0;
+            const rot = lt?.rotation ?? 0;
+            const sx = lt?.scaleX ?? 1;
+            const sy = lt?.scaleY ?? 1;
+            const skx = lt?.skewX ?? 0;
+            const sky = lt?.skewY ?? 0;
+            const tanKx = Math.tan(skx);
+            const tanKy = Math.tan(sky);
+            // aM = shear(skx, sky) ∘ scale(sx, sy)
+            const aMx = sx;
+            const aMy = 0;
+            const aCx = tanKx * sx;
+            const aCy = sy;
+            const aBx = tanKy * sy;
+            const aBy = 0;
+            // 再叠加旋转 R ∘ M（对 M 的两列分别左乘 R）
+            const cosR = Math.cos(rot);
+            const sinR = Math.sin(rot);
+            const Xx = aMx, Xy = aMy;
+            const Yx = aCx + aBx, Yy = aCy + aBy;
+            const m_a = cosR * Xx - sinR * Xy;
+            const m_b = sinR * Xx + cosR * Xy;
+            const m_c = cosR * Yx - sinR * Yy;
+            const m_d = sinR * Yx + cosR * Yy;
+            // ★ 枢轴居中化：枢轴 C = 激活附件中心
+            const halfW = layer.width / 2;
+            const halfH = layer.height / 2;
+            const Cx = layer.left + txL + halfW;
+            const Cy = layer.top + tyL + halfH;
+            const lx = Cx - (m_a * halfW + m_c * halfH);
+            const ly = Cy - (m_b * halfW + m_d * halfH);
+            const slotLocal = [m_a, m_b, m_c, m_d, lx, ly];
+            // 骨骼矩阵 m（左乘）：wrap = m × slotLocal
+            const out = mulAffine(m, slotLocal);
+            wrap.setFromMatrix(new Matrix(out[0], out[1], out[2], out[3], out[4], out[5]));
+            if (sprite) sprite.position.set(0, 0);
           }
-          // 2) 叠加用户的 slot 局部变换。
-          //    wrap 的世界 = m × slotLocal
-          //    ★ slotLocal 的枢轴 = 图层中心（不是左上角！）：
-          //      slotLocal = T(C) × L × T(-C) × B
-          //        B = T(left+tx, top+ty)      基础摆放（把 sprite 左上角放到图层位置）
-          //        C = (left+tx+w/2, top+ty+h/2)  图层中心
-          //        L = R × Sk × S（线性部分）
-          //      ⇒ 线性仍为 L，平移 = C - L×(w/2, h/2)
-          const txL = lt?.tx ?? 0;
-          const tyL = lt?.ty ?? 0;
-          const rot = lt?.rotation ?? 0;
-          const sx = lt?.scaleX ?? 1;
-          const sy = lt?.scaleY ?? 1;
-          const skx = lt?.skewX ?? 0;
-          const sky = lt?.skewY ?? 0;
-          const tanKx = Math.tan(skx);
-          const tanKy = Math.tan(sky);
-          // aM = shear(skx, sky) ∘ scale(sx, sy)
-          // 列主序：[a, b, c, d] 对应 X=(a,b), Y=(c,d)
-          const aMx = sx;
-          const aMy = 0;
-          const aCx = tanKx * sx;
-          const aCy = sy;
-          const aBx = tanKy * sy;
-          const aBy = 0;
-          // 再叠加旋转：R ∘ M（对 M 的两列分别左乘 R）
-          //   引擎 Transform.toMatrix 约定：X=(cos·sx, sin·sx)、Y=(-sin·sy, cos·sy)
-          //   R·X = (cosR·Xx − sinR·Xy, sinR·Xx + cosR·Xy)
-          //   R·Y = (cosR·Yx − sinR·Yy, sinR·Yx + cosR·Yy)
-          const cosR = Math.cos(rot);
-          const sinR = Math.sin(rot);
-          const Xx = aMx, Xy = aMy;
-          const Yx = aCx + aBx, Yy = aCy + aBy;
-          const m_a = cosR * Xx - sinR * Xy;
-          const m_b = sinR * Xx + cosR * Xy;
-          const m_c = cosR * Yx - sinR * Yy;
-          const m_d = sinR * Yx + cosR * Yy;
-          // ★ 枢轴居中化：枢轴 C = 图层中心；平移 = C − L×(w/2, h/2)
-          const halfW = layer.width / 2;
-          const halfH = layer.height / 2;
-          const Cx = layer.left + txL + halfW;
-          const Cy = layer.top + tyL + halfH;
-          const lx = Cx - (m_a * halfW + m_c * halfH);
-          const ly = Cy - (m_b * halfW + m_d * halfH);
-          const slotLocal = [m_a, m_b, m_c, m_d, lx, ly];
-          // 骨骼矩阵 m（左乘）：wrap = m × slotLocal
-          const out = mulAffine(m, slotLocal);
-          wrap.setFromMatrix(new Matrix(out[0], out[1], out[2], out[3], out[4], out[5]));
-          if (sprite) sprite.position.set(0, 0);
         }
       };
 
@@ -474,7 +506,8 @@ export function BoneEditor() {
       const drawLayerHandles = (
         psd: PixiBonesPsd | null,
         images: PixiBonesLayer[],
-        selectedLayerId: string | null,
+        slots: PixiBonesSlot[],
+        selectedSlotId: string | null,
         tool: 'rotate' | 'move' | 'scale' | 'shear' | null,
         _transforms: Record<string, { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }>,
       ) => {
@@ -482,14 +515,16 @@ export function BoneEditor() {
         // ★ 不要在这里改 eventMode！init 里已经设为 'static' 且只设一次；
         //   若每次 clear 后重设会把 init 的 'static' 覆盖成 'none' → 手柄永远收不到事件。
         //   没有几何图形时（clear 后未画）PIXI 命中测试自然失败，不会误吞事件。
-        if (!selectedLayerId || !tool) return;
-        const all = allLayersOf(psd, images);
-        const layer = all.find((l) => l.id === selectedLayerId);
-        if (!layer || layer.width === 0 || layer.height === 0) return;
-        const lt = _transforms[selectedLayerId] ?? { tx: 0, ty: 0, rotation: 0, scaleX: 1, scaleY: 1, skewX: 0, skewY: 0 };
-        // ★ 选中图层的 sprite 光标：有工具时改成"可操作"光标，避免 PIXI 一直显示 pointer
+        if (!selectedSlotId || !tool) return;
+        const slot = slots.find((s) => s.id === selectedSlotId) ?? null;
+        const layer = slot?.activeAttachmentId
+          ? allAttachmentsOf(psd, images).find((l) => l.id === slot.activeAttachmentId) ?? null
+          : null;
+        if (!slot || !layer || layer.width === 0 || layer.height === 0) return;
+        const lt = _transforms[selectedSlotId] ?? { tx: 0, ty: 0, rotation: 0, scaleX: 1, scaleY: 1, skewX: 0, skewY: 0 };
+        // ★ 选中插槽「激活附件」的 sprite 光标：有工具时改成"可操作"光标，避免 PIXI 一直显示 pointer
         {
-          const selSprite = spriteByLayerId.get(selectedLayerId)?.children[0] as Sprite | undefined;
+          const selSprite = spriteByLayerId.get(layer.id)?.children[0] as Sprite | undefined;
           if (selSprite) {
             selSprite.cursor = tool === 'move' ? 'move'
               : tool === 'scale' ? 'nwse-resize'
@@ -534,17 +569,19 @@ export function BoneEditor() {
         }
       };
 
+      /** 给选中的插槽画蓝色选框（选的是插槽，框画在它当前激活的附件上）。 */
       const drawHighlight = (
         psd: PixiBonesPsd | null,
         images: PixiBonesLayer[],
-        selectedLayerIds: string[],
+        slots: PixiBonesSlot[],
+        selectedSlotIds: string[],
       ) => {
         highlight.clear();
-        if (selectedLayerIds.length === 0) return;
-        const all = allLayersOf(psd, images);
-        for (const id of selectedLayerIds) {
-          // 素材可能来自 PSD 图层，也可能是单独导入的图片
-          const layer = all.find((l) => l.id === id) ?? null;
+        if (selectedSlotIds.length === 0) return;
+        const byId = new Map(allAttachmentsOf(psd, images).map((l) => [l.id, l]));
+        for (const sid of selectedSlotIds) {
+          const slot = slots.find((s) => s.id === sid) ?? null;
+          const layer = slot?.activeAttachmentId ? byId.get(slot.activeAttachmentId) ?? null : null;
           if (!layer || layer.width === 0 || layer.height === 0) continue;
 
           const stageX = root.x + layer.left * root.scale.x;
@@ -562,7 +599,7 @@ export function BoneEditor() {
       const isLayerSprite = (t: unknown): boolean =>
         typeof (t as { __layerId?: unknown } | null)?.__layerId === 'string';
 
-      /** 屏幕坐标下最上层（最后绘制的）可见素材 id；无则 null。 */
+      /** 屏幕坐标下最上层（最后绘制的）可见**附件** id；无则 null。 */
       const topLayerAt = (gx: number, gy: number): string | null => {
         const sx = root.scale.x;
         const sy = root.scale.y;
@@ -570,13 +607,12 @@ export function BoneEditor() {
         const wx = (gx - root.x) / sx;
         const wy = (gy - root.y) / sy;
         const s = usePixiBonesStore.getState();
-        const layers = allLayersOf(s.psd, s.images);
-        // 后面的图层画在上层 → 逆序找第一个命中且可见的
-        for (let i = layers.length - 1; i >= 0; i--) {
-          const l = layers[i];
+        // 只命中「当前实际绘制」的附件（插槽可见 + 是激活附件）
+        const items = renderablesOf(s.psd, s.images, s.slots);
+        for (let i = items.length - 1; i >= 0; i--) {
+          const { slot, layer: l } = items[i];
+          if (s.layerVisibility[slot.id] === false) continue;
           if (l.width === 0 || l.height === 0) continue;
-          const vis = s.layerVisibility[l.id] ?? l.visible;
-          if (!vis) continue;
           if (wx >= l.left && wx <= l.left + l.width && wy >= l.top && wy <= l.top + l.height) {
             return l.id;
           }
@@ -586,7 +622,7 @@ export function BoneEditor() {
 
       /**
        * 创建模式 + 按住 Command 时的素材悬停提示：
-       *   show=true 且鼠标落在某个素材上 → 画白色虚线框；否则清空。
+       *   show=true 且鼠标落在某个附件上 → 画白色虚线框；否则清空。
        */
       const updateLayerHover = (gx: number, gy: number, show: boolean) => {
         layerHover.clear();
@@ -594,9 +630,10 @@ export function BoneEditor() {
         const id = topLayerAt(gx, gy);
         if (!id) return;
         const s = usePixiBonesStore.getState();
-        // 已经是「目标素材」的图层：画布上已是实线蓝框，不再叠加白色虚线
-        if (id === s.selectedLayerId) return;
-        const layer = allLayersOf(s.psd, s.images).find((l) => l.id === id);
+        // 已经是「当前选中插槽的激活附件」：画布上已是实线蓝框，不再叠加白色虚线
+        const selSlot = s.selectedLayerId ? s.slots.find((x) => x.id === s.selectedLayerId) ?? null : null;
+        if (selSlot?.activeAttachmentId === id) return;
+        const layer = allAttachmentsOf(s.psd, s.images).find((l) => l.id === id);
         if (!layer || layer.width === 0 || layer.height === 0) return;
         const x = root.x + layer.left * root.scale.x - 2;
         const y = root.y + layer.top * root.scale.y - 2;
@@ -1851,7 +1888,7 @@ export function BoneEditor() {
           const s = usePixiBonesStore.getState();
           center(s.psd);
           drawGrid(s.psd);
-          drawHighlight(s.psd, s.images, s.selectedLayerIds);
+          drawHighlight(s.psd, s.images, s.slots, s.selectedLayerIds);
           drawBones(s.bones, s.selectedBoneId, s.selectedBoneIds);
         } else if (dragState.kind === 'layer-transform') {
           // 仿 Spine SlotTransform：移动/旋转/缩放/倾斜当前选中的图层。
@@ -1895,11 +1932,13 @@ export function BoneEditor() {
               const ax = Math.cos(axisAngle);
               const ay = Math.sin(axisAngle);
               const proj = (dxScreen * ax + dyScreen * ay);
-              // 把 startLen 算成"按下时该方向的屏幕长度"
-              // red=沿图层 X（局部 width 经 rotation 旋转到屏幕），green=沿图层 Y（height）
+              // 把 startLen 算成"按下时该方向的屏幕长度"（用插槽当前激活附件）
+              // red=沿 X（局部 width），green=沿 Y（height）
               const st = usePixiBonesStore.getState();
-              const all = allLayersOf(st.psd, st.images);
-              const layer = all.find((l) => l.id === layerId);
+              const scaleSlot = st.slots.find((x) => x.id === layerId) ?? null;
+              const layer = scaleSlot?.activeAttachmentId
+                ? allAttachmentsOf(st.psd, st.images).find((l) => l.id === scaleSlot.activeAttachmentId) ?? null
+                : null;
               const startLen = layer
                 ? (zone === 'red' ? layer.width * Math.abs(sxr) : layer.height * Math.abs(syr))
                 : 0;
@@ -2013,11 +2052,14 @@ export function BoneEditor() {
             const localY = offX * sin + offY * cos;
             // 子骨骼 local rotation（弧度，store/引擎统一用弧度）
             const localRot = worldRot - parentWorldRot;
-            // 若当前选中了素材（创建模式下 ⌘ 点击素材选中的），
-            //   新骨骼自动绑定到该素材，并以素材名命名。
+            // 若当前选中了插槽（创建模式下 ⌘ 点击素材选中的），
+            //   新骨骼自动绑定到该插槽，并以插槽名命名。
             const stCreate = usePixiBonesStore.getState();
-            const targetLayer = stCreate.selectedLayerId
-              ? allLayersOf(stCreate.psd, stCreate.images).find((l) => l.id === stCreate.selectedLayerId) ?? null
+            const targetSlot = stCreate.selectedLayerId
+              ? stCreate.slots.find((s) => s.id === stCreate.selectedLayerId) ?? null
+              : null;
+            const targetLayer = targetSlot?.activeAttachmentId
+              ? allAttachmentsOf(stCreate.psd, stCreate.images).find((l) => l.id === targetSlot.activeAttachmentId) ?? null
               : null;
             // ★ addBone 内部会自动设置 selectedBoneId = 新骨 id，
             //   因此创建后新骨高亮选中，下次拖动即以它为父，实现递归创建
@@ -2026,18 +2068,18 @@ export function BoneEditor() {
               y: localY,
               rotation: localRot,
               length,
-              ...(targetLayer ? { name: targetLayer.name, layerId: targetLayer.id } : {}),
+              ...(targetSlot ? { name: targetSlot.name, layerId: targetLayer?.id ?? null } : {}),
             });
-            if (targetLayer) {
+            if (targetSlot) {
               const newId = usePixiBonesStore.getState().selectedBoneId;
               const nb = newId ? boneById.get(newId) : null;
               if (newId && nb) {
                 const el = nb.worldMatrix.elements;
-                usePixiBonesStore.getState().bindLayer(targetLayer.id, {
+                usePixiBonesStore.getState().bindLayer(targetSlot.id, {
                   boneId: newId,
                   ref: [el[0], el[1], el[3], el[4], el[6], el[7]],
                 });
-                // 绑定完成：素材目标是一次性的 → 取消素材选中，新骨成为当前选中
+                // 绑定完成：目标是一次性的 → 取消插槽选中，新骨成为当前选中
                 usePixiBonesStore.getState().selectBone(newId);
               }
             }
@@ -2052,10 +2094,11 @@ export function BoneEditor() {
           const layerSelectable = store.editorMode !== 'pose';
           const moved = Math.hypot(nowScreen.x - startScreen.x, nowScreen.y - startScreen.y) > 3;
           if (!moved) {
-            // 单击：若点在素材上 → 选中该素材（Shift = 加选，跟骨骼一致）
-            if (hitLayerId && layerSelectable) {
-              if (additive) store.selectLayers([...prevLayerIds, hitLayerId], false);
-              else store.selectLayers([hitLayerId], false);
+            // 单击：若点在附件上 → 选中它所属的**插槽**（Shift = 加选，跟骨骼一致）
+            const hitSlotId = slotIdOf(store.slots, hitLayerId);
+            if (hitSlotId && layerSelectable) {
+              if (additive) store.selectLayers([...prevLayerIds, hitSlotId], false);
+              else store.selectLayers([hitSlotId], false);
             }
             // 点空白：pointerdown 时已清空选中，无需处理
           } else {
@@ -2086,32 +2129,31 @@ export function BoneEditor() {
                 }
               }
             }
-            // 2) 框内素材：矩形与框相交（且可见）；姿势模式下不参与
-            const hitLayers: string[] = [];
+            // 2) 框内插槽：插槽的激活附件矩形与框相交；姿势模式下不参与
+            const hitSlots: string[] = [];
             if (layerSelectable) {
               const sxr = root.scale.x;
               const syr = root.scale.y;
-              for (const l of allLayersOf(store.psd, store.images)) {
+              for (const { slot, layer: l } of renderablesOf(store.psd, store.images, store.slots)) {
+                if (store.layerVisibility[slot.id] === false) continue;
                 if (l.width === 0 || l.height === 0) continue;
-                const vis = store.layerVisibility[l.id] ?? l.visible;
-                if (!vis) continue;
                 const lx0 = root.x + l.left * sxr;
                 const ly0 = root.y + l.top * syr;
                 const lx1 = lx0 + l.width * sxr;
                 const ly1 = ly0 + l.height * syr;
                 if (lx1 >= xMin && lx0 <= xMax && ly1 >= yMin && ly0 <= yMax) {
-                  hitLayers.push(l.id);
+                  hitSlots.push(slot.id);
                 }
               }
             }
-            // 骨骼与素材一起选中（两个选中集独立）：
+            // 骨骼与插槽一起选中（两个选中集独立）：
             //   - 骨骼被框中的判定：关节/尖端在框内
-            //   - 素材被框中的判定：矩形与框相交
+            //   - 插槽被框中的判定：其激活附件矩形与框相交
             // 增量（Shift）时各自与「按下时已有的选中」合并。
             const mergedBones = additive ? Array.from(new Set([...prevSelIds, ...hitBones])) : hitBones;
-            // 姿势模式：素材选中集保持为空（不选图层）
+            // 姿势模式：插槽选中集保持为空（不选图层）
             const mergedLayers = layerSelectable
-              ? (additive ? Array.from(new Set([...prevLayerIds, ...hitLayers])) : hitLayers)
+              ? (additive ? Array.from(new Set([...prevLayerIds, ...hitSlots])) : hitSlots)
               : [];
             store.selectBox(mergedBones, mergedLayers);
           }
@@ -2156,8 +2198,11 @@ export function BoneEditor() {
         }
         const tool = st.activeTool;
         const lt = st.layerTransforms[st.selectedLayerId] ?? { tx: 0, ty: 0, rotation: 0, scaleX: 1, scaleY: 1, skewX: 0, skewY: 0 };
-        const all = allLayersOf(st.psd, st.images);
-        const layer = all.find((l) => l.id === st.selectedLayerId);
+        // 用选中插槽的「激活附件」求锚点（手柄画在它中心）
+        const hoverSlot = st.slots.find((s) => s.id === st.selectedLayerId) ?? null;
+        const layer = hoverSlot?.activeAttachmentId
+          ? allAttachmentsOf(st.psd, st.images).find((l) => l.id === hoverSlot.activeAttachmentId) ?? null
+          : null;
         if (!layer) return;
         // ★ 锚点 = 图层中心（与绘制手柄一致）
         const { x: ax, y: ay } = layerAnchorScreen(layer, lt);
@@ -2187,7 +2232,7 @@ export function BoneEditor() {
           else if (zone === 'center') layerHandles.cursor = tool === 'scale' ? 'nwse-resize' : tool === 'rotate' ? 'crosshair' : 'move';
           else layerHandles.cursor = 'default';
           // ★ hover 变化后立刻重画手柄（否则白色高亮不会出现）
-          drawLayerHandles(st.psd, st.images, st.selectedLayerId, tool, st.layerTransforms);
+          drawLayerHandles(st.psd, st.images, st.slots, st.selectedLayerId, tool, st.layerTransforms);
         }
       };
       layerHandles.on('pointermove', (ev: FederatedPointerEvent) => {
@@ -2198,20 +2243,22 @@ export function BoneEditor() {
           layerHandleHover = null;
           layerHandles.cursor = 'default';
           const st = usePixiBonesStore.getState();
-          drawLayerHandles(st.psd, st.images, st.selectedLayerId, st.activeTool, st.layerTransforms);
+          drawLayerHandles(st.psd, st.images, st.slots, st.selectedLayerId, st.activeTool, st.layerTransforms);
         }
       });
       layerHandles.on('pointerdown', (ev: FederatedPointerEvent) => {
         if (ev.button !== 0) return;
         const st = usePixiBonesStore.getState();
-        const layerId = st.selectedLayerId;
-        if (!layerId || !st.activeTool) return;
+        const slotId = st.selectedLayerId;
+        if (!slotId || !st.activeTool) return;
         // 创建模式、或在拾取父级模式、或层级在选骨骼时：不响应
         if (st.editorMode === 'create' || st.attachingLayerId) return;
         ev.stopPropagation();
-        const lt = st.layerTransforms[layerId] ?? { tx: 0, ty: 0, rotation: 0, scaleX: 1, scaleY: 1, skewX: 0, skewY: 0 };
-        const all = allLayersOf(st.psd, st.images);
-        const layer = all.find((l) => l.id === layerId);
+        const lt = st.layerTransforms[slotId] ?? { tx: 0, ty: 0, rotation: 0, scaleX: 1, scaleY: 1, skewX: 0, skewY: 0 };
+        const slot = st.slots.find((s) => s.id === slotId) ?? null;
+        const layer = slot?.activeAttachmentId
+          ? allAttachmentsOf(st.psd, st.images).find((l) => l.id === slot.activeAttachmentId) ?? null
+          : null;
         if (!layer) return;
         // 锚点 = 图层中心（与绘制 / hover 一致）
         const { x: ax, y: ay } = layerAnchorScreen(layer, lt);
@@ -2221,7 +2268,7 @@ export function BoneEditor() {
         dragState = {
           kind: 'layer-transform',
           tool: st.activeTool,
-          layerId,
+          layerId: slotId,
           start: lt,
           startScreen: { x: ev.global.x, y: ev.global.y },
           anchorScreen: { x: ax, y: ay },
@@ -2266,9 +2313,11 @@ export function BoneEditor() {
           //   ★ 只设置目标素材，**不动骨骼选中** —— 保证父骨骼链不断：
           //     新骨仍是「当前选中骨骼」的子骨，而不是 root 下的兄弟骨。
           if (ev.metaKey || metaDown) {
-            const hitId = topLayerAt(ev.global.x, ev.global.y);
-            if (hitId) {
-              usePixiBonesStore.getState().setTargetLayer(hitId);
+            const hitAttachmentId = topLayerAt(ev.global.x, ev.global.y);
+            // 选中是「插槽」维度：把命中的附件换算成它所属插槽
+            const hitSlotId = slotIdOf(usePixiBonesStore.getState().slots, hitAttachmentId);
+            if (hitSlotId) {
+              usePixiBonesStore.getState().setTargetLayer(hitSlotId);
               layerHover.clear();
               return;
             }
@@ -2309,19 +2358,24 @@ export function BoneEditor() {
           } as typeof dragState & { parentWorld: { x: number; y: number } };
         } else if (ev.target === a.stage || isLayerSprite(ev.target)) {
           const st0p = usePixiBonesStore.getState();
-          // ★ 选中图层 + 4 个变换工具激活时：走 layer-transform，不进框选
+          // ★ 选中插槽 + 4 个变换工具激活时，且点在「该插槽的激活附件」上：走 layer-transform，不进框选
+          const clickedAttachmentId = (ev.target as { __layerId?: string } | null)?.__layerId ?? null;
+          const clickedSlotId = slotIdOf(st0p.slots, clickedAttachmentId);
           if (
             isLayerSprite(ev.target)
             && st0p.selectedLayerId
+            && clickedSlotId === st0p.selectedLayerId
             && st0p.activeTool
             && st0p.editorMode !== 'create'
             && !st0p.attachingLayerId
           ) {
             ev.stopPropagation();
-            const layerId = st0p.selectedLayerId;
-            const lt = st0p.layerTransforms[layerId] ?? { tx: 0, ty: 0, rotation: 0, scaleX: 1, scaleY: 1, skewX: 0, skewY: 0 };
-            const all = allLayersOf(st0p.psd, st0p.images);
-            const layer = all.find((l) => l.id === layerId);
+            const slotId = st0p.selectedLayerId;
+            const lt = st0p.layerTransforms[slotId] ?? { tx: 0, ty: 0, rotation: 0, scaleX: 1, scaleY: 1, skewX: 0, skewY: 0 };
+            const slot = st0p.slots.find((s) => s.id === slotId) ?? null;
+            const layer = slot?.activeAttachmentId
+              ? allAttachmentsOf(st0p.psd, st0p.images).find((l) => l.id === slot.activeAttachmentId) ?? null
+              : null;
             if (layer) {
               // 锚点 = 图层中心（与绘制 / hover 一致）
               const { x: ax, y: ay } = layerAnchorScreen(layer, lt);
@@ -2331,7 +2385,7 @@ export function BoneEditor() {
               dragState = {
                 kind: 'layer-transform',
                 tool: st0p.activeTool,
-                layerId,
+                layerId: slotId,
                 start: lt,
                 startScreen: { x: ev.global.x, y: ev.global.y },
                 anchorScreen: { x: ax, y: ay },
@@ -2414,7 +2468,7 @@ export function BoneEditor() {
           center(s.psd);
         }
         drawGrid(s.psd);
-        drawHighlight(s.psd, s.images, s.selectedLayerIds);
+        drawHighlight(s.psd, s.images, s.slots, s.selectedLayerIds);
         drawBones(s.bones, s.selectedBoneId, s.selectedBoneIds);
         drawCrosshair(s.psd);
       };
@@ -2428,20 +2482,26 @@ export function BoneEditor() {
       });
 
       const initial = usePixiBonesStore.getState();
-      rebuildAssets(initial.psd, initial.images);
+      rebuildAssets(initial.psd, initial.images, initial.slots);
       center(initial.psd);
       drawGrid(initial.psd);
-      applyVisibility(initial.psd, initial.images, initial.layerVisibility);
-      drawHighlight(initial.psd, initial.images, initial.selectedLayerIds);
+      applyVisibility(initial.psd, initial.images, initial.slots, initial.layerVisibility);
+      drawHighlight(initial.psd, initial.images, initial.slots, initial.selectedLayerIds);
       buildSkeleton(initial.bones);
-      applyBindings(initial.psd, initial.images, initial.layerBindings, initial.layerTransforms);
+      applyBindings(initial.psd, initial.images, initial.slots, initial.layerBindings, initial.layerTransforms);
       drawBones(initial.bones, initial.selectedBoneId);
 
       let prev = usePixiBonesStore.getState();
       const unsub = usePixiBonesStore.subscribe((state) => {
         if (destroyed) return;
-        if (state.psd !== prev.psd || state.images !== prev.images || state.layerOrder !== prev.layerOrder) {
-          rebuildAssets(state.psd, state.images);
+        // 插槽结构（增删/切换激活附件/绘制顺序）变化 → 重建 sprite
+        if (
+          state.psd !== prev.psd
+          || state.images !== prev.images
+          || state.layerOrder !== prev.layerOrder
+          || state.slots !== prev.slots
+        ) {
+          rebuildAssets(state.psd, state.images, state.slots);
         }
         if (state.psd !== prev.psd) {
           // 新 PSD：重置视口（用户之前可能 zoom 过）
@@ -2501,11 +2561,11 @@ export function BoneEditor() {
             });
           }
         }
-        applyVisibility(state.psd, state.images, state.layerVisibility);
-        applyBindings(state.psd, state.images, state.layerBindings, state.layerTransforms);
-        drawHighlight(state.psd, state.images, state.selectedLayerIds);
+        applyVisibility(state.psd, state.images, state.slots, state.layerVisibility);
+        applyBindings(state.psd, state.images, state.slots, state.layerBindings, state.layerTransforms);
+        drawHighlight(state.psd, state.images, state.slots, state.selectedLayerIds);
         drawBones(state.bones, state.selectedBoneId, state.selectedBoneIds);
-        drawLayerHandles(state.psd, state.images, state.selectedLayerId, state.activeTool, state.layerTransforms);
+        drawLayerHandles(state.psd, state.images, state.slots, state.selectedLayerId, state.activeTool, state.layerTransforms);
         center(state.psd);
         drawGrid(state.psd);
         drawCrosshair(state.psd);
@@ -2527,7 +2587,7 @@ export function BoneEditor() {
           const s = usePixiBonesStore.getState();
           center(s.psd);
           drawGrid(s.psd);
-          drawHighlight(s.psd, s.images, s.selectedLayerIds);
+          drawHighlight(s.psd, s.images, s.slots, s.selectedLayerIds);
           drawBones(s.bones, s.selectedBoneId, s.selectedBoneIds);
         });
       });

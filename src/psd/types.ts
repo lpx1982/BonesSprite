@@ -29,3 +29,22 @@ export interface PixiBonesPsd {
   height: number;
   layers: PixiBonesLayer[];
 }
+
+/**
+ * 插槽（仿 Spine）。
+ *
+ * - 插槽是「附件的容器」，本身**没有位置、也不绘制**；绘制的是它当前激活的那个附件。
+ * - 一个插槽可持有多个附件，任意时刻只有一个可见（activeAttachmentId）。
+ * - 绘制顺序、显隐、绑定骨骼、slot 变换，都属于**插槽**（而不是附件）。
+ * - 导入时默认「1 个图层 = 1 个插槽，该图层作为它的第 1 个附件」。
+ *
+ * 数据不变式：每个可渲染的附件**恰好属于一个插槽**（attachmentIds 构成对全部附件的划分）。
+ */
+export interface PixiBonesSlot {
+  id: string;
+  name: string;
+  /** 持有的附件 id 列表（对应 PixiBonesLayer.id） */
+  attachmentIds: string[];
+  /** 当前显示的附件 id；null = 该插槽不显示任何附件 */
+  activeAttachmentId: string | null;
+}

@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import type { Skeleton } from '@engine/Skeleton';
 import type { Animation } from '@engine/Animation';
-import type { PixiBonesPsd, PixiBonesLayer } from '@psd/types';
+import type { PixiBonesPsd, PixiBonesLayer, PixiBonesSlot } from '@psd/types';
+import { flattenLayers } from '@psd/index';
 import type { Locale } from './i18n';
 
 export type ViewMode = 'editor' | 'demo';
@@ -51,12 +52,27 @@ export interface PixiBonesState {
   // ---- Day 2 ----
   psd: PixiBonesPsd | null;
   /** 单独导入的图片素材（PNG/JPG 等，非 PSD 图层）。
-   *  和 PSD 图层一起挂在层级树的「图片」节点下。 */
+   *  和 PSD 图层一起作为「附件」，挂在层级树的「图片」节点下。 */
   images: PixiBonesLayer[];
   addImage: (layer: PixiBonesLayer) => void;
   removeImage: (id: string) => void;
+  /**
+   * 插槽列表（仿 Spine）。导入时「1 图层 = 1 插槽，该图层作为第 1 个附件」。
+   *
+   * ★ 下面所有 layer* 字段（layerOrder / layerVisibility / layerTransforms /
+   *   layerBindings / selectedLayerId）的 key 都是 **slotId**，不是 attachmentId：
+   *   绘制顺序、显隐、变换、绑定骨骼都属于插槽（附件只是槽里的一张图）。
+   */
+  slots: PixiBonesSlot[];
+  /** 切换某插槽当前显示的附件（null = 不显示任何附件） */
+  setActiveAttachment: (slotId: string, attachmentId: string | null) => void;
+  /** 把一个已有附件移到目标插槽（从其原插槽移除；原插槽空了就删掉） */
+  addAttachmentToSlot: (slotId: string, attachmentId: string) => void;
+  /** 把附件从插槽里移出，放回一个以它命名的独立插槽 */
+  detachAttachment: (slotId: string, attachmentId: string) => void;
+  /** 插槽可见性（key = slotId） */
   layerVisibility: Record<string, boolean>;
-  /** 仿 Spine SlotTransform：每个图层（slot）自己的局部变换。
+  /** 仿 Spine SlotTransform：每个插槽自己的局部变换（key = slotId）。
    *  - rotation：弧度
    *  - scaleX/scaleY：缩放
    *  - skewX/skewY：倾斜（弧度）
@@ -65,19 +81,21 @@ export interface PixiBonesState {
   layerTransforms: Record<string, { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }>;
   setLayerTransform: (id: string, t: { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }) => void;
   resetLayerTransform: (id: string) => void;
-  /** 绘制顺序（layerId 列表，索引 0 = 最先绘制 = 最底层）。
-   *  空数组 = 用自然顺序（PSD 图层 + 单独导入图片的原始顺序）。 */
+  /** 绘制顺序（slotId 列表，索引 0 = 最先绘制 = 最底层）。
+   *  空数组 = 用自然顺序。 */
   layerOrder: string[];
   /** 设置整份绘制顺序（在「绘制顺序」分区里拖拽排序后写入） */
   setLayerOrder: (ids: string[]) => void;
-  /** 单选兼容字段：= selectedLayerIds[0]。见 selectedLayerIds 注释。 */
+  /** 单选兼容字段：= selectedLayerIds[0]。**key = slotId** */
   selectedLayerId: string | null;
-  /** 多选素材（画布框选 / Shift 加选）。
+  /** 多选插槽（画布框选 / Shift 加选）。**key = slotId**
    *  - 单选：selectedLayerIds = [id]，selectedLayerId = id
    *  - 多选：selectedLayerIds = [a,b,c]，selectedLayerId = 第一个（兼容旧代码）
    */
   selectedLayerIds: string[];
-  /** 多选素材。additive=true 增量追加，false 替换 */
+  /** 按**附件 id** 反查它所属的插槽 id（找不到返回 null） */
+  slotIdOfAttachment: (attachmentId: string | null) => string | null;
+  /** 多选插槽。additive=true 增量追加，false 替换 */
   selectLayers: (ids: string[], additive?: boolean) => void;
   /** 只设置「目标素材」，**不改变骨骼选中**。
    *  创建模式下 ⌘ 点击素材用它 —— 这样父骨骼链不会断（新骨仍是当前骨骼的子骨）。 */
@@ -260,6 +278,47 @@ function findLayer(psd: PixiBonesPsd | null, id: string): PixiBonesLayer | null 
 
 export { findLayer };
 
+// =================================================================================
+//  插槽（slot）工具
+// =================================================================================
+
+/** 插槽 id 自增（一次会话内稳定）。 */
+let _slotIdCounter = 0;
+function genSlotId(): string {
+  _slotIdCounter++;
+  return `slot_${_slotIdCounter}`;
+}
+
+/** 判断一个图层是否是「可渲染的附件」（有画布且尺寸非 0）。 */
+export function isRenderableAttachment(layer: PixiBonesLayer): boolean {
+  return !!layer.canvas && layer.width > 0 && layer.height > 0;
+}
+
+/** 解析出全部附件（PSD 图层 + 单独导入的图片），只保留可渲染的。 */
+export function attachmentLayers(psd: PixiBonesPsd | null, images: PixiBonesLayer[]): PixiBonesLayer[] {
+  return [...(psd ? flattenLayers(psd) : []), ...images].filter(isRenderableAttachment);
+}
+
+/**
+ * 为一批附件生成「1 图层 = 1 插槽」的初始插槽列表（导入时用）。
+ * 每个插槽只持有 1 个附件，且该附件默认激活。
+ */
+export function slotsFromAttachments(layers: PixiBonesLayer[]): PixiBonesSlot[] {
+  return layers.filter(isRenderableAttachment).map((l) => ({
+    id: genSlotId(),
+    name: l.name,
+    attachmentIds: [l.id],
+    activeAttachmentId: l.id,
+  }));
+}
+
+/** 按附件 id 反查所属插槽 id。 */
+export function slotIdOf(slots: PixiBonesSlot[], attachmentId: string | null): string | null {
+  if (!attachmentId) return null;
+  for (const s of slots) if (s.attachmentIds.includes(attachmentId)) return s.id;
+  return null;
+}
+
 export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   skeleton: null,
   hoveredBoneId: null,
@@ -270,6 +329,60 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
 
   psd: null,
   images: [],
+  slots: [],
+  setActiveAttachment: (slotId, attachmentId) => set((state) => ({
+    slots: state.slots.map((s) =>
+      s.id === slotId && s.attachmentIds.includes(attachmentId ?? '')
+        ? { ...s, activeAttachmentId: attachmentId }
+        : s,
+    ),
+  })),
+  // 把已有附件移入目标插槽（从其原插槽移除；原插槽空了就删掉）
+  addAttachmentToSlot: (slotId, attachmentId) => set((state) => {
+    if (!state.slots.some((s) => s.id === slotId)) return state;
+    // 1) 先从所有插槽里移除该附件
+    const stripped = state.slots.map((s) =>
+      s.attachmentIds.includes(attachmentId)
+        ? { ...s, attachmentIds: s.attachmentIds.filter((id) => id !== attachmentId) }
+        : s,
+    );
+    // 2) 放进目标插槽，并设为当前显示
+    const slots = stripped
+      .map((s) => s.id === slotId
+        ? { ...s, attachmentIds: [...s.attachmentIds, attachmentId], activeAttachmentId: attachmentId }
+        : s)
+      // 3) 清掉变空的插槽 + 修正 activeAttachmentId 指向已移走的附件的情况
+      .filter((s) => s.attachmentIds.length > 0)
+      .map((s) => (s.activeAttachmentId && s.attachmentIds.includes(s.activeAttachmentId))
+        ? s
+        : { ...s, activeAttachmentId: s.attachmentIds[0] ?? null });
+    return { slots };
+  }),
+  // 把附件移出，放回一个以它命名的独立插槽
+  detachAttachment: (slotId, attachmentId) => set((state) => {
+    const src = state.slots.find((s) => s.id === slotId);
+    if (!src || !src.attachmentIds.includes(attachmentId)) return state;
+    // 从原插槽移除
+    let slots = state.slots.map((s) => s.id === slotId
+      ? { ...s, attachmentIds: s.attachmentIds.filter((id) => id !== attachmentId) }
+      : s);
+    // 原插槽空了 → 删除
+    slots = slots.filter((s) => s.attachmentIds.length > 0);
+    // 修正 activeAttachmentId
+    slots = slots.map((s) => (s.activeAttachmentId && s.attachmentIds.includes(s.activeAttachmentId))
+      ? s
+      : { ...s, activeAttachmentId: s.attachmentIds[0] ?? null });
+    // 新建独立插槽（用附件名）
+    const layer = attachmentLayers(state.psd, state.images).find((l) => l.id === attachmentId) ?? null;
+    slots = [...slots, {
+      id: genSlotId(),
+      name: layer?.name ?? 'attachment',
+      attachmentIds: [attachmentId],
+      activeAttachmentId: attachmentId,
+    }];
+    return { slots };
+  }),
+  slotIdOfAttachment: (attachmentId) => slotIdOf(get().slots, attachmentId),
   layerVisibility: {},
   layerTransforms: {},
   setLayerTransform: (id, t) => set((state) => ({
@@ -446,8 +559,11 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     // 切 / 导入 PSD 时骨全清，但必须重建一根根骨骼：
     //   - 没有根骨时「创建模式」找不到父骨骼，会导致新建子骨骼直接失败
     const rootId = p ? genBoneId() : null;
+    // ★ 为每个可渲染图层建一个同名插槽（1 图层 = 1 插槽）
+    const slots = p ? slotsFromAttachments(flattenLayers(p)) : [];
     set({
       psd: p,
+      slots,
       layerVisibility: {},
       layerTransforms: {},
       layerOrder: [],
@@ -472,18 +588,18 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       layerBindings: {},   // 新 PSD：清空所有绑定
     });
   },
-  bindLayer: (layerId, binding) =>
+  bindLayer: (slotId, binding) =>
     set((state) => {
-      // 仿 Spine：绑定后该骨骼成为「图层插槽的父级」，并以图层名重命名
-      const layer = findLayer(state.psd, layerId) ?? state.images.find((l) => l.id === layerId) ?? null;
-      const bones = layer
+      // 仿 Spine：绑定后该骨骼成为「插槽的父级」，并以插槽名重命名
+      const slot = state.slots.find((s) => s.id === slotId) ?? null;
+      const bones = slot
         ? state.bones.map((b) =>
-            b.id === binding.boneId && b.name !== layer.name ? { ...b, name: layer.name } : b,
+            b.id === binding.boneId && b.name !== slot.name ? { ...b, name: slot.name } : b,
           )
         : state.bones;
       return {
         bones,
-        layerBindings: { ...state.layerBindings, [layerId]: binding },
+        layerBindings: { ...state.layerBindings, [slotId]: binding },
         attachingLayerId: null,   // 绑定完成即退出拾取模式
       };
     }),
@@ -493,39 +609,63 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       delete next[layerId];
       return { layerBindings: next };
     }),
-  // 单独导入的图片素材（PNG/JPG）：追加到 images，默认可见
+  // 单独导入的图片素材（PNG/JPG）：追加到 images，并建一个同名插槽
   addImage: (layer) =>
-    set((state) => ({
-      images: [...state.images, layer],
-      layerVisibility: { ...state.layerVisibility, [layer.id]: true },
-      selectedLayerId: layer.id,
-      selectedLayerIds: [layer.id],
-      selectedBoneId: null,
-      selectedSectionKey: null,
-      attachingLayerId: null,
-    })),
-  removeImage: (id) =>
     set((state) => {
-      const nextTransforms = { ...state.layerTransforms };
-      delete nextTransforms[id];
+      const slot: PixiBonesSlot = {
+        id: genSlotId(),
+        name: layer.name,
+        attachmentIds: [layer.id],
+        activeAttachmentId: layer.id,
+      };
       return {
-        images: state.images.filter((l) => l.id !== id),
-        selectedLayerId: state.selectedLayerId === id ? null : state.selectedLayerId,
-        selectedLayerIds: state.selectedLayerIds.filter((lid) => lid !== id),
-        layerBindings: Object.fromEntries(
-          Object.entries(state.layerBindings).filter(([k]) => k !== id),
-        ),
-        layerTransforms: nextTransforms,
+        images: [...state.images, layer],
+        slots: [...state.slots, slot],
+        layerVisibility: { ...state.layerVisibility, [slot.id]: true },
+        // 选中新建的插槽
+        selectedLayerId: slot.id,
+        selectedLayerIds: [slot.id],
+        selectedBoneId: null,
+        selectedSectionKey: null,
+        attachingLayerId: null,
       };
     }),
-  toggleLayerVisibility: (id) =>
+  removeImage: (id) =>
     set((state) => {
-      const cur = state.layerVisibility[id];
-      // 素材可能来自 PSD 图层，也可能是单独导入的图片
-      const src = findLayer(state.psd, id) ?? state.images.find((l) => l.id === id) ?? null;
-      const effective = cur ?? src?.visible ?? true;
-      return { layerVisibility: { ...state.layerVisibility, [id]: !effective } };
+      // 该附件所属插槽：把附件从插槽里移除（插槽空了就删掉整条插槽 + 它的绑定/变换/显隐）
+      const ownerSlots = state.slots.filter((s) => s.attachmentIds.includes(id));
+      const ownerIds = new Set(ownerSlots.map((s) => s.id));
+      const slots = state.slots
+        .map((s) => s.attachmentIds.includes(id)
+          ? { ...s, attachmentIds: s.attachmentIds.filter((a) => a !== id) }
+          : s)
+        .filter((s) => s.attachmentIds.length > 0)
+        .map((s) => (s.activeAttachmentId && s.attachmentIds.includes(s.activeAttachmentId))
+          ? s
+          : { ...s, activeAttachmentId: s.attachmentIds[0] ?? null });
+      // 被删掉的空插槽：连带清掉它的绑定 / 变换 / 显隐
+      const deadSlots = new Set(
+        [...ownerIds].filter((sid) => !slots.some((s) => s.id === sid)),
+      );
+      const dropKeys = <T,>(rec: Record<string, T>) =>
+        Object.fromEntries(Object.entries(rec).filter(([k]) => !deadSlots.has(k)));
+      const selDead = state.selectedLayerId !== null && deadSlots.has(state.selectedLayerId);
+      return {
+        images: state.images.filter((l) => l.id !== id),
+        slots,
+        selectedLayerId: selDead ? null : state.selectedLayerId,
+        selectedLayerIds: selDead ? [] : state.selectedLayerIds.filter((sid) => !deadSlots.has(sid)),
+        layerBindings: dropKeys(state.layerBindings),
+        layerTransforms: dropKeys(state.layerTransforms),
+        layerVisibility: dropKeys(state.layerVisibility),
+        layerOrder: state.layerOrder.filter((sid) => !deadSlots.has(sid)),
+      };
     }),
+  // 插槽显隐（key = slotId）
+  toggleLayerVisibility: (slotId) =>
+    set((state) => ({
+      layerVisibility: { ...state.layerVisibility, [slotId]: !(state.layerVisibility[slotId] ?? true) },
+    })),
   selectLayer: (id) => set({
     selectedLayerId: id,
     selectedLayerIds: id ? [id] : [],
@@ -717,16 +857,16 @@ setActiveTool: (t) => set((s) => ({
 export { findBone, collectDescendants };
 
 /**
- * 按「绘制顺序」重排素材。
+ * 按 `order`（一串 id）重排任意带 `id` 的对象数组。
  *   - 在 order 里的按 order 的位置排；
  *   - 不在 order 里的（新导入的）按原始相对顺序跟在最后。
  * order 为空时原样返回。
  */
-export function orderLayers(layers: PixiBonesLayer[], order: string[]): PixiBonesLayer[] {
-  if (order.length === 0) return layers;
+export function orderLayers<T extends { id: string }>(items: T[], order: string[]): T[] {
+  if (order.length === 0) return items;
   const pos = new Map(order.map((id, i) => [id, i]));
   const n = order.length;
-  return layers
+  return items
     .map((l, i) => ({ l, k: pos.has(l.id) ? pos.get(l.id)! : n + i }))
     .sort((a, b) => a.k - b.k)
     .map((x) => x.l);
