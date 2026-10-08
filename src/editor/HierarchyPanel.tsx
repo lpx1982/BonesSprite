@@ -1,7 +1,11 @@
 import { useMemo, useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, type BoneNode, type SlotBinding } from './store';
 import { type PixiBonesLayer, type PixiBonesSlot } from '@psd/index';
 import { importAssetFile } from './importAsset';
+
+/** 附件大预览悬停延迟（ms）。2 秒 = Spine 行为。 */
+const HOVER_PREVIEW_DELAY = 2000;
 
 /**
  * 层级树面板（Spine 风格 · setup 模式）
@@ -127,6 +131,38 @@ export function HierarchyPanel() {
   const importInputRef = useRef<HTMLInputElement>(null);
   // 刷新（清缩略图缓存后强制重渲染）
   const [, setRefreshTick] = useState(0);
+  // ===== 大预览（hover 附件图标 2s 后弹出该素材的大图） =====
+  const [preview, setPreview] = useState<{ url: string; layerId: string; x: number; y: number } | null>(null);
+  const previewTimerRef = useRef<number | null>(null);
+  /** 清除预览定时器与预览态（hover 中断时） */
+  const clearPreview = () => {
+    if (previewTimerRef.current !== null) {
+      clearTimeout(previewTimerRef.current);
+      previewTimerRef.current = null;
+    }
+    setPreview(null);
+  };
+  useEffect(() => () => {
+    if (previewTimerRef.current !== null) clearTimeout(previewTimerRef.current);
+  }, []);
+  /** 鼠标进入附件行：延迟后弹出大图。layer 是被 hover 的素材（attachment）。 */
+  const onAssetHoverEnter = (layer: PixiBonesLayer, clientX: number, clientY: number) => {
+    if (previewTimerRef.current !== null) {
+      clearTimeout(previewTimerRef.current);
+      previewTimerRef.current = null;
+    }
+    previewTimerRef.current = window.setTimeout(() => {
+      const url = attachmentThumb(layer);
+      if (url) setPreview({ url, layerId: layer.id, x: clientX, y: clientY });
+      previewTimerRef.current = null;
+    }, HOVER_PREVIEW_DELAY);
+  };
+  /** 鼠标在附件行内移动：刷新弹出位置（仍保留当前预览）。 */
+  const onAssetHoverMove = (clientX: number, clientY: number) => {
+    setPreview((p) => (p ? { ...p, x: clientX, y: clientY } : p));
+  };
+  /** 鼠标离开附件行：取消或清掉预览。 */
+  const onAssetHoverLeave = () => clearPreview();
 
   /** 导入素材（.psd → 整个 PSD；图片 → 追加到 images） */
   const onImportFiles = async (files: FileList | null) => {
@@ -676,6 +712,9 @@ export function HierarchyPanel() {
                       onImport={r.kind === 'section' && r.key === 'section:images'
                         ? () => importInputRef.current?.click()
                         : undefined}
+                      onAssetHoverEnter={onAssetHoverEnter}
+                      onAssetHoverMove={onAssetHoverMove}
+                      onAssetHoverLeave={onAssetHoverLeave}
                     />
                     );
                   })}
@@ -742,6 +781,45 @@ export function HierarchyPanel() {
           C={C}
         />
       ) : null}
+
+      {/* ===== 大预览浮层：hover 附件图标 2s 后弹出（仿 Spine） =====
+            用 createPortal 渲染到 body，避开 <aside> 的 overflow/transform 影响。 */}
+      {preview && createPortal(
+        <div
+          style={{
+            position: 'fixed',
+            left: Math.min(preview.x + 18, (typeof window !== 'undefined' ? window.innerWidth : 1280) - 360),
+            top: Math.min(preview.y + 18, (typeof window !== 'undefined' ? window.innerHeight : 720) - 320),
+            zIndex: 9999,
+            pointerEvents: 'none',
+            padding: 8,
+            background: '#2D2D30',
+            border: '1px solid #3F3F46',
+            borderRadius: 4,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+          }}
+        >
+          <img
+            src={preview.url}
+            alt=""
+            draggable={false}
+            style={{
+              maxWidth: 320,
+              maxHeight: 320,
+              display: 'block',
+              backgroundImage:
+                'linear-gradient(45deg, #3A3A3D 25%, transparent 25%),' +
+                'linear-gradient(-45deg, #3A3A3D 25%, transparent 25%),' +
+                'linear-gradient(45deg, transparent 75%, #3A3A3D 75%),' +
+                'linear-gradient(-45deg, transparent 75%, #3A3A3D 75%)',
+              backgroundSize: '16px 16px',
+              backgroundPosition: '0 0, 0 8px, 8px -8px, -8px 0px',
+              backgroundColor: '#2A2A2D',
+            }}
+          />
+        </div>,
+        document.body,
+      )}
     </aside>
   );
 }
@@ -837,6 +915,10 @@ interface TreeRowViewProps {
     onDrop: () => void;
     onDragEnd: () => void;
   };
+  /** 附件图标 hover 大预览（仿 Spine：停留 2s 弹出大图） */
+  onAssetHoverEnter?: (layer: PixiBonesLayer, clientX: number, clientY: number) => void;
+  onAssetHoverMove?: (clientX: number, clientY: number) => void;
+  onAssetHoverLeave?: () => void;
 }
 
 function TreeRowView(props: TreeRowViewProps) {
@@ -844,6 +926,7 @@ function TreeRowView(props: TreeRowViewProps) {
     row, selectedBoneId, onSelect, onAddChild, collapsed, onToggleCollapse, search, C,
     selectedSlotIds, onSelectSlot, onActivateAttachment, selectedSectionKey, onSelectSection,
     slotBindings, boneNameById, onImport, dnd,
+    onAssetHoverEnter, onAssetHoverMove, onAssetHoverLeave,
   } = props;
   const isBone = row.kind === 'bone';
   /** 附件行（🖼） */
@@ -909,8 +992,17 @@ function TreeRowView(props: TreeRowViewProps) {
         boxShadow: dnd?.isDropTarget ? `inset 0 2px 0 ${C.accent}` : undefined,
       }}
       title={dnd ? '拖拽调整绘制顺序' : undefined}
-      onMouseEnter={(e) => { if (!isSelected && clickable) e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; }}
-      onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = 'transparent'; }}
+      onMouseEnter={(e) => {
+        if (!isSelected && clickable) e.currentTarget.style.background = 'rgba(255,255,255,0.06)';
+        if (isAsset && asset && onAssetHoverEnter) onAssetHoverEnter(asset, e.clientX, e.clientY);
+      }}
+      onMouseMove={(e) => {
+        if (isAsset && asset && onAssetHoverMove) onAssetHoverMove(e.clientX, e.clientY);
+      }}
+      onMouseLeave={(e) => {
+        if (!isSelected) e.currentTarget.style.background = 'transparent';
+        if (isAsset && onAssetHoverLeave) onAssetHoverLeave();
+      }}
       onClick={() => {
         if (isBone && node) onSelect(node.id);
         else if (isSection && sectionKey !== null) onSelectSection(sectionKey);
