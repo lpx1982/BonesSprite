@@ -232,6 +232,13 @@ export interface PixiBonesState {
   viewIssues:         boolean; toggleViewIssues:         () => void;
   viewPreview:        boolean; toggleViewPreview:        () => void;
   viewAllHidden:      boolean; setViewAllHidden:         (v: boolean) => void;
+  /**
+   * 右侧停靠区里「视图面板」的**首次出现顺序**（仿 Spine 停靠规则）：
+   * 越早出现的越靠右，后出现的依次往左排。
+   * key 与视图菜单一致：'hierarchy'（层级树）/ 'grid_tool'（网格工具）。
+   * 关闭面板不会把它从数组里移除 → 重新打开时回到原来的位置。
+   */
+  viewDockOrder: string[];
   editorMode: 'idle' | 'pose' | 'weights' | 'create';
   transformSpace: 'local' | 'world';
   /** 工具栏上「旋转 / 移动 / 缩放 / 倾斜」四张卡片的当前激活工具 */
@@ -634,15 +641,23 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   // 视图菜单 11 项默认值（false=关闭）
   viewWeights:     false, toggleViewWeights:     () => set((s) => ({ viewWeights:    !s.viewWeights })),
   viewSkin:        false, toggleViewSkin:        () => set((s) => ({ viewSkin:       !s.viewSkin })),
-  viewGridTool:    false, toggleViewGridTool:    () => set((s) => ({ viewGridTool:   !s.viewGridTool })),
+  viewGridTool:    false, toggleViewGridTool:    () => set((s) => {
+    const on = !s.viewGridTool;
+    // 首次打开时登记停靠顺序（越早出现的越靠右）
+    return { viewGridTool: on, ...(on && !s.viewDockOrder.includes('grid_tool') ? { viewDockOrder: [...s.viewDockOrder, 'grid_tool'] } : {}) };
+  }),
   viewColor:       false, toggleViewColor:       () => set((s) => ({ viewColor:      !s.viewColor })),
   viewAnimation:   false, toggleViewAnimation:   () => set((s) => ({ viewAnimation:  !s.viewAnimation })),
-  viewHierarchy:   false, toggleViewHierarchy:   () => set((s) => ({ viewHierarchy:  !s.viewHierarchy })),
+  viewHierarchy:   false, toggleViewHierarchy:   () => set((s) => {
+    const on = !s.viewHierarchy;
+    return { viewHierarchy: on, ...(on && !s.viewDockOrder.includes('hierarchy') ? { viewDockOrder: [...s.viewDockOrder, 'hierarchy'] } : {}) };
+  }),
   viewIndicators:  false, toggleViewIndicators:  () => set((s) => ({ viewIndicators: !s.viewIndicators })),
   viewOutline:     false, toggleViewOutline:     () => set((s) => ({ viewOutline:    !s.viewOutline })),
   viewIssues:      false, toggleViewIssues:      () => set((s) => ({ viewIssues:     !s.viewIssues })),
   viewPreview:     false, toggleViewPreview:     () => set((s) => ({ viewPreview:    !s.viewPreview })),
   viewAllHidden:   false, setViewAllHidden:      (v) => set({ viewAllHidden: v }),
+  viewDockOrder: [],
   fitRequestId: 0,
   editorMode: 'idle',
     transformSpace: 'local',

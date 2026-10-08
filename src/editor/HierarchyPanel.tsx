@@ -534,13 +534,14 @@ export function HierarchyPanel() {
 
   return (
     <aside
-      className="w-72 flex flex-col overflow-hidden text-sm hierarchy-pop-enter"
+      className="w-72 flex flex-col overflow-hidden text-sm hierarchy-pop-enter shrink-0"
       style={{
         background: C.panel, color: C.text,
         borderLeft: '1px solid ' + C.border,
         transformOrigin: 'top right',
-        // ★ 浮在画布右侧，不参与 flex 布局（避免挤压画布宽度）
-        position: 'absolute', top: 0, right: 0, bottom: 0, zIndex: 10,
+        // ★ 作为「右侧停靠区」的一个面板参与横向排列（停靠区自身浮在画布右侧，
+        //   所以不会挤压画布宽度）。
+        position: 'relative',
       }}
     >
       {/* ============ 顶部：标题 + 折叠按钮 ============ */}

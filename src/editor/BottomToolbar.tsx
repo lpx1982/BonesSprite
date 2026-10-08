@@ -95,6 +95,9 @@ export function BottomToolbar() {
   const toolbarOffsetX = usePixiBonesStore((s) => s.toolbarOffsetX);
   const setToolbarOffsetX = usePixiBonesStore((s) => s.setToolbarOffsetX);
   const showRightPanel = usePixiBonesStore((s) => s.showRightPanel);
+  const viewGridTool = usePixiBonesStore((s) => s.viewGridTool);
+  // 右侧停靠区总宽度（层级树 288 + 网格工具 300），卡片组让出这么多，避免被面板压住
+  const dockWidth = (showRightPanel ? 288 : 0) + (viewGridTool ? 300 : 0);
   /** 网格编辑模式：底部卡片组向下渐隐让位给「编辑网格」浮动面板 */
   const meshEditSlotId = usePixiBonesStore((s) => s.meshEditSlotId);
   const toolbarHidden = !!meshEditSlotId;
@@ -175,8 +178,8 @@ export function BottomToolbar() {
         // 动画 tab 时贴在时间轴（store.timelineHeight）上方 + 12px 间距
         // 装配 tab 时正常贴底 12px
         bottom: editorTab === 'animate' ? timelineHeight + 12 : 12,
-        // 右侧层级树面板打开时，把 right 也让出来，卡片组就不会跟右面板重叠
-        right: showRightPanel ? 288 /* 18rem = w-72 = 288px */ + 12 : 0,
+        // 右侧停靠区（层级树 / 网格工具…）打开时让出宽度，卡片组就不会被面板压住
+        right: dockWidth > 0 ? dockWidth + 12 : 0,
         // 网格编辑时向下渐隐（让位给底部中央的「编辑网格」浮动面板）
         transform: toolbarHidden ? 'translateY(110px)' : 'translateY(0)',
         opacity: toolbarHidden ? 0 : 1,
