@@ -818,7 +818,7 @@ const TDIALOG = {
   PAD_H: 14,
   PAD_V: 10,
   FIELD_W: 150,        // 常规「名称 + 数值」框宽
-  FIELD_W_LONG: 170,   // Alpha阈值（名字长）
+  FIELD_W_LONG: 150,   // Alpha阈值（名字长）
   FIELD_W_SHORT: 96,   // 填充
   SLIDER_S: 92,        // 填充那根短滑条
   BG: '#303032',
