@@ -564,6 +564,11 @@ export function BoneEditor() {
         attachmentStyle: Record<string, { color: string; blend: string }>,
       ) => {
         const byId = new Map(allAttachmentsOf(psd, images).map((l) => [l.id, l]));
+        // 网格编辑模式：正在编辑的插槽用「网格工具」的指针
+        //   （修改=移动 / 创建=箭头+「+」/ 删除=箭头+「-」，仿 Spine）
+        const st = usePixiBonesStore.getState();
+        const editingId = st.meshEditSlotId;
+        const editCursor = editingId ? meshToolCursor(st.meshTool) : 'pointer';
         for (const slot of slots) {
           const wrap = viewBySlotId.get(slot.id);
           const view = wrap?.children[0] as AttachView | undefined;
@@ -574,6 +579,8 @@ export function BoneEditor() {
           view.tint = composeTint(attachmentStyle[layer.id]?.color, slotStyle[slot.id]?.color);
           const blend = attachmentStyle[layer.id]?.blend || slotStyle[slot.id]?.blend || layer.blendMode;
           (view as unknown as { blendMode: string }).blendMode = blend || 'normal';
+          const wantCursor = slot.id === editingId ? editCursor : 'pointer';
+          if (view.cursor !== wantCursor) view.cursor = wantCursor;
         }
       };
 
@@ -3322,11 +3329,27 @@ export function BoneEditor() {
       };
       a.canvas.addEventListener('wheel', wheelHandler, { passive: false });
 
+      /**
+       * 网格编辑：**右键轮转工具** —— 修改 → 创建 → 删除 → 修改 …（仿 Spine）。
+       * 只在网格编辑状态下接管右键（其它时候保留浏览器默认右键菜单）。
+       */
+      const meshToolOrder: Array<'modify' | 'create' | 'delete'> = ['modify', 'create', 'delete'];
+      const onCanvasContextMenu = (e: MouseEvent) => {
+        const st = usePixiBonesStore.getState();
+        if (!st.meshEditSlotId) return;   // 非网格编辑 → 不拦截
+        e.preventDefault();
+        const next = meshToolOrder[(meshToolOrder.indexOf(st.meshTool) + 1) % meshToolOrder.length];
+        st.setMeshTool(next);
+        drawMeshHandles();
+      };
+      a.canvas.addEventListener('contextmenu', onCanvasContextMenu);
+
       cleanups.push(() => {
         a.stage.off('pointermove', onPointerMove);
         a.stage.off('pointerup', onPointerUp);
         a.stage.off('pointerupoutside', onPointerUp);
         a.canvas.removeEventListener('wheel', wheelHandler);
+        a.canvas.removeEventListener('contextmenu', onCanvasContextMenu);
       });
 
       const initial = usePixiBonesStore.getState();
@@ -3592,6 +3615,61 @@ function drawDashedRect(
   seg(x + w, y + h, x, y + h);
   seg(x, y + h, x, y);
   g.stroke({ width, color });
+}
+
+/**
+ * 网格编辑三种工具的鼠标指针（仿 Spine）：
+ *   修改 → 系统「移动」指针；创建 → 箭头 + 右侧「+」；删除 → 箭头 + 右侧「-」。
+ * ★ 浏览器没有「箭头 + 减号」这种光标，所以用离屏 canvas 画一个箭头加角标，
+ *   再转成 PNG data URI 当 cursor（比 SVG cursor 的浏览器兼容性稳）。
+ * 结果缓存（每种只画一次）。
+ */
+const _meshCursorCache: Partial<Record<'create' | 'delete', string>> = {};
+
+function buildArrowCursor(badge: '+' | '-' | null): string {
+  const c = document.createElement('canvas');
+  c.width = 32;
+  c.height = 32;
+  const g = c.getContext('2d');
+  if (!g) return 'auto';
+  // 经典箭头指针轮廓
+  g.beginPath();
+  g.moveTo(1, 1);
+  g.lineTo(1, 17);
+  g.lineTo(5.6, 12.4);
+  g.lineTo(8.8, 19.6);
+  g.lineTo(11.6, 18.3);
+  g.lineTo(8.4, 11.2);
+  g.lineTo(13.4, 11.2);
+  g.closePath();
+  g.lineJoin = 'round';
+  g.lineWidth = 1.6;
+  g.fillStyle = '#ffffff';
+  g.strokeStyle = '#1a1a1a';
+  g.fill();
+  g.stroke();
+  if (badge) {
+    g.font = 'bold 15px -apple-system, Helvetica, Arial, sans-serif';
+    g.textAlign = 'left';
+    g.textBaseline = 'alphabetic';
+    g.lineJoin = 'round';
+    g.lineWidth = 3.5;
+    g.strokeStyle = '#ffffff';
+    g.strokeText(badge, 15, 24);
+    g.fillStyle = '#1a1a1a';
+    g.fillText(badge, 15, 24);
+  }
+  return `url(${c.toDataURL('image/png')}) 1 1, auto`;
+}
+
+/** 取某个网格工具的 CSS cursor 值。 */
+function meshToolCursor(tool: 'modify' | 'create' | 'delete'): string {
+  if (tool === 'modify') return 'move';           // 系统「移动」指针
+  const hit = _meshCursorCache[tool];
+  if (hit) return hit;
+  const cur = buildArrowCursor(tool === 'create' ? '+' : '-');
+  _meshCursorCache[tool] = cur;
+  return cur;
 }
 
 /** 点是否落在三角形内（重心坐标法，边界算命中）。 */
