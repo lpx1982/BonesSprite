@@ -137,7 +137,7 @@ export interface PixiBonesState {
   /** 网格编辑：变暗（占位，暂无渲染效果） */
   meshDim: boolean;
   setMeshDim: (v: boolean) => void;
-  /** 网格编辑：隔离（占位，暂无渲染效果） */
+  /** 网格编辑：隔离（勾选后画布只显示正在编辑的那个插槽的图） */
   meshIsolate: boolean;
   setMeshIsolate: (v: boolean) => void;
   /** 线框：勾选后即使未选中该网格，也画出它的顶点和边（key = attachmentId） */

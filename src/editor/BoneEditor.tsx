@@ -444,9 +444,16 @@ export function BoneEditor() {
         overrides: Record<string, boolean>,
       ) => {
         const byId = new Map(allAttachmentsOf(psd, images).map((l) => [l.id, l]));
+        const st = usePixiBonesStore.getState();
+        // 网格「隔离」：只显示正在编辑的那个插槽，其余全部隐藏
+        const isolateId = st.meshIsolate ? st.meshEditSlotId : null;
         for (const slot of slots) {
           const wrap = viewBySlotId.get(slot.id);
           if (!wrap) continue;
+          if (isolateId && slot.id !== isolateId) {
+            wrap.visible = false;
+            continue;
+          }
           const active = slot.activeAttachmentId ? byId.get(slot.activeAttachmentId) ?? null : null;
           wrap.visible = overrides[slot.id] ?? active?.visible ?? true;
         }
@@ -720,8 +727,11 @@ export function BoneEditor() {
         const byId = new Map(allAttachmentsOf(s.psd, s.images).map((l) => [l.id, l]));
         const selected = new Set(s.meshSelectedVertices);
         const editSlotId = s.meshEditSlotId;
+        // 网格「隔离」：只画正在编辑的插槽的顶点 / 边
+        const isolateId = s.meshIsolate ? s.meshEditSlotId : null;
 
         for (const slot of s.slots) {
+          if (isolateId && slot.id !== isolateId) continue;
           const aid = slot.activeAttachmentId;
           if (!aid) continue;
           const mesh = s.attachmentMeshes[aid];
@@ -863,9 +873,12 @@ export function BoneEditor() {
        *  ★ 网格附件用**三角形精确命中**（变形后依然准）；区域附件仍是矩形 bbox。 */
       const topSlotAt = (gx: number, gy: number): string | null => {
         const s = usePixiBonesStore.getState();
+        // 网格「隔离」：只有正在编辑的插槽可被命中
+        const isolateId = s.meshIsolate ? s.meshEditSlotId : null;
         const items = renderablesOf(s.psd, s.images, s.slots);
         for (let i = items.length - 1; i >= 0; i--) {
           const { slot, layer: l } = items[i];
+          if (isolateId && slot.id !== isolateId) continue;
           if (s.slotVisibility[slot.id] === false) continue;
           if (l.width === 0 || l.height === 0) continue;
           const mesh = s.attachmentMeshes[l.id];
