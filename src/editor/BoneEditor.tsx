@@ -722,6 +722,44 @@ export function BoneEditor() {
         return out;
       };
 
+      /**
+       * 网格顶点 → 屏幕坐标数组（**考虑蒙皮**）。
+       *  - 有骨骼绑定时：顶点 = (left,top) + bindPose + Σ w_j·(bone_now - bone_bind)，再转屏幕；
+       *    这样拖动骨骼后，画布上的顶点手柄也会跟着变形后的位置走。
+       *  - 无骨骼绑定时：直接退回 meshVerticesScreen（顶点 = mesh.vertices）。
+       */
+      const skinnedVerticesScreen = (slotId: string, layer: PixiBonesLayer, mesh: MeshData) => {
+        const bones = mesh.bones;
+        const weights = mesh.weights;
+        const bindPose = mesh.bindPose;
+        if (!bones || bones.length === 0 || !weights || !bindPose) {
+          return meshVerticesScreen(slotId, layer, mesh);
+        }
+        const boneBindWorld = mesh.boneBindWorld ?? [];
+        const nb = bones.length;
+        const n = Math.floor(bindPose.length / 2);
+        const out: Array<{ x: number; y: number }> = new Array(n);
+        for (let i = 0; i < n; i++) {
+          // v_root = (left,top) + bindPose + Σ w_j·(bone_now - bone_bind)
+          let vx = layer.left + bindPose[i * 2];
+          let vy = layer.top + bindPose[i * 2 + 1];
+          const row = i * nb;
+          for (let j = 0; j < nb; j++) {
+            const w = weights[row + j];
+            if (w === 0) continue;
+            const bn = skeletonRef ? findBoneByRefWorld(skeletonRef, bones[j]) : null;
+            let nowX = 0, nowY = 0;
+            if (bn) { const e = bn.worldMatrix.elements; nowX = e[6]; nowY = e[7]; }
+            const dx = nowX - (boneBindWorld[j * 2] ?? 0);
+            const dy = nowY - (boneBindWorld[j * 2 + 1] ?? 0);
+            vx += w * dx;
+            vy += w * dy;
+          }
+          out[i] = { x: root.x + vx * root.scale.x, y: root.y + vy * root.scale.y };
+        }
+        return out;
+      };
+
       /** 唯一网格边 + 每条边被几个三角形共享（n=1 → 边界边；n=2 → 内部边）。 */
       const meshEdgeInfo = (mesh: MeshData) => {
         const map = new Map<number, { a: number; b: number; n: number }>();
@@ -834,7 +872,7 @@ export function BoneEditor() {
           const layer = byId.get(aid);
           if (!layer) continue;
 
-          const pts = meshVerticesScreen(slot.id, layer, mesh);
+          const pts = skinnedVerticesScreen(slot.id, layer, mesh);
           const edges = meshEdgeInfo(mesh);
 
           // 边界边：总是画（网格外轮廓）
@@ -926,8 +964,8 @@ export function BoneEditor() {
             const selBones = new Set(s.selectedBoneIds);
             const onlySel = s.weightSelectedOnly;
 
-            // 顶点屏幕坐标（走 meshVerticesScreen 拿到 root 坐标）
-            const pts = meshVerticesScreen(slot.id, layer, mesh);
+            // 顶点屏幕坐标（走 skinnedVerticesScreen，让饼图/叠加也跟随蒙皮后的位置）
+            const pts = skinnedVerticesScreen(slot.id, layer, mesh);
 
             // 叠加：每个三角形内部按该三角形顶点权重均值上色
             if (showOverlay) {
@@ -2107,7 +2145,19 @@ export function BoneEditor() {
                   // 已有 → 累加，否则 = 新绑
                   const existing: string[] = mesh?.bones ?? [];
                   const merged = existing.includes(node.id) ? existing : [...existing, node.id];
-                  stBind.bindBonesToMesh(currentAid, merged);
+                  // 取每根骨骼当前的 world 坐标（作为绑定姿态），存进 mesh.boneBindWorld
+                  const boneWorlds: number[] = [];
+                  for (const bid of merged) {
+                    const bn = skeletonRef ? findBoneByRefWorld(skeletonRef, bid) : null;
+                    if (bn) {
+                      const e = bn.worldMatrix.elements;
+                      boneWorlds.push(e[6], e[7]);
+                    } else {
+                      const b = stBind.bones.find((x) => x.id === bid);
+                      boneWorlds.push(b ? b.x : 0, b ? b.y : 0);
+                    }
+                  }
+                  stBind.bindBonesToMesh(currentAid, merged, undefined, boneWorlds);
                   // 不退出绑定模式，让用户继续点别的骨骼
                   return;
                 }
@@ -3459,7 +3509,19 @@ export function BoneEditor() {
               const aid = slot?.activeAttachmentId ?? null;
               if (aid && st0p.attachmentMeshes[aid]) {
                 ev.stopPropagation();
-                st0p.bindBonesToMesh(aid, st0p.selectedBoneIds);
+                // 取所选骨骼的 world 坐标作为绑定姿态
+                const boneWorlds: number[] = [];
+                for (const bid of st0p.selectedBoneIds) {
+                  const bn = skeletonRef ? findBoneByRefWorld(skeletonRef, bid) : null;
+                  if (bn) {
+                    const e = bn.worldMatrix.elements;
+                    boneWorlds.push(e[6], e[7]);
+                  } else {
+                    const b = st0p.bones.find((x) => x.id === bid);
+                    boneWorlds.push(b ? b.x : 0, b ? b.y : 0);
+                  }
+                }
+                st0p.bindBonesToMesh(aid, st0p.selectedBoneIds, undefined, boneWorlds);
                 st0p.toggleWeightBindMode();   // 流程 B 完成即退出绑定模式
                 return;
               }
@@ -3706,6 +3768,8 @@ export function BoneEditor() {
             const mesh = aid ? state.attachmentMeshes[aid] : null;
             if (mesh && mesh.bones && mesh.bones.length > 0) applySkinning(slot.id);
           }
+          // ★ 重画顶点手柄 / 饼图 / 叠加，让它们跟着蒙皮后的顶点位置走
+          drawMeshHandles();
         }
         // 离开创建模式时清掉素材悬停虚线框（避免残留）
         if (state.editorMode !== prev.editorMode && state.editorMode !== 'create') {

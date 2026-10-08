@@ -144,8 +144,10 @@ export interface PixiBonesState {
    *  - attachmentId：目标网格附件
    *  - boneIds：要绑上去的骨骼 id（去重；顺序决定 bones[] 写入顺序）
    *  - bindPoseVertices：可选，传入则用它作为 bindPose；不传则用当前 vertices 的副本
-   *  调用后写：mesh.bones / mesh.weights / mesh.bindPose，并推一次历史。 */
-  bindBonesToMesh: (attachmentId: string, boneIds: string[], bindPoseVertices?: number[]) => void;
+   *  - boneWorlds：可选，每根骨骼在**绑定时**的 world 坐标 (x,y,...)，长度 = boneIds.length*2。
+   *    必须与 boneIds 去重后的顺序一致。不传则退化用 bones[].x/y（local，仅根骨骼/单层时准确）。
+   *  调用后写：mesh.bones / mesh.weights / mesh.bindPose / mesh.boneBindWorld，并推一次历史。 */
+  bindBonesToMesh: (attachmentId: string, boneIds: string[], bindPoseVertices?: number[], boneWorlds?: number[]) => void;
   /** 给指定网格解绑一根骨骼（若该骨不再被任何顶点引用，同时从 mesh.bones 中移除） */
   unbindBoneFromMesh: (attachmentId: string, boneId: string) => void;
   /** 「绑定模式」：true 时 BoneEditor 把「点骨骼」解释成「绑到当前网格」，
@@ -676,18 +678,26 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
    * - weights 长度 = vertices.length / 2 * nb
    *   每个顶点占 nb 段，依次为对 bones[0..nb-1] 的权重。
    */
-  bindBonesToMesh: (attachmentId, boneIds, bindPoseVertices) => {
+  bindBonesToMesh: (attachmentId, boneIds, bindPoseVertices, boneWorlds) => {
     const st = get();
     const mesh = st.attachmentMeshes[attachmentId];
     if (!mesh) return;
-    // 去重 + 过滤存在的骨
+    // 去重 + 过滤存在的骨；同时按 boneIds 原始顺序提取对应的 world 坐标（若有传）
     const seen = new Set<string>();
     const bones: string[] = [];
-    for (const id of boneIds) {
+    const world: Array<{ x: number; y: number }> = [];
+    for (let k = 0; k < boneIds.length; k++) {
+      const id = boneIds[k];
       if (!id || seen.has(id)) continue;
       if (!st.bones.some((b) => b.id === id)) continue;
       seen.add(id);
       bones.push(id);
+      if (boneWorlds && k * 2 + 1 < boneWorlds.length) {
+        world.push({ x: boneWorlds[k * 2], y: boneWorlds[k * 2 + 1] });
+      } else {
+        const b = st.bones.find((x) => x.id === id)!;
+        world.push({ x: b.x, y: b.y });   // fallback：local x/y
+      }
     }
     if (bones.length === 0) {
       // 没有任何有效骨 → 解绑
@@ -695,16 +705,11 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       set((s) => {
         const m = s.attachmentMeshes[attachmentId];
         if (!m) return s;
-        const { bones: _, weights: __, bindPose: ___, ...rest } = m;
+        const { bones: _, weights: __, bindPose: ___, boneBindWorld: ____, ...rest } = m;
         return { attachmentMeshes: { ...s.attachmentMeshes, [attachmentId]: rest } };
       });
       return;
     }
-    // 计算每个骨的世界坐标（用绑定时的世界矩阵 = 当前骨骼姿态）
-    const world: Array<{ x: number; y: number }> = bones.map((id) => {
-      const b = st.bones.find((x) => x.id === id)!;
-      return { x: b.x, y: b.y };   // ★ 简化：用局部 x/y 当世界位置（树根骨 = 局部 = 世界；非根时足够好的近似）
-    });
     const vertCount = mesh.vertices.length / 2;
     const nb = bones.length;
     const weights = new Array(vertCount * nb).fill(0);
@@ -754,14 +759,12 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       }
     }
     const bindPose = bindPoseVertices ? bindPoseVertices.slice() : mesh.vertices.slice();
-    // ★ 记下绑定时每个骨骼的"近似 root 坐标位置"（用 bones[].x/y 作近似）。
-    //   渲染端（applySkinning）若能拿到 skeletonRef，会用 worldMatrix 替换更准确的值；
-    //   这里存的是 fallback（store 没有它）。
+    // ★ 记下绑定时每个骨骼的 world 坐标位置（去重后顺序）。
+    //   world 数组在去重时已按 bones 顺序填好（优先用调用方传入的 boneWorlds，否则 local fallback）。
     const boneBindWorld: number[] = new Array(bones.length * 2);
     for (let i = 0; i < bones.length; i++) {
-      const b = st.bones.find((x) => x.id === bones[i]);
-      boneBindWorld[i * 2] = b ? b.x : 0;
-      boneBindWorld[i * 2 + 1] = b ? b.y : 0;
+      boneBindWorld[i * 2] = world[i].x;
+      boneBindWorld[i * 2 + 1] = world[i].y;
     }
     st.pushHistory();
     set((s) => {
@@ -843,7 +846,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       if (!m) return s;
       return { attachmentMeshes: { ...s.attachmentMeshes, [attachmentId]: { ...m, vertices: bindSource } } };
     });
-    st.bindBonesToMesh(attachmentId, mesh.bones, mesh.bindPose);
+    st.bindBonesToMesh(attachmentId, mesh.bones, mesh.bindPose, mesh.boneBindWorld);
     // 还原 vertices 到原值（bindBones 之后 mesh.vertices 是 bindSource 的副本）
     set((s) => {
       const m = s.attachmentMeshes[attachmentId];
