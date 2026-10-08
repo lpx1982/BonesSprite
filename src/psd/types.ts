@@ -38,7 +38,9 @@ export interface PixiBonesPsd {
  * - 绘制顺序、显隐、绑定骨骼、slot 变换，都属于**插槽**（而不是附件）。
  * - 导入时默认「1 个图层 = 1 个插槽，该图层作为它的第 1 个附件」。
  *
- * 数据不变式：每个可渲染的附件**恰好属于一个插槽**（attachmentIds 构成对全部附件的划分）。
+ * 引用关系：插槽通过 attachmentIds **引用**素材（PixiBonesLayer）。素材是全局的
+ * （不属于任何插槽），**同一素材可被多个插槽同时引用** —— 例如一把枪同时给
+ * 左手 / 右手两个插槽用，两处各自渲染一份。
  */
 export interface PixiBonesSlot {
   id: string;

@@ -66,9 +66,11 @@ export interface PixiBonesState {
   slots: PixiBonesSlot[];
   /** 切换某插槽当前显示的附件（null = 不显示任何附件） */
   setActiveAttachment: (slotId: string, attachmentId: string | null) => void;
-  /** 把一个已有附件移到目标插槽（从其原插槽移除；原插槽空了就删掉） */
+  /** 给目标插槽**追加引用**某附件并设为当前显示。
+   *  ★ 附件是全局素材，可被多个插槽同时引用（如一把枪同时给左手/右手），
+   *    因此不会从其它插槽移除它。 */
   addAttachmentToSlot: (slotId: string, attachmentId: string) => void;
-  /** 把附件从插槽里移出，放回一个以它命名的独立插槽 */
+  /** 解除「该插槽 → 该附件」的引用（附件本身留在素材库，插槽空了也保留） */
   detachAttachment: (slotId: string, attachmentId: string) => void;
   /** 插槽可见性（key = slotId） */
   slotVisibility: Record<string, boolean>;
@@ -109,8 +111,8 @@ export interface PixiBonesState {
    *  仅用于层级树高亮 —— 精确到「被点击的那一行」，避免同一插槽在
    *  主树 / 绘制顺序 / 图片分区多处同时高亮。 */
   selectedRowKey: string | null;
-  /** 选中一个附件（同时选中它所属的插槽）。rowKey = 被点击的树行 key。 */
-  selectAttachment: (slotId: string, attachmentId: string, rowKey?: string) => void;
+  /** 选中一个素材附件。slotId = 上下文插槽（「图片」里的素材可能没被任何插槽引用 → null）。 */
+  selectAttachment: (slotId: string | null, attachmentId: string, rowKey?: string) => void;
   /** 删除插槽。★ 只允许删**空插槽**（有附件时请先把附件移出，避免素材丢失）——
    *  插槽的生命周期由用户显式控制，不会被附件移走自动删除。 */
   removeSlot: (slotId: string) => void;
@@ -360,48 +362,36 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
         : s,
     ),
   })),
-  // 把已有附件移入目标插槽（从其原插槽移除；原插槽空了就删掉）
+  // 把附件加入目标插槽并设为当前显示。
+  //   ★ 附件是**全局素材**，可被多个插槽同时引用（例如一把枪同时给左手 / 右手
+  //     两个插槽用），因此这里**不从其它插槽移除**它，只往目标插槽追加引用。
   addAttachmentToSlot: (slotId, attachmentId) => set((state) => {
     if (!state.slots.some((s) => s.id === slotId)) return state;
-    // 1) 先从所有插槽里移除该附件
-    const stripped = state.slots.map((s) =>
-      s.attachmentIds.includes(attachmentId)
-        ? { ...s, attachmentIds: s.attachmentIds.filter((id) => id !== attachmentId) }
-        : s,
-    );
-    // 2) 放进目标插槽，并设为当前显示
-    //    ★ 空插槽**保留**（仿 Spine：插槽是结构节点，生命周期由用户显式控制，
-    //      不会因为附件被移走而自动消失 —— 被移走附件的原插槽会变成一个空插槽）
-    const slots = stripped
-      .map((s) => s.id === slotId
-        ? { ...s, attachmentIds: [...s.attachmentIds, attachmentId], activeAttachmentId: attachmentId }
-        : s)
-      // 3) 修正 activeAttachmentId 指向已移走的附件的情况（空插槽 → null）
-      .map((s) => (s.activeAttachmentId && s.attachmentIds.includes(s.activeAttachmentId))
-        ? s
-        : { ...s, activeAttachmentId: s.attachmentIds[0] ?? null });
+    const slots = state.slots.map((s) => s.id === slotId
+      ? {
+          ...s,
+          // 已经引用过就不重复追加，只切为当前显示
+          attachmentIds: s.attachmentIds.includes(attachmentId)
+            ? s.attachmentIds
+            : [...s.attachmentIds, attachmentId],
+          activeAttachmentId: attachmentId,
+        }
+      : s);
     return { slots };
   }),
-  // 把附件移出，放回一个以它命名的独立插槽
+  // 解除「该插槽 → 该附件」的引用（★ 只解引用：附件仍在素材库里，
+  //   也可能仍被其它插槽引用；插槽空了也照样保留）
   detachAttachment: (slotId, attachmentId) => set((state) => {
     const src = state.slots.find((s) => s.id === slotId);
     if (!src || !src.attachmentIds.includes(attachmentId)) return state;
-    // 从原插槽移除（★ 空插槽保留，不自动删除 —— 同 addAttachmentToSlot）
-    let slots = state.slots.map((s) => s.id === slotId
-      ? { ...s, attachmentIds: s.attachmentIds.filter((id) => id !== attachmentId) }
-      : s);
-    // 修正 activeAttachmentId
-    slots = slots.map((s) => (s.activeAttachmentId && s.attachmentIds.includes(s.activeAttachmentId))
-      ? s
-      : { ...s, activeAttachmentId: s.attachmentIds[0] ?? null });
-    // 新建独立插槽（用附件名）
-    const layer = attachmentLayers(state.psd, state.images).find((l) => l.id === attachmentId) ?? null;
-    slots = [...slots, {
-      id: genSlotId(),
-      name: layer?.name ?? 'attachment',
-      attachmentIds: [attachmentId],
-      activeAttachmentId: attachmentId,
-    }];
+    const slots = state.slots.map((s) => {
+      if (s.id !== slotId) return s;
+      const attachmentIds = s.attachmentIds.filter((id) => id !== attachmentId);
+      const activeAttachmentId = s.activeAttachmentId && attachmentIds.includes(s.activeAttachmentId)
+        ? s.activeAttachmentId
+        : (attachmentIds[0] ?? null);
+      return { ...s, attachmentIds, activeAttachmentId };
+    });
     return { slots };
   }),
   slotIdOfAttachment: (attachmentId) => slotIdOf(get().slots, attachmentId),
@@ -692,41 +682,26 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     }),
   removeImage: (id) =>
     set((state) => {
-      // 该附件所属插槽：把附件从插槽里移除（插槽空了就删掉整条插槽 + 它的绑定/变换/显隐）
-      const ownerSlots = state.slots.filter((s) => s.attachmentIds.includes(id));
-      const ownerIds = new Set(ownerSlots.map((s) => s.id));
-      const slots = state.slots
-        .map((s) => s.attachmentIds.includes(id)
-          ? { ...s, attachmentIds: s.attachmentIds.filter((a) => a !== id) }
-          : s)
-        .filter((s) => s.attachmentIds.length > 0)
-        .map((s) => (s.activeAttachmentId && s.attachmentIds.includes(s.activeAttachmentId))
-          ? s
-          : { ...s, activeAttachmentId: s.attachmentIds[0] ?? null });
-      // 被删掉的空插槽：连带清掉它的绑定 / 变换 / 显隐
-      const deadSlots = new Set(
-        [...ownerIds].filter((sid) => !slots.some((s) => s.id === sid)),
-      );
-      const dropKeys = <T,>(rec: Record<string, T>) =>
-        Object.fromEntries(Object.entries(rec).filter(([k]) => !deadSlots.has(k)));
-      const selDead = state.selectedSlotId !== null && deadSlots.has(state.selectedSlotId);
+      // ★ 删除素材：从**所有**引用它的插槽里解除引用（插槽本身保留，不删）。
+      //   附件是全局素材，删除它只影响引用关系。
+      const slots = state.slots.map((s) => {
+        if (!s.attachmentIds.includes(id)) return s;
+        const attachmentIds = s.attachmentIds.filter((a) => a !== id);
+        const activeAttachmentId = s.activeAttachmentId && attachmentIds.includes(s.activeAttachmentId)
+          ? s.activeAttachmentId
+          : (attachmentIds[0] ?? null);
+        return { ...s, attachmentIds, activeAttachmentId };
+      });
+      const attSelected = state.selectedAttachmentId === id;
       // 附件级样式：删掉该附件的记录
       const nextAttachmentStyle = { ...state.attachmentStyle };
       delete nextAttachmentStyle[id];
-      const attSelected = state.selectedAttachmentId === id;
       return {
         images: state.images.filter((l) => l.id !== id),
         slots,
-        selectedSlotId: selDead ? null : state.selectedSlotId,
-        selectedSlotIds: selDead ? [] : state.selectedSlotIds.filter((sid) => !deadSlots.has(sid)),
         selectedAttachmentId: attSelected ? null : state.selectedAttachmentId,
-        selectedRowKey: (selDead || attSelected) ? null : state.selectedRowKey,
-        slotBindings: dropKeys(state.slotBindings),
-        slotTransforms: dropKeys(state.slotTransforms),
-        slotVisibility: dropKeys(state.slotVisibility),
-        slotStyle: dropKeys(state.slotStyle),
+        selectedRowKey: attSelected ? null : state.selectedRowKey,
         attachmentStyle: nextAttachmentStyle,
-        slotOrder: state.slotOrder.filter((sid) => !deadSlots.has(sid)),
       };
     }),
   // 插槽显隐（key = slotId）
@@ -754,9 +729,10 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   // 选中一个附件（层级树附件行 / 点小圆点切当前）：同时选中它所属插槽
   selectAttachment: (slotId, attachmentId, rowKey) => set((s) => ({
     selectedSlotId: slotId,
-    selectedSlotIds: [slotId],
+    selectedSlotIds: slotId ? [slotId] : [],
     selectedAttachmentId: attachmentId,
-    selectedRowKey: rowKey ?? ('slotatt:' + slotId + ':' + attachmentId),
+    selectedRowKey: rowKey
+      ?? (slotId ? 'slotatt:' + slotId + ':' + attachmentId : 'asset:' + attachmentId),
     selectedBoneId: null,
     selectedBoneIds: [],
     selectedSectionKey: null,

@@ -10,7 +10,7 @@ import {
   FederatedPointerEvent,
   FederatedWheelEvent,
 } from 'pixi.js';
-import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, slotIdOf, type BoneNode, type SlotBinding } from './store';
+import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, type BoneNode, type SlotBinding } from './store';
 import { Bone as EngineBone } from '@engine/Bone';
 import { Skeleton } from '@engine/Skeleton';
 import { parsePsd, type PixiBonesLayer, type PixiBonesPsd, type PixiBonesSlot } from '@psd/index';
@@ -74,8 +74,8 @@ export function BoneEditor() {
           /** 按下时已选中的骨骼 / 素材（Shift 增量框选用） */
           prevSelIds: string[];
           prevSlotIds: string[];
-          /** 按下位置命中的素材（用于「单击素材 = 选中」） */
-          hitAttachmentId: string | null;
+          /** 按下位置命中的插槽（用于「单击图层 = 选中其插槽」） */
+          hitSlotId: string | null;
         }
       | { kind: 'scale'; boneId: string; startScaleX: number; startScaleY: number; startScreen: { x: number; y: number }; originScreen: { x: number; y: number }; angle: number; zone: 'green' | 'red' | 'center' }
       | { kind: 'shear'; boneId: string; startSkew: number; startScreen: { x: number; y: number }; originScreen: { x: number; y: number } }
@@ -213,7 +213,9 @@ export function BoneEditor() {
         a.canvas.style.removeProperty('cursor');
       };
 
-      const spriteByAttachmentId = new Map<string, Container>();
+      /** 插槽 id → 该插槽渲染出来的 wrap（内含 1 个 Sprite）。
+       *  ★ 每个插槽一份 sprite：同一素材被多个插槽引用时，两处各自渲染一份。 */
+      const spriteBySlotId = new Map<string, Container>();
       const canvasRefs = new Set<HTMLCanvasElement>();
 
       a.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -313,8 +315,12 @@ export function BoneEditor() {
         return out;
       };
 
-      /** 为一个附件创建 sprite（包一层 wrap，方便绑定骨骼时整体变换）。 */
-      const addLayerSprite = (layer: PixiBonesLayer) => {
+      /**
+       * 为一个插槽创建 sprite —— 渲染它当前激活的那个附件。
+       * ★ 每个插槽一份 sprite：同一素材被多个插槽引用时（如一把枪给左手 / 右手），
+       *   两处各自渲染一份，互不影响。
+       */
+      const addSlotSprite = (slot: PixiBonesSlot, layer: PixiBonesLayer) => {
         if (!layer.canvas) return;
         if (layer.canvas.width === 0 || layer.canvas.height === 0) return;
 
@@ -329,20 +335,20 @@ export function BoneEditor() {
         (sprite as unknown as { blendMode: string }).blendMode = layer.blendMode;
         sprite.eventMode = 'static';
         sprite.cursor = 'pointer';
-        // 标记：让 stage 的 pointerdown 能识别「点在哪个附件上」。
-        // 附件自身不拦截事件，统一交给 stage 处理（单击=选中其插槽 / 拖动=框选）。
-        (sprite as unknown as { __attachmentId: string }).__attachmentId = layer.id;
+        // 标记：让 stage 的 pointerdown 能识别「点在哪个插槽画出来的图」上。
+        // sprite 自身不拦截事件，统一交给 stage 处理（单击=选中插槽 / 拖动=框选）。
+        (sprite as unknown as { __slotId: string }).__slotId = slot.id;
 
         const wrap = new Container();
-        wrap.label = layer.name;
+        wrap.label = slot.name;
         wrap.addChild(sprite);
         root.addChild(wrap);
 
-        spriteByAttachmentId.set(layer.id, wrap);
+        spriteBySlotId.set(slot.id, wrap);
         canvasRefs.add(layer.canvas);
       };
 
-      /** 重建全部附件 sprite（按「插槽绘制顺序 → 槽内附件顺序」构建 root 的 z 序）。 */
+      /** 重建全部 sprite —— 按绘制顺序，每个插槽渲染它当前激活的附件。 */
       const rebuildAssets = (
         psd: PixiBonesPsd | null,
         images: PixiBonesLayer[],
@@ -353,21 +359,17 @@ export function BoneEditor() {
           root.removeChild(c);
           c.destroy({ children: true, texture: true });
         }
-        spriteByAttachmentId.clear();
+        spriteBySlotId.clear();
         canvasRefs.clear();
 
-        const byId = new Map(allAttachmentsOf(psd, images).map((l) => [l.id, l]));
-        const ordered = orderLayers(slots, usePixiBonesStore.getState().slotOrder);
-        for (const slot of ordered) {
-          for (const aid of slot.attachmentIds) {
-            const layer = byId.get(aid);
-            if (layer) addLayerSprite(layer);
-          }
+        for (const { slot, layer } of renderablesOf(psd, images, slots)) {
+          addSlotSprite(slot, layer);
         }
       };
 
       /**
-       * 应用显隐：只有「插槽可见 且 该附件是插槽当前激活的附件」才绘制。
+       * 应用显隐：插槽可见 → 该插槽的 sprite 可见。
+       * sprite 本身已经是「该插槽当前激活附件」的那一份（非激活附件不参与渲染）。
        * 插槽可见性默认取激活附件自身的 visible（保留 PSD 里隐藏图层的语义）。
        */
       const applyVisibility = (
@@ -378,13 +380,10 @@ export function BoneEditor() {
       ) => {
         const byId = new Map(allAttachmentsOf(psd, images).map((l) => [l.id, l]));
         for (const slot of slots) {
+          const wrap = spriteBySlotId.get(slot.id);
+          if (!wrap) continue;
           const active = slot.activeAttachmentId ? byId.get(slot.activeAttachmentId) ?? null : null;
-          const slotVisible = overrides[slot.id] ?? active?.visible ?? true;
-          for (const aid of slot.attachmentIds) {
-            const wrap = spriteByAttachmentId.get(aid);
-            if (!wrap) continue;
-            wrap.visible = slotVisible && aid === slot.activeAttachmentId;
-          }
+          wrap.visible = overrides[slot.id] ?? active?.visible ?? true;
         }
       };
 
@@ -408,18 +407,14 @@ export function BoneEditor() {
       ) => {
         const byId = new Map(allAttachmentsOf(psd, images).map((l) => [l.id, l]));
         for (const slot of slots) {
-          for (const aid of slot.attachmentIds) {
-            const wrap = spriteByAttachmentId.get(aid);
-            if (!wrap) continue;
-            const layer = byId.get(aid);
-            if (!layer) continue;
-            const sprite = wrap.children[0] as Sprite | undefined;
-            // 非激活附件：复位（不套插槽变换）
-            if (aid !== slot.activeAttachmentId) {
-              wrap.setFromMatrix(Matrix.IDENTITY);
-              if (sprite) sprite.position.set(layer.left, layer.top);
-              continue;
-            }
+          // ★ 每插槽一份 sprite：直接取该插槽当前激活的附件
+          const wrap = spriteBySlotId.get(slot.id);
+          if (!wrap) continue;
+          const aid = slot.activeAttachmentId;
+          const layer = aid ? byId.get(aid) ?? null : null;
+          if (!layer) continue;
+          const sprite = wrap.children[0] as Sprite | undefined;
+          {
             const binding = bindings[slot.id];
             const bone = binding ? boneById.get(binding.boneId) : null;
             const lt = slotTransforms[slot.id];
@@ -490,16 +485,15 @@ export function BoneEditor() {
       ) => {
         const byId = new Map(allAttachmentsOf(psd, images).map((l) => [l.id, l]));
         for (const slot of slots) {
-          for (const aid of slot.attachmentIds) {
-            const wrap = spriteByAttachmentId.get(aid);
-            const sprite = wrap?.children[0] as Sprite | undefined;
-            if (!sprite) continue;
-            const layer = byId.get(aid);
-            if (!layer) continue;
-            sprite.tint = composeTint(attachmentStyle[aid]?.color, slotStyle[slot.id]?.color);
-            const blend = attachmentStyle[aid]?.blend || slotStyle[slot.id]?.blend || layer.blendMode;
-            (sprite as unknown as { blendMode: string }).blendMode = blend || 'normal';
-          }
+          const wrap = spriteBySlotId.get(slot.id);
+          const sprite = wrap?.children[0] as Sprite | undefined;
+          if (!sprite) continue;
+          const aid = slot.activeAttachmentId;
+          const layer = aid ? byId.get(aid) ?? null : null;
+          if (!layer) continue;
+          sprite.tint = composeTint(attachmentStyle[layer.id]?.color, slotStyle[slot.id]?.color);
+          const blend = attachmentStyle[layer.id]?.blend || slotStyle[slot.id]?.blend || layer.blendMode;
+          (sprite as unknown as { blendMode: string }).blendMode = blend || 'normal';
         }
       };
 
@@ -552,7 +546,7 @@ export function BoneEditor() {
         const lt = _transforms[selectedSlotId] ?? { tx: 0, ty: 0, rotation: 0, scaleX: 1, scaleY: 1, skewX: 0, skewY: 0 };
         // ★ 选中插槽「激活附件」的 sprite 光标：有工具时改成"可操作"光标，避免 PIXI 一直显示 pointer
         {
-          const selSprite = spriteByAttachmentId.get(layer.id)?.children[0] as Sprite | undefined;
+          const selSprite = spriteBySlotId.get(slot.id)?.children[0] as Sprite | undefined;
           if (selSprite) {
             selSprite.cursor = tool === 'move' ? 'move'
               : tool === 'scale' ? 'nwse-resize'
@@ -623,26 +617,27 @@ export function BoneEditor() {
         }
       };
 
-      /** 判断事件目标是不是素材 sprite（用来把「点素材」也纳入框选/选中流程）。 */
-      const isAttachmentSprite = (t: unknown): boolean =>
-        typeof (t as { __attachmentId?: unknown } | null)?.__attachmentId === 'string';
+      /** 判断事件目标是不是插槽 sprite（用来把「点图」也纳入框选/选中流程）。 */
+      const isSlotSprite = (t: unknown): boolean =>
+        typeof (t as { __slotId?: unknown } | null)?.__slotId === 'string';
 
-      /** 屏幕坐标下最上层（最后绘制的）可见**附件** id；无则 null。 */
-      const topAttachmentAt = (gx: number, gy: number): string | null => {
+      /** 屏幕坐标下最上层（最后绘制的）可见**插槽** id；无则 null。
+       *  （每个插槽渲染它当前激活的附件，所以命中插槽即确定是哪张图） */
+      const topSlotAt = (gx: number, gy: number): string | null => {
         const sx = root.scale.x;
         const sy = root.scale.y;
         if (sx === 0 || sy === 0) return null;
         const wx = (gx - root.x) / sx;
         const wy = (gy - root.y) / sy;
         const s = usePixiBonesStore.getState();
-        // 只命中「当前实际绘制」的附件（插槽可见 + 是激活附件）
+        // 只命中「当前实际绘制」的插槽（插槽可见 + 有激活附件）
         const items = renderablesOf(s.psd, s.images, s.slots);
         for (let i = items.length - 1; i >= 0; i--) {
           const { slot, layer: l } = items[i];
           if (s.slotVisibility[slot.id] === false) continue;
           if (l.width === 0 || l.height === 0) continue;
           if (wx >= l.left && wx <= l.left + l.width && wy >= l.top && wy <= l.top + l.height) {
-            return l.id;
+            return slot.id;
           }
         }
         return null;
@@ -667,9 +662,12 @@ export function BoneEditor() {
         const showOutline = inTransform;
         const showDashedRect = inCreateCmd || inTransform;
         if (!showDashedRect && !showOutline) return;
-        const id = topAttachmentAt(gx, gy);
-        if (!id) return;
-        const layer = allAttachmentsOf(s.psd, s.images).find((l) => l.id === id);
+        const slotId = topSlotAt(gx, gy);
+        if (!slotId) return;
+        const slot = s.slots.find((x) => x.id === slotId) ?? null;
+        const layer = slot?.activeAttachmentId
+          ? allAttachmentsOf(s.psd, s.images).find((l) => l.id === slot.activeAttachmentId) ?? null
+          : null;
         if (!layer || !layer.canvas || layer.width === 0 || layer.height === 0) return;
         const sx = root.scale.x;
         const sy = root.scale.y;
@@ -2139,14 +2137,13 @@ export function BoneEditor() {
           a.stage.removeChild(dragState.preview);
           dragState.preview.destroy();
         } else if (dragState.kind === 'marquee') {
-          const { startScreen, nowScreen, rect, additive, prevSelIds, prevSlotIds, hitAttachmentId } = dragState;
+          const { startScreen, nowScreen, rect, additive, prevSelIds, prevSlotIds, hitSlotId } = dragState;
           const store = usePixiBonesStore.getState();
           // ★ 姿势模式下（editorMode === 'pose'）：画布上的图层不允许被选中（只能选骨骼）
           const layerSelectable = store.editorMode !== 'pose';
           const moved = Math.hypot(nowScreen.x - startScreen.x, nowScreen.y - startScreen.y) > 3;
           if (!moved) {
-            // 单击：若点在附件上 → 选中它所属的**插槽**（Shift = 加选，跟骨骼一致）
-            const hitSlotId = slotIdOf(store.slots, hitAttachmentId);
+            // 单击：若点在图层上 → 选中它所属的**插槽**（Shift = 加选，跟骨骼一致）
             if (hitSlotId && layerSelectable) {
               if (additive) store.selectSlots([...prevSlotIds, hitSlotId], false);
               else store.selectSlots([hitSlotId], false);
@@ -2364,9 +2361,8 @@ export function BoneEditor() {
           //   ★ 只设置目标素材，**不动骨骼选中** —— 保证父骨骼链不断：
           //     新骨仍是「当前选中骨骼」的子骨，而不是 root 下的兄弟骨。
           if (ev.metaKey || metaDown) {
-            const hitAttachmentId = topAttachmentAt(ev.global.x, ev.global.y);
-            // 选中是「插槽」维度：把命中的附件换算成它所属插槽
-            const hitSlotId = slotIdOf(usePixiBonesStore.getState().slots, hitAttachmentId);
+            // 命中检测本身就是「插槽」维度（每个插槽渲染自己的激活附件）
+            const hitSlotId = topSlotAt(ev.global.x, ev.global.y);
             if (hitSlotId) {
               usePixiBonesStore.getState().setTargetSlot(hitSlotId);
               attachmentHover.clear();
@@ -2407,13 +2403,12 @@ export function BoneEditor() {
             parentWorld: { x: parentWorld.x, y: parentWorld.y },
             preview,
           } as typeof dragState & { parentWorld: { x: number; y: number } };
-        } else if (ev.target === a.stage || isAttachmentSprite(ev.target)) {
+        } else if (ev.target === a.stage || isSlotSprite(ev.target)) {
           const st0p = usePixiBonesStore.getState();
-          // ★ 选中插槽 + 4 个变换工具激活时，且点在「该插槽的激活附件」上：走 layer-transform，不进框选
-          const clickedAttachmentId = (ev.target as { __attachmentId?: string } | null)?.__attachmentId ?? null;
-          const clickedSlotId = slotIdOf(st0p.slots, clickedAttachmentId);
+          // ★ 选中插槽 + 4 个变换工具激活时，且点在「该插槽画出来的图」上：走 layer-transform，不进框选
+          const clickedSlotId = (ev.target as { __slotId?: string } | null)?.__slotId ?? null;
           if (
-            isAttachmentSprite(ev.target)
+            isSlotSprite(ev.target)
             && st0p.selectedSlotId
             && clickedSlotId === st0p.selectedSlotId
             && st0p.activeTool
@@ -2467,7 +2462,7 @@ export function BoneEditor() {
             rect,
             prevSelIds: store.selectedBoneIds,
             prevSlotIds: store.selectedSlotIds,
-            hitAttachmentId: topAttachmentAt(ev.global.x, ev.global.y),
+            hitSlotId: topSlotAt(ev.global.x, ev.global.y),
           };
         }
       });

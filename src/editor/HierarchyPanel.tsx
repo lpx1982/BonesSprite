@@ -872,17 +872,17 @@ export function HierarchyPanel() {
           isolated={hideNonSelected}
           C={C}
         />
-      ) : selectedAttachment && selectedSlotId ? (
+      ) : selectedAttachment ? (
         <AttachmentPropsBlock
           attachment={selectedAttachment}
           color={attachmentStyle[selectedAttachment.id]?.color ?? ''}
           onColor={(c) => setAttachmentStyle(selectedAttachment.id, { color: c })}
           candidates={attachments.filter((l) => !selectedSlot?.attachmentIds.includes(l.id))}
-          onAddAttachment={(aid) => addAttachmentToSlot(selectedSlotId, aid)}
-          onDetach={() => detachAttachment(selectedSlotId, selectedAttachment.id)}
+          onAddAttachment={selectedSlotId ? (aid) => addAttachmentToSlot(selectedSlotId, aid) : undefined}
+          onDetach={selectedSlotId ? () => detachAttachment(selectedSlotId, selectedAttachment.id) : undefined}
           bindingBoneName={selectedBindingBoneName}
-          onUnbind={() => unbindSlot(selectedSlotId)}
-          onParent={() => startAttach(selectedSlotId)}
+          onUnbind={selectedSlotId ? () => unbindSlot(selectedSlotId) : undefined}
+          onParent={selectedSlotId ? () => startAttach(selectedSlotId) : undefined}
           C={C}
         />
       ) : selectedSlotId ? (
@@ -1046,8 +1046,8 @@ interface TreeRowViewProps {
   selectedRowKey: string | null;
   /** 选中一个插槽（key = slotId） */
   onSelectSlot: (slotId: string, rowKey?: string) => void;
-  /** 选中一个附件（点附件行）。rowKey = 该行 key，用于精确高亮 */
-  onSelectAttachment: (slotId: string, attachmentId: string, rowKey: string) => void;
+  /** 选中一个素材附件（点附件行）。slotId = 上下文插槽（「图片」里可能没被引用 → null） */
+  onSelectAttachment: (slotId: string | null, attachmentId: string, rowKey: string) => void;
   /** 切换插槽当前显示的附件 */
   onActivateAttachment: (slotId: string, attachmentId: string) => void;
   /** 分区节点（约束 / 图片 / …）相关 */
@@ -1162,11 +1162,9 @@ function TreeRowView(props: TreeRowViewProps) {
         else if (isSection && sectionKey !== null) onSelectSection(sectionKey);
         else if (isSlot && slot) onSelectSlot(slot.id, row.key);
         else if (isAsset && asset) {
-          // 附件行：切换为「当前显示」+ 选中该附件（底部面板显示「附件属性」）
-          if (assetSlotId) {
-            onActivateAttachment(assetSlotId, asset.id);
-            onSelectAttachment(assetSlotId, asset.id, row.key);
-          }
+          // 附件行：有引用它的插槽则顺便切为「当前显示」，然后选中该素材
+          if (assetSlotId) onActivateAttachment(assetSlotId, asset.id);
+          onSelectAttachment(assetSlotId, asset.id, row.key);
         }
       }}
     >
@@ -1566,14 +1564,25 @@ function PanelRow({
 
 /** 属性面板底部按钮（＋ 新建… / ↖ 父级） */
 function PanelFooterBtn({
-  C, onClick, icon, label, title,
-}: { C: any; onClick: () => void; icon: string; label: string; title?: string }) {
+  C, onClick, icon, label, title, disabled = false,
+}: {
+  C: any; onClick: () => void; icon: string; label: string; title?: string;
+  /** 不可用（如没有上下文插槽）时置灰、不可点 */
+  disabled?: boolean;
+}) {
   return (
     <button
-      onClick={onClick}
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
       className="rounded px-1 py-1 flex items-center justify-center gap-0.5"
-      style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border, cursor: 'pointer' }}
-      onMouseEnter={(e) => (e.currentTarget.style.background = C.toolbar)}
+      style={{
+        background: C.panel,
+        color: C.text,
+        border: '1px solid ' + C.border,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.5 : 1,
+      }}
+      onMouseEnter={(e) => { if (!disabled) e.currentTarget.style.background = C.toolbar; }}
       onMouseLeave={(e) => (e.currentTarget.style.background = C.panel)}
       title={title}
     >
@@ -1685,7 +1694,7 @@ function SlotPropsBlock(props: SlotPropsBlockProps) {
               style={{ background: 'transparent', border: 'none', color: C.text, cursor: 'pointer' }}
               onMouseEnter={(e) => (e.currentTarget.style.background = C.toolbar)}
               onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-              onClick={() => { onAddAttachment(l.id); setPicking(false); }}
+              onClick={() => { onAddAttachment?.(l.id); setPicking(false); }}
               title="加入该插槽并设为当前显示"
             >
               <span>🖼</span>
@@ -1727,15 +1736,16 @@ interface AttachmentPropsBlockProps {
   onColor: (color: string) => void;
   /** 「＋ 新建…」挑选器：可加入所属插槽的候选素材 */
   candidates: PixiBonesLayer[];
-  onAddAttachment: (attachmentId: string) => void;
-  /** 从插槽移出（放回独立插槽） */
-  onDetach: () => void;
+  /** 把已有素材加入所属插槽（无上下文插槽时不可用） */
+  onAddAttachment?: (attachmentId: string) => void;
+  /** 从当前插槽解除引用（无上下文插槽时不可用） */
+  onDetach?: () => void;
   /** 已绑定的父级骨骼名（null = 未绑定） */
   bindingBoneName: string | null;
   /** 解除插槽与骨骼的绑定 */
-  onUnbind: () => void;
+  onUnbind?: () => void;
   /** 设置父级（拾取骨骼） */
-  onParent: () => void;
+  onParent?: () => void;
   C: any;
 }
 
@@ -1868,7 +1878,7 @@ function AttachmentPropsBlock(props: AttachmentPropsBlockProps) {
               style={{ background: 'transparent', border: 'none', color: C.text, cursor: 'pointer' }}
               onMouseEnter={(e) => (e.currentTarget.style.background = C.toolbar)}
               onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-              onClick={() => { onAddAttachment(l.id); setPicking(false); }}
+              onClick={() => { onAddAttachment?.(l.id); setPicking(false); }}
               title="加入该插槽并设为当前显示"
             >
               <span>🖼</span>
@@ -1885,14 +1895,16 @@ function AttachmentPropsBlock(props: AttachmentPropsBlockProps) {
           onClick={() => setPicking((v) => !v)}
           icon="＋"
           label="新建…"
-          title="把已有素材加入所属插槽"
+          title={onAddAttachment ? '把已有素材加入所属插槽' : '请先在层级树里选中一个插槽下的附件'}
+          disabled={!onAddAttachment}
         />
         <PanelFooterBtn
           C={C}
-          onClick={onParent}
+          onClick={onParent ?? (() => { /* 无上下文插槽：按钮已置灰 */ })}
           icon="↖"
           label="父级"
-          title="设置父级（拾取骨骼）"
+          title={onParent ? '设置父级（拾取骨骼）' : '请先在层级树里选中一个插槽下的附件'}
+          disabled={!onParent}
         />
       </div>
     </div>
