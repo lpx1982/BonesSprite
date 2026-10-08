@@ -134,6 +134,12 @@ export interface PixiBonesState {
   /** 变形：勾选 = 拖动顶点改变形状；未勾选 = 只编辑 UV（纹理映射） */
   meshDeformed: boolean;
   setMeshDeformed: (v: boolean) => void;
+  /** 网格编辑：变暗（占位，暂无渲染效果） */
+  meshDim: boolean;
+  setMeshDim: (v: boolean) => void;
+  /** 网格编辑：隔离（占位，暂无渲染效果） */
+  meshIsolate: boolean;
+  setMeshIsolate: (v: boolean) => void;
   /** 线框：勾选后即使未选中该网格，也画出它的顶点和边（key = attachmentId） */
   meshWireframe: Record<string, boolean>;
   setMeshWireframe: (attachmentId: string, v: boolean) => void;
@@ -570,6 +576,10 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   setMeshShowTriangles: (v) => set({ meshShowTriangles: v }),
   meshDeformed: true,
   setMeshDeformed: (v) => set({ meshDeformed: v }),
+  meshDim: false,
+  setMeshDim: (v) => set({ meshDim: v }),
+  meshIsolate: false,
+  setMeshIsolate: (v) => set({ meshIsolate: v }),
   meshWireframe: {},
   setMeshWireframe: (attachmentId, v) => set((state) => ({
     meshWireframe: { ...state.meshWireframe, [attachmentId]: v },

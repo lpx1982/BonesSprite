@@ -601,35 +601,49 @@ function MeshEditPanel() {
   const setShowTriangles = usePixiBonesStore((s) => s.setMeshShowTriangles);
   const deformed = usePixiBonesStore((s) => s.meshDeformed);
   const setDeformed = usePixiBonesStore((s) => s.setMeshDeformed);
+  const dim = usePixiBonesStore((s) => s.meshDim);
+  const setDim = usePixiBonesStore((s) => s.setMeshDim);
+  const isolate = usePixiBonesStore((s) => s.meshIsolate);
+  const setIsolate = usePixiBonesStore((s) => s.setMeshIsolate);
+  const resetMesh = usePixiBonesStore((s) => s.resetMesh);
   const slots = usePixiBonesStore((s) => s.slots);
   const meshes = usePixiBonesStore((s) => s.attachmentMeshes);
 
   if (!editSlotId) return null;
   const slot = slots.find((s) => s.id === editSlotId) ?? null;
-  const mesh = slot?.activeAttachmentId ? meshes[slot.activeAttachmentId] ?? null : null;
-  if (!slot || !mesh) return null;
+  const attachmentId = slot?.activeAttachmentId ?? null;
+  const mesh = attachmentId ? meshes[attachmentId] ?? null : null;
+  if (!slot || !attachmentId || !mesh) return null;
   const vertexCount = Math.floor(mesh.vertices.length / 2);
 
-  const toolBtnStyle = (active: boolean) => ({
-    background: active ? 'var(--spine-accent)' : 'var(--spine-bg-panel)',
-    color: active ? '#fff' : 'var(--spine-text)',
-    border: '1px solid ' + (active ? 'var(--spine-accent)' : 'var(--spine-border)'),
+  /** 面板里的小按钮（仿 Spine：中灰底、激活蓝底、图标 + 文字） */
+  const meshBtnStyle = (active: boolean, disabled: boolean) => ({
+    display: 'flex' as const,
+    alignItems: 'center' as const,
+    gap: 3,
+    padding: '3px 7px',
     borderRadius: 3,
-    cursor: 'pointer',
-    padding: '2px 6px',
-    fontSize: 10,
+    border: '1px solid ' + (active ? '#2E7FC0' : '#555555'),
+    background: active ? '#2E8BD8' : '#4A4A4A',
+    color: active ? '#FFFFFF' : (disabled ? 'var(--spine-text-dim)' : '#DDDDDD'),
+    fontSize: 11,
+    lineHeight: '14px',
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    opacity: disabled ? 0.5 : 1,
     whiteSpace: 'nowrap' as const,
+    userSelect: 'none' as const,
   });
-  const placeholderStyle = {
-    background: 'var(--spine-bg-panel)',
-    color: 'var(--spine-text-dim)',
-    border: '1px solid var(--spine-border)',
-    borderRadius: 3,
-    cursor: 'not-allowed',
-    padding: '2px 6px',
-    fontSize: 10,
-    opacity: 0.55,
-    whiteSpace: 'nowrap' as const,
+
+  /** 行内的 checkbox + 文字（三角形 / 变暗 / 隔离 / 变形） */
+  const meshCheck: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 4,
+    fontSize: 11,
+    color: 'var(--spine-text)',
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+    userSelect: 'none',
   };
 
   return (
@@ -642,75 +656,211 @@ function MeshEditPanel() {
         background: 'var(--spine-bg-panel)',
         border: '1px solid var(--spine-border)',
         borderRadius: 4,
-        padding: 6,
-        boxShadow: '0 4px 16px rgba(0, 0, 0, 0.5)',
+        boxShadow: '0 6px 20px rgba(0, 0, 0, 0.55)',
         zIndex: 30,
+        overflow: 'hidden',
       }}
     >
-      {/* 标题栏：编辑网格 + 插槽名 + 退出 */}
-      <div className="flex items-center gap-1" style={{ marginBottom: 4 }}>
-        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--spine-text)' }}>编辑网格</span>
-        <span style={{ fontSize: 10, color: 'var(--spine-text-dim)' }}>{slot.name}</span>
+      {/* 标题栏：编辑网格 + 退出（深色底） */}
+      <div
+        className="flex items-center"
+        style={{
+          background: 'var(--spine-bg-panel-dark)',
+          padding: '4px 6px 4px 10px',
+          borderBottom: '1px solid var(--spine-border)',
+        }}
+      >
+        <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--spine-text)' }}>编辑网格</span>
         <button
           style={{
-            marginLeft: 8, background: 'transparent', border: 'none',
-            color: 'var(--spine-text-dim)', cursor: 'pointer', fontSize: 11, lineHeight: 1,
+            marginLeft: 16, background: 'transparent', border: 'none',
+            color: 'var(--spine-text)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '0 2px',
           }}
           title="退出网格编辑（Esc）"
           onClick={() => setMeshEditSlot(null)}
         >✕</button>
       </div>
 
-      {/* 三个工具 */}
-      <div className="flex items-center gap-1" style={{ marginBottom: 4 }}>
-        <button
-          style={toolBtnStyle(meshTool === 'modify')}
-          title="修改：拖动顶点；双击顶点删除；空白处拖动框选"
-          onClick={() => setMeshTool('modify')}
-        >修改</button>
-        <button
-          style={toolBtnStyle(meshTool === 'create')}
-          title="创建：点边的中点可细分该边；点三角形内部可加顶点"
-          onClick={() => setMeshTool('create')}
-        >创建</button>
-        <button
-          style={toolBtnStyle(meshTool === 'delete')}
-          title="删除：点击顶点删除（顶点塌陷，网格保持封闭）"
-          onClick={() => setMeshTool('delete')}
-        >删除</button>
-      </div>
+      {/* 内容区 */}
+      <div style={{ padding: '6px 8px' }}>
+        {/* 行 1：三个编辑工具 */}
+        <div className="flex items-center justify-center" style={{ gap: 4, marginBottom: 5 }}>
+          <button
+            style={meshBtnStyle(meshTool === 'modify', false)}
+            title="修改：拖动顶点；双击顶点删除；空白处拖动框选"
+            onClick={() => setMeshTool('modify')}
+          ><MeshIconModify />修改</button>
+          <button
+            style={meshBtnStyle(meshTool === 'create', false)}
+            title="创建：点边的中点细分该边；点三角形内部加顶点"
+            onClick={() => setMeshTool('create')}
+          ><MeshIconCreate />创建</button>
+          <button
+            style={meshBtnStyle(meshTool === 'delete', false)}
+            title="删除：点击顶点删除（顶点塌陷，网格保持封闭）"
+            onClick={() => setMeshTool('delete')}
+          ><MeshIconDelete />删除</button>
+        </div>
 
-      {/* 生成 / 吸附 / 克隆（占位）+ 三角形开关 */}
-      <div className="flex items-center gap-1" style={{ marginBottom: 4 }}>
-        <button style={placeholderStyle} title="自动补充顶点（待实现）">生成</button>
-        <button style={placeholderStyle} title="吸附到已有顶点（待实现）">吸附</button>
-        <button style={placeholderStyle} title="克隆网格（待实现）">克隆</button>
-        <button
-          style={toolBtnStyle(showTriangles)}
-          title="显示三角剖分"
-          onClick={() => setShowTriangles(!showTriangles)}
-        >三角形</button>
-      </div>
+        {/* 行 2：新建 / 重置 / 生成 / 描绘 */}
+        <div className="flex items-center justify-center" style={{ gap: 4, marginBottom: 5 }}>
+          <button
+            style={meshBtnStyle(false, true)}
+            title="新建顶点模式（待实现）"
+            disabled
+          ><MeshIconNew />新建</button>
+          <button
+            style={meshBtnStyle(false, false)}
+            title="把顶点移回 UV 位置，消除变形"
+            onClick={() => resetMesh(attachmentId)}
+          ><MeshIconReset />重置</button>
+          <button
+            style={meshBtnStyle(false, true)}
+            title="自动补充顶点（待实现）"
+            disabled
+          ><MeshIconGenerate />生成</button>
+          <button
+            style={meshBtnStyle(false, true)}
+            title="自动描绘轮廓生成网格边界（待实现）"
+            disabled
+          ><MeshIconTrace />描绘</button>
+        </div>
 
-      {/* 变形开关 + 顶点数 */}
-      <div className="flex items-center gap-2">
-        <label
-          className="flex items-center gap-1"
-          style={{ fontSize: 10, color: 'var(--spine-text)', cursor: 'pointer' }}
-          title="勾选：拖动顶点改变形状"
-        >
-          <input
-            type="checkbox"
-            checked={deformed}
-            onChange={(e) => setDeformed(e.target.checked)}
-            style={{ accentColor: 'var(--spine-accent)' }}
-          />
-          变形
-        </label>
-        <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--spine-text-dim)' }}>
-          顶点: {vertexCount}
-        </span>
+        {/* 行 3：三角形 / 变暗 / 隔离 */}
+        <div className="flex items-center justify-center" style={{ gap: 10, marginBottom: 4 }}>
+          <label style={meshCheck} title="显示三角剖分">
+            <input
+              type="checkbox"
+              checked={showTriangles}
+              onChange={(e) => setShowTriangles(e.target.checked)}
+              style={{ accentColor: 'var(--spine-accent)' }}
+            />
+            三角形
+          </label>
+          <label style={{ ...meshCheck, opacity: 0.6 }} title="变暗（待实现）">
+            <input
+              type="checkbox"
+              checked={dim}
+              onChange={(e) => setDim(e.target.checked)}
+              style={{ accentColor: 'var(--spine-accent)' }}
+            />
+            变暗
+          </label>
+          <label style={{ ...meshCheck, opacity: 0.6 }} title="隔离（待实现）">
+            <input
+              type="checkbox"
+              checked={isolate}
+              onChange={(e) => setIsolate(e.target.checked)}
+              style={{ accentColor: 'var(--spine-accent)' }}
+            />
+            隔离
+          </label>
+        </div>
+
+        {/* 行 4：顶点数 + 变形 */}
+        <div className="flex items-center justify-center" style={{ gap: 12 }}>
+          <span style={{ fontSize: 11, color: 'var(--spine-text)' }}>顶点: {vertexCount}</span>
+          <label style={meshCheck} title="勾选：拖动顶点改变形状">
+            <input
+              type="checkbox"
+              checked={deformed}
+              onChange={(e) => setDeformed(e.target.checked)}
+              style={{ accentColor: 'var(--spine-accent)' }}
+            />
+            变形
+          </label>
+        </div>
       </div>
     </div>
+  );
+}
+
+// ---- 「编辑网格」面板的小图标（几何风格，颜色对齐 Spine）----
+
+function MeshIconModify() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden>
+      <rect x="1.5" y="1.5" width="8.5" height="8.5" rx="1" stroke="#4FB8F8" strokeWidth="1.4" />
+      <path
+        d="M7.5 7.5 L12.6 12.6 M12.6 9 L12.6 12.6 L9 12.6"
+        stroke="#4FB8F8" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function MeshIconCreate() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden>
+      <rect x="3" y="3" width="8" height="8" stroke="#5BBE5D" strokeWidth="1.2" />
+      <rect x="1" y="1" width="2.8" height="2.8" fill="#5BBE5D" />
+      <rect x="10.2" y="1" width="2.8" height="2.8" fill="#5BBE5D" />
+      <rect x="1" y="10.2" width="2.8" height="2.8" fill="#5BBE5D" />
+      <rect x="10.2" y="10.2" width="2.8" height="2.8" fill="#5BBE5D" />
+    </svg>
+  );
+}
+
+function MeshIconDelete() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden>
+      <rect x="3" y="3" width="8" height="8" stroke="#E61E1E" strokeWidth="1.2" />
+      <rect x="1" y="1" width="2.8" height="2.8" fill="#E61E1E" />
+      <rect x="10.2" y="1" width="2.8" height="2.8" fill="#E61E1E" />
+      <rect x="1" y="10.2" width="2.8" height="2.8" fill="#E61E1E" />
+      <rect x="10.2" y="10.2" width="2.8" height="2.8" fill="#E61E1E" />
+    </svg>
+  );
+}
+
+function MeshIconNew() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden>
+      <path
+        d="M2.5 1.5 L2.5 11 L5.3 8.4 L7.2 12.4 L8.9 11.5 L7 7.6 L10.8 7.6 Z"
+        fill="#BBBBBB" stroke="#888888" strokeWidth="0.6" strokeLinejoin="round"
+      />
+      <path d="M11.6 1.6 L11.6 6 M9.4 3.8 L13.8 3.8" stroke="#5BBE5D" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function MeshIconReset() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden>
+      <path
+        d="M2.4 7.2 A4.6 4.6 0 1 1 4.6 11.2"
+        stroke="#F0A020" strokeWidth="1.6" strokeLinecap="round" fill="none"
+      />
+      <path
+        d="M2.2 3.6 L2.4 7.4 L6.2 7.2"
+        stroke="#F0A020" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" fill="none"
+      />
+    </svg>
+  );
+}
+
+function MeshIconGenerate() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden>
+      <rect x="3" y="3" width="8" height="8" stroke="#5BBE5D" strokeWidth="1.2" />
+      <rect x="1" y="1" width="2.6" height="2.6" fill="#5BBE5D" />
+      <rect x="10.4" y="1" width="2.6" height="2.6" fill="#5BBE5D" />
+      <rect x="1" y="10.4" width="2.6" height="2.6" fill="#5BBE5D" />
+      <rect x="10.4" y="10.4" width="2.6" height="2.6" fill="#5BBE5D" />
+      <circle cx="7" cy="7" r="1.5" fill="#5BBE5D" />
+    </svg>
+  );
+}
+
+function MeshIconTrace() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden>
+      <path
+        d="M1.8 11.4 C3.2 5.6, 6.2 2.4, 12.2 3.2"
+        stroke="#4FB8F8" strokeWidth="1.5" strokeLinecap="round" fill="none"
+      />
+      <circle cx="1.9" cy="11.4" r="1.5" fill="#4FB8F8" />
+    </svg>
   );
 }
