@@ -238,23 +238,48 @@ export function HierarchyPanel() {
     [slots, slotOrder],
   );
 
-  // ===== 「绘制顺序」分区的拖拽排序状态 =====
-  const [dragLayerId, setDragLayerId] = useState<string | null>(null);
-  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  // ===== 拖拽状态 =====
+  //   - 「绘制顺序」里的插槽行 → 排序（kind = 'slot-order'）
+  //   - 「图片」分区里的附件行 → 拖到插槽行 = 添加附件；拖到插槽下方的附件行 = 替换
+  const [dragSrc, setDragSrc] = useState<
+    { kind: 'slot-order'; slotId: string } | { kind: 'attachment'; attachmentId: string } | null
+  >(null);
+  /** 当前落点行的 key（用于高亮） */
+  const [dropKey, setDropKey] = useState<string | null>(null);
 
-  /** 把 dragLayerId 拖到 targetId 的位置（目标为末行时移到末尾） */
-  const dropLayerAt = (targetId: string) => {
-    const from = dragLayerId;
-    setDragLayerId(null);
-    setDropTargetId(null);
-    if (!from || from === targetId) return;
+  /** 清空拖拽态（拖动结束 / 落下后） */
+  const clearDrag = () => {
+    setDragSrc(null);
+    setDropKey(null);
+  };
+
+  /** 把「绘制顺序」里的插槽行拖到 targetSlotId 的位置（目标为末行时移到末尾） */
+  const dropSlotOrderAt = (targetSlotId: string) => {
+    const src = dragSrc;
+    clearDrag();
+    if (!src || src.kind !== 'slot-order' || src.slotId === targetSlotId) return;
+    const from = src.slotId;
     const ids = orderedSlots.map((s) => s.id);
     if (!ids.includes(from)) return;
     const rest = ids.filter((id) => id !== from);
     const lastId = ids[ids.length - 1];
-    const at = targetId === lastId ? rest.length : Math.max(0, rest.indexOf(targetId));
+    const at = targetSlotId === lastId ? rest.length : Math.max(0, rest.indexOf(targetSlotId));
     rest.splice(at, 0, from);
     setSlotOrder(rest);
+  };
+
+  /**
+   * 把「图片」里的附件放到插槽上：
+   *   - 只给 slotId → 添加附件（addAttachmentToSlot 已会从原插槽移走并设为当前显示）
+   *   - 再给 replaceAttachmentId → 替换：加完后再把被替换的附件移出（变成独立插槽）
+   */
+  const dropAttachmentOn = (slotId: string, replaceAttachmentId?: string) => {
+    const src = dragSrc;
+    clearDrag();
+    if (!src || src.kind !== 'attachment') return;
+    if (replaceAttachmentId && replaceAttachmentId === src.attachmentId) return;
+    addAttachmentToSlot(slotId, src.attachmentId);
+    if (replaceAttachmentId) detachAttachment(slotId, replaceAttachmentId);
   };
 
   // 过滤后的根集合（搜索匹配或隐藏非选中模式）
@@ -718,23 +743,71 @@ export function HierarchyPanel() {
               ) : (
                 <div className="py-1">
                   {rows.map((r) => {
-                    // 「绘制顺序」里的行可拖拽排序
                     const drawId = r.key.startsWith('drawslot:') ? r.key.slice('drawslot:'.length) : null;
+                    const assetSrcId = r.key.startsWith('asset:') ? r.key.slice('asset:'.length) : null;
+                    // ---- 拖动源 ----
+                    //   「绘制顺序」里的插槽行 → 排序；「图片」里的附件行 → 拖去插槽（添加/替换）
+                    let drag: RowDrag | undefined;
+                    if (drawId) {
+                      drag = {
+                        dragging: dragSrc?.kind === 'slot-order' && dragSrc.slotId === drawId,
+                        title: '拖拽调整绘制顺序',
+                        onDragStart: () => setDragSrc({ kind: 'slot-order', slotId: drawId }),
+                        onDragEnd: clearDrag,
+                      };
+                    } else if (assetSrcId && r.asset) {
+                      drag = {
+                        dragging: dragSrc?.kind === 'attachment' && dragSrc.attachmentId === assetSrcId,
+                        title: '拖到插槽 = 添加附件；拖到插槽下的附件 = 替换',
+                        onDragStart: () => setDragSrc({ kind: 'attachment', attachmentId: assetSrcId }),
+                        onDragEnd: clearDrag,
+                      };
+                    }
+                    // ---- 落点 ----
+                    let drop: RowDrop | undefined;
+                    const onDragOverRow = (e: React.DragEvent) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = 'move';
+                      if (dropKey !== r.key) setDropKey(r.key);
+                    };
+                    const onDragLeaveRow = () => { if (dropKey === r.key) setDropKey(null); };
+                    if (dragSrc?.kind === 'slot-order' && drawId) {
+                      // 绘制顺序内部：排序
+                      drop = {
+                        kind: 'order',
+                        active: dropKey === r.key,
+                        onDragOver: onDragOverRow, onDragLeave: onDragLeaveRow,
+                        onDrop: () => dropSlotOrderAt(drawId),
+                      };
+                    } else if (dragSrc?.kind === 'attachment' && r.kind === 'slot' && r.slot && !drawId) {
+                      // 主树插槽行：添加附件
+                      const sid = r.slot.id;
+                      drop = {
+                        kind: 'slot',
+                        active: dropKey === r.key,
+                        onDragOver: onDragOverRow, onDragLeave: onDragLeaveRow,
+                        onDrop: () => dropAttachmentOn(sid),
+                      };
+                    } else if (
+                      dragSrc?.kind === 'attachment'
+                      && r.kind === 'asset' && r.asset && r.slotId
+                      && r.key.startsWith('slotatt:')
+                    ) {
+                      // 插槽下方的附件行：替换该附件
+                      const sid = r.slotId;
+                      const aid = r.asset.id;
+                      drop = {
+                        kind: 'attachment',
+                        active: dropKey === r.key,
+                        onDragOver: onDragOverRow, onDragLeave: onDragLeaveRow,
+                        onDrop: () => dropAttachmentOn(sid, aid),
+                      };
+                    }
                     return (
                     <TreeRowView
                       key={r.key}
-                      dnd={drawId ? {
-                        isDragging: dragLayerId === drawId,
-                        isDropTarget: dropTargetId === drawId,
-                        onDragStart: () => setDragLayerId(drawId),
-                        onDragOver: (e) => {
-                          e.preventDefault();
-                          if (dragLayerId && dragLayerId !== drawId) setDropTargetId(drawId);
-                        },
-                        onDragLeave: () => { if (dropTargetId === drawId) setDropTargetId(null); },
-                        onDrop: () => dropLayerAt(drawId),
-                        onDragEnd: () => { setDragLayerId(null); setDropTargetId(null); },
-                      } : undefined}
+                      drag={drag}
+                      drop={drop}
                       row={r}
                       selectedBoneId={selectedBoneId}
                       onSelect={selectBone}
@@ -934,6 +1007,27 @@ function GuideColumn({ isOwn, isLast, color }: { isOwn: boolean; isLast: boolean
   );
 }
 
+/** 一行的「拖动源」信息 */
+interface RowDrag {
+  /** 拖拽中（半透明显示） */
+  dragging: boolean;
+  /** 悬浮提示 */
+  title?: string;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+}
+
+/** 一行的「落点」信息 */
+interface RowDrop {
+  /** order = 绘制顺序插入位置；slot = 加到该插槽；attachment = 替换该附件 */
+  kind: 'order' | 'slot' | 'attachment';
+  /** 当前是否是落点（高亮） */
+  active: boolean;
+  onDragOver: (e: React.DragEvent) => void;
+  onDragLeave: () => void;
+  onDrop: () => void;
+}
+
 interface TreeRowViewProps {
   row: TreeRow;
   selectedBoneId: string | null;
@@ -958,16 +1052,10 @@ interface TreeRowViewProps {
   boneNameById: Map<string, string>;
   /** 「图片」节点上的 ＋ 导入按钮 */
   onImport?: () => void;
-  /** 「绘制顺序」分区的拖拽排序（只有该分区的行会传） */
-  dnd?: {
-    isDragging: boolean;
-    isDropTarget: boolean;
-    onDragStart: () => void;
-    onDragOver: (e: React.DragEvent) => void;
-    onDragLeave: () => void;
-    onDrop: () => void;
-    onDragEnd: () => void;
-  };
+  /** 该行可被拖动（绘制顺序里排序 / 「图片」里的附件拖去插槽） */
+  drag?: RowDrag;
+  /** 该行可作为落点 */
+  drop?: RowDrop;
   /** 附件图标 hover 大预览（仿 Spine：停留 2s 弹出大图） */
   onAssetHoverEnter?: (layer: PixiBonesLayer, clientX: number, clientY: number) => void;
   onAssetHoverMove?: (clientX: number, clientY: number) => void;
@@ -979,7 +1067,7 @@ function TreeRowView(props: TreeRowViewProps) {
     row, selectedBoneId, onSelect, onAddChild, collapsed, onToggleCollapse, search, C,
     selectedRowKey, onSelectSlot, onSelectAttachment,
     onActivateAttachment, selectedSectionKey, onSelectSection,
-    slotBindings, boneNameById, onImport, dnd,
+    slotBindings, boneNameById, onImport, drag, drop,
     onAssetHoverEnter, onAssetHoverMove, onAssetHoverLeave,
   } = props;
   const isBone = row.kind === 'bone';
@@ -1030,22 +1118,29 @@ function TreeRowView(props: TreeRowViewProps) {
   return (
     <div
       className="group flex items-center pr-1 rounded select-none"
-      draggable={!!dnd}
-      onDragStart={dnd ? (e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', row.label); dnd.onDragStart(); } : undefined}
-      onDragOver={dnd ? (e) => dnd.onDragOver(e) : undefined}
-      onDragLeave={dnd ? () => dnd.onDragLeave() : undefined}
-      onDrop={dnd ? (e) => { e.preventDefault(); dnd.onDrop(); } : undefined}
-      onDragEnd={dnd ? () => dnd.onDragEnd() : undefined}
+      draggable={!!drag}
+      onDragStart={drag ? (e) => {
+        e.dataTransfer.effectAllowed = 'move';
+        try { e.dataTransfer.setData('text/plain', row.label); } catch { /* 某些浏览器对自定义 MIME 有限制 */ }
+        drag.onDragStart();
+      } : undefined}
+      onDragEnd={drag ? () => drag.onDragEnd() : undefined}
+      onDragOver={drop ? (e) => drop.onDragOver(e) : undefined}
+      onDragLeave={drop ? () => drop.onDragLeave() : undefined}
+      onDrop={drop ? (e) => { e.preventDefault(); drop.onDrop(); } : undefined}
       style={{
         height: ROW_H,
-        cursor: dnd ? 'grab' : (clickable ? 'pointer' : 'default'),
+        cursor: drag ? 'grab' : (clickable ? 'pointer' : 'default'),
         background: isSelected ? C.accentDk : 'transparent',
         color: isSelected ? '#fff' : C.text,
         fontWeight: isSelected ? 600 : 400,
-        opacity: dnd?.isDragging ? 0.45 : 1,
-        boxShadow: dnd?.isDropTarget ? `inset 0 2px 0 ${C.accent}` : undefined,
+        opacity: drag?.dragging ? 0.45 : 1,
+        boxShadow: drop?.active
+          // 排序落点：顶部一条插入线；附件落点（加插槽 / 替换）：整行描边
+          ? (drop.kind === 'order' ? `inset 0 2px 0 ${C.accent}` : `inset 0 0 0 1px ${C.accent}`)
+          : undefined,
       }}
-      title={dnd ? '拖拽调整绘制顺序' : undefined}
+      title={drag?.title}
       onMouseEnter={(e) => {
         if (!isSelected && clickable) e.currentTarget.style.background = 'rgba(255,255,255,0.06)';
         if (isAsset && asset && onAssetHoverEnter) onAssetHoverEnter(asset, e.clientX, e.clientY);
