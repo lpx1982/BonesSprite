@@ -529,7 +529,7 @@ function TransformRow({
         <>
           <input
             value={xValue}
-            readOnly={!hoverable}
+            readOnly
             className="px-2 text-center"
             style={{
               background: 'var(--spine-bg-panel-dark)',
@@ -556,7 +556,7 @@ function TransformRow({
           />
           <input
             value={yValue}
-            readOnly={!hoverable}
+            readOnly
             className="px-2 text-center"
             style={{
               background: 'var(--spine-bg-panel-dark)',
@@ -575,7 +575,7 @@ function TransformRow({
       ) : (
         <input
           value={xValue}
-          readOnly={!hoverable}
+          readOnly
           className="px-2 text-center"
           style={{
             background: 'var(--spine-bg-panel-dark)',
