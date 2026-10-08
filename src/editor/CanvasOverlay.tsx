@@ -764,7 +764,7 @@ function MeshEditPanel() {
         {/* 行 4：顶点数 + 变形 */}
         <div className="flex items-center justify-center" style={{ gap: 12 }}>
           <span style={{ fontSize: 11, color: 'var(--spine-text)' }}>顶点: {vertexCount}</span>
-          <label style={meshCheck} title="勾选：拖动顶点改变形状">
+          <label style={meshCheck} title="勾选：编辑时也套用网格（预览裁切/变形）；不勾选：显示完整原图，只编辑顶点">
             <input
               type="checkbox"
               checked={deformed}

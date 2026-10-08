@@ -427,10 +427,15 @@ export function BoneEditor() {
         viewBySlotId.clear();
         canvasRefs.clear();
 
-        const meshes = usePixiBonesStore.getState().attachmentMeshes;
+        const st = usePixiBonesStore.getState();
+        const meshes = st.attachmentMeshes;
         wrapMatrixBySlot.clear();
         for (const { slot, layer } of renderablesOf(psd, images, slots)) {
-          addSlotView(slot, layer, meshes[layer.id]);
+          // ★ 网格编辑中且未勾选「变形」→ 不套用网格：显示**完整原图**，只让顶点可编辑
+          //   （仿 Spine 的 Deformed 未勾选：编辑时只看完整图 + 顶点，不施加裁切/变形；
+          //     退出编辑后网格照常生效）
+          const editingThisSlot = slot.id === st.meshEditSlotId && !st.meshDeformed;
+          addSlotView(slot, layer, editingThisSlot ? undefined : meshes[layer.id]);
         }
       };
 
@@ -3340,11 +3345,14 @@ export function BoneEditor() {
       const unsub = usePixiBonesStore.subscribe((state) => {
         if (destroyed) return;
         // 插槽结构（增删/切换激活附件/绘制顺序）变化 → 重建 sprite
+        // ★ 进出「网格编辑」或切换「变形」也会改变用 Mesh 还是 Sprite 渲染 → 一并重建
         if (
           state.psd !== prev.psd
           || state.images !== prev.images
           || state.slotOrder !== prev.slotOrder
           || state.slots !== prev.slots
+          || state.meshEditSlotId !== prev.meshEditSlotId
+          || state.meshDeformed !== prev.meshDeformed
         ) {
           rebuildAssets(state.psd, state.images, state.slots);
         }

@@ -158,7 +158,8 @@ export interface PixiBonesState {
   /** 是否在画布上画出三角剖分（虚线） */
   meshShowTriangles: boolean;
   setMeshShowTriangles: (v: boolean) => void;
-  /** 变形：勾选 = 拖动顶点改变形状；未勾选 = 只编辑 UV（纹理映射） */
+  /** 变形（仿 Spine 编辑网格里的 Deformed）：勾选 = 编辑时也套用网格（预览裁切/变形）；
+   *  未勾选 = 编辑时显示**完整原图**、只编辑顶点，不把网格效果施加到图片上。 */
   meshDeformed: boolean;
   setMeshDeformed: (v: boolean) => void;
   /** 网格编辑：变暗（占位，暂无渲染效果） */
@@ -628,7 +629,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   setMeshSelectedVertices: (idx) => set({ meshSelectedVertices: idx }),
   meshShowTriangles: true,
   setMeshShowTriangles: (v) => set({ meshShowTriangles: v }),
-  meshDeformed: true,
+  meshDeformed: false,   // 默认不勾：编辑网格时显示完整原图，只编辑顶点（网格不施加到图片）
   setMeshDeformed: (v) => set({ meshDeformed: v }),
   meshDim: false,
   setMeshDim: (v) => set({ meshDim: v }),
