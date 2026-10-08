@@ -111,6 +111,9 @@ export interface PixiBonesState {
   selectedRowKey: string | null;
   /** 选中一个附件（同时选中它所属的插槽）。rowKey = 被点击的树行 key。 */
   selectAttachment: (slotId: string, attachmentId: string, rowKey?: string) => void;
+  /** 删除插槽。★ 只允许删**空插槽**（有附件时请先把附件移出，避免素材丢失）——
+   *  插槽的生命周期由用户显式控制，不会被附件移走自动删除。 */
+  removeSlot: (slotId: string) => void;
   /** 按**附件 id** 反查它所属的插槽 id（找不到返回 null） */
   slotIdOfAttachment: (attachmentId: string | null) => string | null;
   /** 多选插槽。additive=true 增量追加，false 替换 */
@@ -367,12 +370,13 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
         : s,
     );
     // 2) 放进目标插槽，并设为当前显示
+    //    ★ 空插槽**保留**（仿 Spine：插槽是结构节点，生命周期由用户显式控制，
+    //      不会因为附件被移走而自动消失 —— 被移走附件的原插槽会变成一个空插槽）
     const slots = stripped
       .map((s) => s.id === slotId
         ? { ...s, attachmentIds: [...s.attachmentIds, attachmentId], activeAttachmentId: attachmentId }
         : s)
-      // 3) 清掉变空的插槽 + 修正 activeAttachmentId 指向已移走的附件的情况
-      .filter((s) => s.attachmentIds.length > 0)
+      // 3) 修正 activeAttachmentId 指向已移走的附件的情况（空插槽 → null）
       .map((s) => (s.activeAttachmentId && s.attachmentIds.includes(s.activeAttachmentId))
         ? s
         : { ...s, activeAttachmentId: s.attachmentIds[0] ?? null });
@@ -382,12 +386,10 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   detachAttachment: (slotId, attachmentId) => set((state) => {
     const src = state.slots.find((s) => s.id === slotId);
     if (!src || !src.attachmentIds.includes(attachmentId)) return state;
-    // 从原插槽移除
+    // 从原插槽移除（★ 空插槽保留，不自动删除 —— 同 addAttachmentToSlot）
     let slots = state.slots.map((s) => s.id === slotId
       ? { ...s, attachmentIds: s.attachmentIds.filter((id) => id !== attachmentId) }
       : s);
-    // 原插槽空了 → 删除
-    slots = slots.filter((s) => s.attachmentIds.length > 0);
     // 修正 activeAttachmentId
     slots = slots.map((s) => (s.activeAttachmentId && s.attachmentIds.includes(s.activeAttachmentId))
       ? s
@@ -644,6 +646,27 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       delete next[slotId];
       return { slotBindings: next };
     }),
+  // 删除插槽（★ 只允许删空插槽：有附件时请先把附件移出，避免素材丢失）
+  removeSlot: (slotId) => set((state) => {
+    const slot = state.slots.find((s) => s.id === slotId);
+    if (!slot || slot.attachmentIds.length > 0) return state;
+    const omit = <T,>(rec: Record<string, T>) => {
+      const next = { ...rec };
+      delete next[slotId];
+      return next;
+    };
+    return {
+      slots: state.slots.filter((s) => s.id !== slotId),
+      selectedSlotId: state.selectedSlotId === slotId ? null : state.selectedSlotId,
+      selectedSlotIds: state.selectedSlotIds.filter((id) => id !== slotId),
+      selectedRowKey: state.selectedRowKey === 'slot:' + slotId ? null : state.selectedRowKey,
+      slotVisibility: omit(state.slotVisibility),
+      slotStyle: omit(state.slotStyle),
+      slotBindings: omit(state.slotBindings),
+      slotTransforms: omit(state.slotTransforms),
+      slotOrder: state.slotOrder.filter((id) => id !== slotId),
+    };
+  }),
   // 单独导入的图片素材（PNG/JPG）：追加到 images，并建一个同名插槽
   addImage: (layer) =>
     set((state) => {

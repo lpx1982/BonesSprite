@@ -136,6 +136,7 @@ export function HierarchyPanel() {
   const selectSection = usePixiBonesStore((s) => s.selectSection);
   const startAttach = usePixiBonesStore((s) => s.startAttach);
   const unbindSlot = usePixiBonesStore((s) => s.unbindSlot);
+  const removeSlot = usePixiBonesStore((s) => s.removeSlot);
   const importInputRef = useRef<HTMLInputElement>(null);
   // 刷新（清缩略图缓存后强制重渲染）
   const [, setRefreshTick] = useState(0);
@@ -390,7 +391,8 @@ export function HierarchyPanel() {
         slot,
         icon: '◉',
         label: slot.name,
-        collapsible: true,
+        // 空插槽没有子行 → 不显示折叠按钮（插槽本身仍保留在树里）
+        collapsible: slot.attachmentIds.length > 0,
       });
       if (isCollapsed) return;
       slot.attachmentIds.forEach((aid, j) => {
@@ -896,6 +898,9 @@ export function HierarchyPanel() {
           bindingBoneName={selectedBindingBoneName}
           onParent={() => startAttach(selectedSlotId)}
           onUnbind={() => unbindSlot(selectedSlotId)}
+          onDelete={selectedSlot && selectedSlot.attachmentIds.length === 0
+            ? () => removeSlot(selectedSlotId)
+            : undefined}
           C={C}
         />
       ) : selectedSectionKey === 'images' ? (
@@ -1217,9 +1222,12 @@ function TreeRowView(props: TreeRowViewProps) {
         </span>
       )}
 
-      {/* 名称 */}
+      {/* 名称（空插槽额外标注，便于区分「插槽还在但没附件」） */}
       <span className="truncate flex-1 text-xs" title={row.label}>
         {nameEl}
+        {isSlot && slot && slot.attachmentIds.length === 0 && (
+          <span className="ml-1 text-[9px]" style={{ color: C.dim }}>（空）</span>
+        )}
       </span>
 
       {/* 插槽行 / 附件行：绑定状态 / 绑定按钮（都作用于插槽） */}
@@ -1595,13 +1603,15 @@ interface SlotPropsBlockProps {
   bindingBoneName: string | null;
   onParent: () => void;
   onUnbind: () => void;
+  /** 删除插槽（仅空插槽时由父组件传入；undefined = 有附件，按占位显示） */
+  onDelete?: () => void;
   C: any;
 }
 
 function SlotPropsBlock(props: SlotPropsBlockProps) {
   const {
     slot, activeAttachment, candidates, onAddAttachment,
-    color, onColor, blend, onBlend, bindingBoneName, onParent, onUnbind, C,
+    color, onColor, blend, onBlend, bindingBoneName, onParent, onUnbind, onDelete, C,
   } = props;
   // 「＋ 新建…」选择器：把已有素材加入该插槽
   const [picking, setPicking] = useState(false);
@@ -1618,6 +1628,8 @@ function SlotPropsBlock(props: SlotPropsBlockProps) {
         name={name}
         badge={slot ? `${slot.attachmentIds.length} 附件` : ''}
         C={C}
+        onDelete={onDelete}
+        deleteTitle="删除该插槽"
       />
 
       {/* 已绑定的父级骨骼 */}
