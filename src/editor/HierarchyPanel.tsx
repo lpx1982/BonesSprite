@@ -120,10 +120,18 @@ export function HierarchyPanel() {
   const slotOrder = usePixiBonesStore((s) => s.slotOrder);
   const setSlotOrder = usePixiBonesStore((s) => s.setSlotOrder);
   const selectedSlotId = usePixiBonesStore((s) => s.selectedSlotId);
-  const selectedSlotIds = usePixiBonesStore((s) => s.selectedSlotIds);
+  /** 当前选中的附件 id（null = 选中的是插槽本身） */
+  const selectedAttachmentId = usePixiBonesStore((s) => s.selectedAttachmentId);
+  /** 当前选中的树行 key —— 用于「点哪行亮哪行」的精确高亮 */
+  const selectedRowKey = usePixiBonesStore((s) => s.selectedRowKey);
   const selectSlot = usePixiBonesStore((s) => s.selectSlot);
+  const selectAttachment = usePixiBonesStore((s) => s.selectAttachment);
   const toggleSlotVisibility = usePixiBonesStore((s) => s.toggleSlotVisibility);
   const slotBindings = usePixiBonesStore((s) => s.slotBindings);
+  const slotStyle = usePixiBonesStore((s) => s.slotStyle);
+  const setSlotStyle = usePixiBonesStore((s) => s.setSlotStyle);
+  const attachmentStyle = usePixiBonesStore((s) => s.attachmentStyle);
+  const setAttachmentStyle = usePixiBonesStore((s) => s.setAttachmentStyle);
   const selectedSectionKey = usePixiBonesStore((s) => s.selectedSectionKey);
   const selectSection = usePixiBonesStore((s) => s.selectSection);
   const startAttach = usePixiBonesStore((s) => s.startAttach);
@@ -214,6 +222,14 @@ export function HierarchyPanel() {
   /** 当前选中插槽的激活附件（用于底部面板标题等） */
   const selectedSlotActive = selectedSlot?.activeAttachmentId
     ? attachmentById.get(selectedSlot.activeAttachmentId) ?? null
+    : null;
+  /** 当前选中的附件对象（层级树点附件行时非 null）→ 底部显示「附件属性」面板 */
+  const selectedAttachment = selectedAttachmentId
+    ? attachmentById.get(selectedAttachmentId) ?? null
+    : null;
+  /** 当前选中插槽绑定的骨骼名（底部面板显示「父级」用） */
+  const selectedBindingBoneName = selectedSlotId && slotBindings[selectedSlotId]
+    ? new Map(bones.map((b) => [b.id, b.name])).get(slotBindings[selectedSlotId].boneId) ?? null
     : null;
 
   /** 插槽按绘制顺序排列（层级树 & 「绘制顺序」拖拽排序共用） */
@@ -653,6 +669,31 @@ export function HierarchyPanel() {
                     </button>
                   );
                 }
+                // 附件行：○ = 非当前附件，👁 = 该插槽当前显示的附件。
+                // 点 ○ 即把该附件切换为「当前显示」→ 变成 👁（仿 Spine）
+                if (r.kind === 'asset' && r.asset && r.slotId) {
+                  const isCur = !!r.attachmentActive;
+                  const sid = r.slotId;
+                  const aid = r.asset.id;
+                  return (
+                    <button
+                      key={r.key}
+                      className="h-[22px] flex items-center justify-center text-[10px] shrink-0"
+                      title={isCur ? '当前显示' : '点击切换为当前显示'}
+                      style={{
+                        background: 'transparent', border: 'none',
+                        cursor: isCur ? 'default' : 'pointer',
+                        color: isCur ? C.accent : C.dim,
+                      }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!isCur) setActiveAttachment(sid, aid);
+                      }}
+                    >
+                      {isCur ? '👁' : '○'}
+                    </button>
+                  );
+                }
                 return (
                   <div
                     key={r.key}
@@ -702,8 +743,9 @@ export function HierarchyPanel() {
                       onToggleCollapse={toggleCollapsed}
                       search={search}
                       C={C}
-                      selectedSlotIds={selectedSlotIds}
+                      selectedRowKey={selectedRowKey}
                       onSelectSlot={selectSlot}
+                      onSelectAttachment={selectAttachment}
                       onActivateAttachment={setActiveAttachment}
                       selectedSectionKey={selectedSectionKey}
                       onSelectSection={selectSection}
@@ -755,23 +797,32 @@ export function HierarchyPanel() {
           isolated={hideNonSelected}
           C={C}
         />
+      ) : selectedAttachment && selectedSlotId ? (
+        <AttachmentPropsBlock
+          attachment={selectedAttachment}
+          color={attachmentStyle[selectedAttachment.id]?.color ?? ''}
+          onColor={(c) => setAttachmentStyle(selectedAttachment.id, { color: c })}
+          candidates={attachments.filter((l) => !selectedSlot?.attachmentIds.includes(l.id))}
+          onAddAttachment={(aid) => addAttachmentToSlot(selectedSlotId, aid)}
+          onDetach={() => detachAttachment(selectedSlotId, selectedAttachment.id)}
+          bindingBoneName={selectedBindingBoneName}
+          onUnbind={() => unbindSlot(selectedSlotId)}
+          onParent={() => startAttach(selectedSlotId)}
+          C={C}
+        />
       ) : selectedSlotId ? (
         <SlotPropsBlock
           slot={selectedSlot}
           activeAttachment={selectedSlotActive}
-          attachments={attachments}
-          attachmentById={attachmentById}
-          bindingBoneName={
-            slotBindings[selectedSlotId]
-              ? new Map(bones.map((b) => [b.id, b.name])).get(slotBindings[selectedSlotId].boneId) ?? null
-              : null
-          }
-          onSetActive={(aid) => setActiveAttachment(selectedSlotId, aid)}
+          candidates={attachments.filter((l) => !selectedSlot?.attachmentIds.includes(l.id))}
           onAddAttachment={(aid) => addAttachmentToSlot(selectedSlotId, aid)}
-          onDetach={(aid) => detachAttachment(selectedSlotId, aid)}
+          color={slotStyle[selectedSlotId]?.color ?? ''}
+          onColor={(c) => setSlotStyle(selectedSlotId, { color: c })}
+          blend={slotStyle[selectedSlotId]?.blend ?? 'normal'}
+          onBlend={(b) => setSlotStyle(selectedSlotId, { blend: b })}
+          bindingBoneName={selectedBindingBoneName}
           onParent={() => startAttach(selectedSlotId)}
           onUnbind={() => unbindSlot(selectedSlotId)}
-          onOpen={() => toggleSlotVisibility(selectedSlotId)}
           C={C}
         />
       ) : selectedSectionKey === 'images' ? (
@@ -892,10 +943,12 @@ interface TreeRowViewProps {
   onToggleCollapse: (key: string) => void;
   search: string;
   C: any;
-  /** 插槽相关：多选插槽（画布框选 / Shift 加选） */
-  selectedSlotIds: string[];
+  /** 当前选中的树行 key —— 只给「被点击的那一行」上高亮，不联动其它视图 */
+  selectedRowKey: string | null;
   /** 选中一个插槽（key = slotId） */
-  onSelectSlot: (slotId: string) => void;
+  onSelectSlot: (slotId: string, rowKey?: string) => void;
+  /** 选中一个附件（点附件行）。rowKey = 该行 key，用于精确高亮 */
+  onSelectAttachment: (slotId: string, attachmentId: string, rowKey: string) => void;
   /** 切换插槽当前显示的附件 */
   onActivateAttachment: (slotId: string, attachmentId: string) => void;
   /** 分区节点（约束 / 图片 / …）相关 */
@@ -924,7 +977,8 @@ interface TreeRowViewProps {
 function TreeRowView(props: TreeRowViewProps) {
   const {
     row, selectedBoneId, onSelect, onAddChild, collapsed, onToggleCollapse, search, C,
-    selectedSlotIds, onSelectSlot, onActivateAttachment, selectedSectionKey, onSelectSection,
+    selectedRowKey, onSelectSlot, onSelectAttachment,
+    onActivateAttachment, selectedSectionKey, onSelectSection,
     slotBindings, boneNameById, onImport, dnd,
     onAssetHoverEnter, onAssetHoverMove, onAssetHoverLeave,
   } = props;
@@ -941,12 +995,12 @@ function TreeRowView(props: TreeRowViewProps) {
   const slot = row.slot;
   /** 附件行归属的插槽 id */
   const assetSlotId = row.slotId ?? null;
+  // ★ 高亮精确到「被点击的那一行」：slot / asset 行只看 selectedRowKey，
+  //   避免同一插槽在 主树 / 绘制顺序 / 图片分区 多处同时高亮。
   const isSelected =
     (isBone && !!node && selectedBoneId === node.id) ||
-    (isSlot && !!slot && selectedSlotIds.includes(slot.id)) ||
-    (isSection && sectionKey !== null && selectedSectionKey === sectionKey) ||
-    // 附件行：所属插槽被选中时高亮
-    (isAsset && !!assetSlotId && selectedSlotIds.includes(assetSlotId));
+    ((isSlot || isAsset) && row.key === selectedRowKey) ||
+    (isSection && sectionKey !== null && selectedSectionKey === sectionKey);
 
   // 绑定信息（按插槽查；附件行显示它所属插槽的绑定）
   const binding = assetSlotId ? slotBindings[assetSlotId] : (slot ? slotBindings[slot.id] : undefined);
@@ -1006,12 +1060,12 @@ function TreeRowView(props: TreeRowViewProps) {
       onClick={() => {
         if (isBone && node) onSelect(node.id);
         else if (isSection && sectionKey !== null) onSelectSection(sectionKey);
-        else if (isSlot && slot) onSelectSlot(slot.id);
+        else if (isSlot && slot) onSelectSlot(slot.id, row.key);
         else if (isAsset && asset) {
-          // 附件行：切换为「当前显示」+ 选中它所属的插槽
+          // 附件行：切换为「当前显示」+ 选中该附件（底部面板显示「附件属性」）
           if (assetSlotId) {
             onActivateAttachment(assetSlotId, asset.id);
-            onSelectSlot(assetSlotId);
+            onSelectAttachment(assetSlotId, asset.id, row.key);
           }
         }
       }}
@@ -1072,13 +1126,6 @@ function TreeRowView(props: TreeRowViewProps) {
       <span className="truncate flex-1 text-xs" title={row.label}>
         {nameEl}
       </span>
-
-      {/* 附件行：标记「当前显示」 */}
-      {isAsset && row.attachmentActive && (
-        <span className="shrink-0 text-[9px] px-1 rounded mr-0.5" style={{ color: C.accent, border: '1px solid ' + C.accent }} title="该插槽当前显示的附件">
-          当前
-        </span>
-      )}
 
       {/* 插槽行 / 附件行：绑定状态 / 绑定按钮（都作用于插槽） */}
       {(isSlot && slot) || (isAsset && assetSlotId) ? (
@@ -1313,51 +1360,170 @@ function CheckChip({ label, defaultChecked, C }: { label: string; defaultChecked
 }
 
 // =================================================================================
-//  选中插槽的属性块（Spine 风格：插槽名 + 附件列表 / 添加附件 + 父级 / 显示 / 解除绑定）
+//  属性面板共用零件（插槽面板 / 附件面板共用；仿 Spine 面板布局）
+// =================================================================================
+
+/** PIXI v8 混合模式下拉选项 */
+const BLEND_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'normal',   label: '正常' },
+  { value: 'add',      label: '相加' },
+  { value: 'multiply', label: '相乘' },
+  { value: 'screen',   label: '滤色' },
+  { value: 'overlay',  label: '叠加' },
+  { value: 'darken',   label: '变暗' },
+  { value: 'lighten',  label: '变亮' },
+];
+
+/** 属性面板顶部的素材预览（棋盘格底，等比缩放到框内） */
+function AssetPreview({ layer, C }: { layer: PixiBonesLayer | null; C: any }) {
+  const url = layer ? attachmentThumb(layer) : null;
+  return (
+    <div
+      className="flex items-center justify-center"
+      style={{
+        height: 72,
+        borderBottom: '1px solid ' + C.border,
+        backgroundColor: C.panelDk,
+        backgroundImage: [
+          'linear-gradient(45deg, rgba(255,255,255,0.05) 25%, transparent 25%)',
+          'linear-gradient(-45deg, rgba(255,255,255,0.05) 25%, transparent 25%)',
+          'linear-gradient(45deg, transparent 75%, rgba(255,255,255,0.05) 75%)',
+          'linear-gradient(-45deg, transparent 75%, rgba(255,255,255,0.05) 75%)',
+        ].join(','),
+        backgroundSize: '12px 12px',
+        backgroundPosition: '0 0, 0 6px, 6px -6px, -6px 0px',
+      }}
+    >
+      {url ? (
+        <img src={url} alt="" draggable={false} style={{ maxWidth: '92%', maxHeight: 64, objectFit: 'contain' }} />
+      ) : (
+        <span className="text-[10px]" style={{ color: C.dim }}>无预览</span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 属性面板标题栏：`◉ 插槽: 名字` / `▭ 区域: 名字` + 右侧 4 个图标按钮
+ * （复制 / 粘贴 / 设置 / 删除）。图标按钮暂为占位（待实现）。
+ */
+function PanelTitleBar({
+  icon, kindLabel, name, badge, C, onDelete, deleteTitle,
+}: {
+  icon: string; kindLabel: string; name: string; badge?: string; C: any;
+  /** 提供则「✕」可点，否则为占位 */
+  onDelete?: () => void;
+  deleteTitle?: string;
+}) {
+  const iconBtn: React.CSSProperties = {
+    background: C.panel,
+    border: '1px solid ' + C.border,
+    color: C.dim,
+    cursor: 'not-allowed',
+    width: 20, height: 18, lineHeight: '16px',
+    fontSize: 10, borderRadius: 3, padding: 0, opacity: 0.55,
+  };
+  return (
+    <div
+      className="flex items-center px-2 py-1.5 gap-1"
+      style={{ background: C.toolbar, borderBottom: '1px solid ' + C.border }}
+    >
+      <span className="text-xs shrink-0" style={{ color: C.dim }}>{icon}</span>
+      <span className="text-xs shrink-0" style={{ color: C.dim }}>{kindLabel}:</span>
+      <span className="text-xs font-semibold truncate" style={{ color: C.selected }} title={name}>{name}</span>
+      {badge ? <span className="text-[10px] shrink-0" style={{ color: C.dim }}>{badge}</span> : null}
+      <span className="ml-auto flex items-center gap-1 shrink-0">
+        <button style={iconBtn} title="复制（待实现）">⧉</button>
+        <button style={iconBtn} title="粘贴（待实现）">⎘</button>
+        <button style={iconBtn} title="设置（待实现）">⚙</button>
+        <button
+          style={onDelete
+            ? { ...iconBtn, color: '#e06c75', cursor: 'pointer', opacity: 1 }
+            : { ...iconBtn, color: '#e06c75' }}
+          title={onDelete ? (deleteTitle ?? '删除') : '删除（待实现）'}
+          onClick={onDelete}
+        >✕</button>
+      </span>
+    </div>
+  );
+}
+
+/** 属性面板的一行：左「图标 + 标签」+ 右侧控件 */
+function PanelRow({
+  icon, label, C, children,
+}: { icon: string; label: string; C: any; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-1 px-2 py-1" style={{ borderBottom: '1px solid ' + C.border }}>
+      <span className="w-4 text-[11px] shrink-0 text-center" style={{ color: C.dim }}>{icon}</span>
+      <span className="text-[11px] shrink-0" style={{ color: C.text, width: 40 }}>{label}</span>
+      <span className="flex items-center gap-1 flex-1 min-w-0">{children}</span>
+    </div>
+  );
+}
+
+/** 属性面板底部按钮（＋ 新建… / ↖ 父级） */
+function PanelFooterBtn({
+  C, onClick, icon, label, title,
+}: { C: any; onClick: () => void; icon: string; label: string; title?: string }) {
+  return (
+    <button
+      onClick={onClick}
+      className="rounded px-1 py-1 flex items-center justify-center gap-0.5"
+      style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border, cursor: 'pointer' }}
+      onMouseEnter={(e) => (e.currentTarget.style.background = C.toolbar)}
+      onMouseLeave={(e) => (e.currentTarget.style.background = C.panel)}
+      title={title}
+    >
+      <span style={{ color: C.accent }}>{icon}</span> {label}
+    </button>
+  );
+}
+
+// =================================================================================
+//  选中插槽的属性块（仿 Spine 插槽面板）
+//    预览 + 「◉ 插槽: 名字」标题栏 + 颜色 + 混合 + ＋新建…/↖父级
 // =================================================================================
 interface SlotPropsBlockProps {
   slot: PixiBonesSlot | null;
-  /** 插槽当前显示的附件 */
+  /** 插槽当前显示的附件（顶部预览区用） */
   activeAttachment: PixiBonesLayer | null;
-  /** 全部附件（供「添加附件」挑选） */
-  attachments: PixiBonesLayer[];
-  attachmentById: Map<string, PixiBonesLayer>;
+  /** 「＋ 新建…」挑选器：可加入该插槽的候选素材 */
+  candidates: PixiBonesLayer[];
+  onAddAttachment: (attachmentId: string) => void;
+  /** 插槽颜色（hex，'' = 不覆盖） */
+  color: string;
+  onColor: (color: string) => void;
+  /** 插槽混合模式（PIXI v8 blend 字符串） */
+  blend: string;
+  onBlend: (blend: string) => void;
   /** 已绑定的父级骨骼名（null = 未绑定） */
   bindingBoneName: string | null;
-  onSetActive: (attachmentId: string) => void;
-  onAddAttachment: (attachmentId: string) => void;
-  onDetach: (attachmentId: string) => void;
   onParent: () => void;
   onUnbind: () => void;
-  onOpen: () => void;
   C: any;
 }
 
 function SlotPropsBlock(props: SlotPropsBlockProps) {
   const {
-    slot, activeAttachment, attachments, attachmentById,
-    bindingBoneName, onSetActive, onAddAttachment, onDetach, onParent, onUnbind, onOpen, C,
+    slot, activeAttachment, candidates, onAddAttachment,
+    color, onColor, blend, onBlend, bindingBoneName, onParent, onUnbind, C,
   } = props;
-  // 「添加附件」选择器：插槽之外的附件
+  // 「＋ 新建…」选择器：把已有素材加入该插槽
   const [picking, setPicking] = useState(false);
-  const candidates = attachments.filter((l) => !slot?.attachmentIds.includes(l.id));
   const name = slot?.name ?? '（未知插槽）';
-  const btnStyle: React.CSSProperties = {
-    background: C.panel,
-    color: C.text,
-    border: '1px solid ' + C.border,
-    cursor: 'pointer',
-  };
   return (
     <div style={{ borderTop: '1px solid ' + C.border, background: C.panelDk }}>
-      {/* 标题行：插槽: <name> */}
-      <div className="flex items-center px-2 py-1.5 gap-1" style={{ background: C.toolbar, borderBottom: '1px solid ' + C.border }}>
-        <span className="text-xs shrink-0" style={{ color: C.dim }}>插槽:</span>
-        <span className="text-xs font-semibold truncate" style={{ color: C.selected }} title={name}>{name}</span>
-        <span className="ml-auto text-[10px] shrink-0" style={{ color: C.dim }}>
-          {slot ? `${slot.attachmentIds.length} 附件` : ''}
-        </span>
-      </div>
+      {/* 预览区：插槽当前附件的大图（棋盘格底） */}
+      <AssetPreview layer={activeAttachment} C={C} />
+
+      {/* 标题栏：◉ 插槽: 名字 + 右侧图标按钮 */}
+      <PanelTitleBar
+        icon="◉"
+        kindLabel="插槽"
+        name={name}
+        badge={slot ? `${slot.attachmentIds.length} 附件` : ''}
+        C={C}
+      />
 
       {/* 已绑定的父级骨骼 */}
       {bindingBoneName && (
@@ -1371,103 +1537,256 @@ function SlotPropsBlock(props: SlotPropsBlockProps) {
         </div>
       )}
 
-      {/* 附件列表：当前显示的附件高亮；点其他附件 = 切换成它 */}
-      <div className="px-2 py-1" style={{ borderTop: '1px solid ' + C.border }}>
-        <div className="flex items-center gap-1 text-[10px] mb-1" style={{ color: C.dim }}>
-          <span>附件</span>
-          <span className="text-[9px] opacity-70">（点击切换当前显示）</span>
-          <button
-            className="ml-auto rounded px-1"
-            style={{ ...btnStyle, fontSize: 10, padding: '0 4px' }}
-            onClick={() => setPicking((v) => !v)}
-            onMouseEnter={(e) => (e.currentTarget.style.background = C.toolbar)}
-            onMouseLeave={(e) => (e.currentTarget.style.background = C.panel)}
-            title="把已有素材加进这个插槽"
-          >
-            {picking ? '收起' : '＋ 添加附件'}
-          </button>
-        </div>
+      {/* 颜色行：插槽颜色（与附件颜色相乘后作用于画布） */}
+      <PanelRow icon="🎨" label="颜色" C={C}>
+        <input
+          type="color"
+          value={color || '#ffffff'}
+          onChange={(e) => onColor(e.target.value)}
+          style={{ width: 30, height: 18, padding: 0, border: '1px solid ' + C.border, background: 'transparent', cursor: 'pointer' }}
+          title="插槽颜色（与附件颜色相乘后作用于画布）"
+        />
+        <button
+          className="rounded px-1 text-[10px]"
+          style={{ background: C.panel, border: '1px solid ' + C.border, color: C.text, cursor: 'pointer' }}
+          onClick={() => onColor('')}
+          title="恢复默认（不覆盖颜色）"
+        >默认</button>
+      </PanelRow>
 
-        {/* 选择要加入的附件 */}
-        {picking && (
-          <div className="mb-1 rounded" style={{ background: C.panel, border: '1px solid ' + C.border, maxHeight: 132, overflowY: 'auto' }}>
-            {candidates.length === 0 ? (
-              <div className="px-2 py-1 text-[10px]" style={{ color: C.dim }}>没有可添加的素材</div>
-            ) : candidates.map((l) => (
-              <button
-                key={l.id}
-                className="w-full flex items-center gap-1 px-2 py-1 text-[10px] text-left"
-                style={{ background: 'transparent', border: 'none', color: C.text, cursor: 'pointer' }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = C.toolbar)}
-                onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-                onClick={() => { onAddAttachment(l.id); setPicking(false); }}
-                title="加入该插槽并设为当前显示"
-              >
-                <span>🖼</span>
-                <span className="truncate">{l.name}</span>
-              </button>
-            ))}
-          </div>
-        )}
+      {/* 混合行 */}
+      <PanelRow icon="🖼" label="混合" C={C}>
+        <select
+          value={blend}
+          onChange={(e) => onBlend(e.target.value)}
+          className="rounded px-1 text-[10px] w-full"
+          style={{ background: C.panel, border: '1px solid ' + C.border, color: C.text, cursor: 'pointer' }}
+        >
+          {BLEND_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+      </PanelRow>
 
-        {/* 当前附件列表 */}
-        {slot?.attachmentIds.map((aid) => {
-          const l = attachmentById.get(aid);
-          if (!l) return null;
-          const isActive = aid === slot.activeAttachmentId;
-          return (
-            <div
-              key={aid}
-              className="group flex items-center gap-1 rounded px-1 py-[2px] text-[10px]"
-              style={{
-                background: isActive ? C.accentDk : 'transparent',
-                color: isActive ? '#fff' : C.text,
-                cursor: 'pointer',
-              }}
-              onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; }}
-              onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}
-              onClick={() => { if (!isActive) onSetActive(aid); }}
-              title={isActive ? '当前显示' : '点击切换为当前显示'}
+      {/* ＋ 新建…：挑选已有素材加入该插槽 */}
+      {picking && (
+        <div className="mx-2 my-1 rounded" style={{ background: C.panel, border: '1px solid ' + C.border, maxHeight: 132, overflowY: 'auto' }}>
+          {candidates.length === 0 ? (
+            <div className="px-2 py-1 text-[10px]" style={{ color: C.dim }}>没有可添加的素材</div>
+          ) : candidates.map((l) => (
+            <button
+              key={l.id}
+              className="w-full flex items-center gap-1 px-2 py-1 text-[10px] text-left"
+              style={{ background: 'transparent', border: 'none', color: C.text, cursor: 'pointer' }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = C.toolbar)}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+              onClick={() => { onAddAttachment(l.id); setPicking(false); }}
+              title="加入该插槽并设为当前显示"
             >
-              <span style={{ color: isActive ? '#fff' : C.accent }}>{isActive ? '◉' : '○'}</span>
-              <span className="truncate flex-1">{l.name}</span>
-              {/* 从插槽移出（放回独立插槽） */}
-              <button
-                className="shrink-0 opacity-0 group-hover:opacity-100"
-                style={{ background: 'transparent', border: 'none', color: C.dim, cursor: 'pointer' }}
-                onClick={(e) => { e.stopPropagation(); onDetach(aid); }}
-                title="移出插槽（变成独立插槽）"
-              >✕</button>
-            </div>
-          );
-        })}
-        {activeAttachment === null && (
-          <div className="text-[10px] py-1" style={{ color: C.dim }}>该插槽当前不显示任何附件</div>
-        )}
-      </div>
+              <span>🖼</span>
+              <span className="truncate">{l.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
 
-      {/* 操作按钮：父级 / 显示 */}
+      {/* 操作按钮：＋ 新建… / ↖ 父级 */}
       <div className="px-2 pb-2 pt-1 grid grid-cols-2 gap-1 text-[10px]">
-        <button
+        <PanelFooterBtn
+          C={C}
+          onClick={() => setPicking((v) => !v)}
+          icon="＋"
+          label="新建…"
+          title="把已有素材加入该插槽"
+        />
+        <PanelFooterBtn
+          C={C}
           onClick={onParent}
-          className="rounded px-1 py-1 flex items-center justify-center gap-0.5"
-          style={btnStyle}
-          onMouseEnter={(e) => (e.currentTarget.style.background = C.toolbar)}
-          onMouseLeave={(e) => (e.currentTarget.style.background = C.panel)}
+          icon="↖"
+          label="父级"
           title="设置父级（拾取骨骼）"
+        />
+      </div>
+    </div>
+  );
+}
+
+// =================================================================================
+//  选中附件的属性块（仿 Spine 区域附件面板）
+//    预览 + 「▭ 区域: 名字」标题栏 + 图片路径 + 选项 + 网格/序列 + 颜色 + ＋新建…/↖父级
+// =================================================================================
+interface AttachmentPropsBlockProps {
+  attachment: PixiBonesLayer;
+  /** 附件颜色（hex，'' = 不覆盖） */
+  color: string;
+  onColor: (color: string) => void;
+  /** 「＋ 新建…」挑选器：可加入所属插槽的候选素材 */
+  candidates: PixiBonesLayer[];
+  onAddAttachment: (attachmentId: string) => void;
+  /** 从插槽移出（放回独立插槽） */
+  onDetach: () => void;
+  /** 已绑定的父级骨骼名（null = 未绑定） */
+  bindingBoneName: string | null;
+  /** 解除插槽与骨骼的绑定 */
+  onUnbind: () => void;
+  /** 设置父级（拾取骨骼） */
+  onParent: () => void;
+  C: any;
+}
+
+/** 附件打包选项的一个复选框（选择 / 导出 / 名称） */
+function FlagCheck({
+  label, checked, onChange, C,
+}: { label: string; checked: boolean; onChange: (v: boolean) => void; C: any }) {
+  return (
+    <label className="flex items-center gap-1 shrink-0 cursor-pointer text-[10px]" style={{ color: C.text }}>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        style={{ accentColor: C.accent }}
+      />
+      {label}
+    </label>
+  );
+}
+
+function AttachmentPropsBlock(props: AttachmentPropsBlockProps) {
+  const {
+    attachment, color, onColor, candidates, onAddAttachment,
+    onDetach, bindingBoneName, onUnbind, onParent, C,
+  } = props;
+  // 「＋ 新建…」：把已有素材加入所属插槽
+  const [picking, setPicking] = useState(false);
+  // 打包选项（选择 / 导出 / 名称）—— 骨架阶段先本地保存，待接入纹理打包流程
+  const [flags, setFlags] = useState<Record<string, { selected: boolean; exported: boolean; named: boolean }>>({});
+  const flag = flags[attachment.id] ?? { selected: true, exported: true, named: false };
+  const patchFlag = (k: 'selected' | 'exported' | 'named', v: boolean) =>
+    setFlags((m) => ({ ...m, [attachment.id]: { ...flag, [k]: v } }));
+
+  const miniBtn: React.CSSProperties = {
+    background: C.panel,
+    border: '1px solid ' + C.border,
+    color: C.dim,
+    cursor: 'not-allowed',
+    width: 20, height: 18, lineHeight: '16px', fontSize: 10,
+    borderRadius: 3, padding: 0, flex: 'none',
+  };
+
+  return (
+    <div style={{ borderTop: '1px solid ' + C.border, background: C.panelDk }}>
+      {/* 预览区：该附件的大图 */}
+      <AssetPreview layer={attachment} C={C} />
+
+      {/* 标题栏：▭ 区域: 名字（✕ = 从插槽移出） */}
+      <PanelTitleBar
+        icon="▭"
+        kindLabel="区域"
+        name={attachment.name}
+        C={C}
+        onDelete={onDetach}
+        deleteTitle="从插槽移出（变成独立插槽）"
+      />
+
+      {/* 已绑定的父级骨骼 */}
+      {bindingBoneName && (
+        <div className="px-2 py-1 flex items-center gap-1 text-[10px]" style={{ color: '#7dd3a0' }}>
+          <span>🔗 父级: {bindingBoneName}</span>
+          <button
+            style={{ background: 'transparent', border: 'none', color: C.dim, cursor: 'pointer', marginLeft: 'auto' }}
+            title="解除绑定"
+            onClick={onUnbind}
+          >✕</button>
+        </div>
+      )}
+
+      {/* 图片路径（当前 = 素材名；查找/重指定为占位） */}
+      <PanelRow icon="📁" label="图片路径" C={C}>
+        <span
+          className="truncate rounded px-1 text-[10px] flex-1"
+          style={{ background: C.panel, border: '1px solid ' + C.border, color: C.text, lineHeight: '16px' }}
+          title={attachment.name}
+        >&lt;{attachment.name}&gt;</span>
+        <button style={miniBtn} title="查找图片（待实现）">🔍</button>
+        <button style={{ ...miniBtn, color: '#7dd3a0' }} title="重新指定图片（待实现）">📂</button>
+      </PanelRow>
+
+      {/* 选项：选择 / 导出 / 名称 */}
+      <PanelRow icon="📋" label="选项" C={C}>
+        <FlagCheck label="选择" checked={flag.selected} onChange={(v) => patchFlag('selected', v)} C={C} />
+        <FlagCheck label="导出" checked={flag.exported} onChange={(v) => patchFlag('exported', v)} C={C} />
+        <FlagCheck label="名称" checked={flag.named} onChange={(v) => patchFlag('named', v)} C={C} />
+      </PanelRow>
+
+      {/* 网格 / 序列（PRO，占位） */}
+      <PanelRow icon="▦" label="" C={C}>
+        <button
+          className="rounded px-1 text-[10px] flex items-center"
+          style={{ ...miniBtn, width: 'auto', padding: '0 6px' }}
+          title="网格编辑（待实现）"
         >
-          <span style={{ color: C.accent }}>↗</span> 父级
+          <span style={{ color: '#e5c07b', fontSize: 8, marginRight: 2, fontWeight: 700 }}>PRO</span>网格
         </button>
         <button
-          onClick={onOpen}
-          className="rounded px-1 py-1 flex items-center justify-center gap-0.5"
-          style={btnStyle}
-          onMouseEnter={(e) => (e.currentTarget.style.background = C.toolbar)}
-          onMouseLeave={(e) => (e.currentTarget.style.background = C.panel)}
-          title="显示 / 隐藏该插槽"
-        >
-          <span>📂</span> 显示
-        </button>
+          className="rounded px-1 text-[10px]"
+          style={{ ...miniBtn, width: 'auto', padding: '0 6px' }}
+          title="序列帧（待实现）"
+        >序列</button>
+      </PanelRow>
+
+      {/* 颜色行 */}
+      <PanelRow icon="🎨" label="颜色" C={C}>
+        <input
+          type="color"
+          value={color || '#ffffff'}
+          onChange={(e) => onColor(e.target.value)}
+          style={{ width: 30, height: 18, padding: 0, border: '1px solid ' + C.border, background: 'transparent', cursor: 'pointer' }}
+          title="附件颜色（与插槽颜色相乘后作用于画布）"
+        />
+        <button
+          className="rounded px-1 text-[10px]"
+          style={{ background: C.panel, border: '1px solid ' + C.border, color: C.text, cursor: 'pointer' }}
+          onClick={() => onColor('')}
+          title="恢复默认（不覆盖颜色）"
+        >默认</button>
+      </PanelRow>
+
+      {/* ＋ 新建…：挑选已有素材加入所属插槽 */}
+      {picking && (
+        <div className="mx-2 my-1 rounded" style={{ background: C.panel, border: '1px solid ' + C.border, maxHeight: 132, overflowY: 'auto' }}>
+          {candidates.length === 0 ? (
+            <div className="px-2 py-1 text-[10px]" style={{ color: C.dim }}>没有可添加的素材</div>
+          ) : candidates.map((l) => (
+            <button
+              key={l.id}
+              className="w-full flex items-center gap-1 px-2 py-1 text-[10px] text-left"
+              style={{ background: 'transparent', border: 'none', color: C.text, cursor: 'pointer' }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = C.toolbar)}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+              onClick={() => { onAddAttachment(l.id); setPicking(false); }}
+              title="加入该插槽并设为当前显示"
+            >
+              <span>🖼</span>
+              <span className="truncate">{l.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* 操作按钮：＋ 新建… / ↖ 父级 */}
+      <div className="px-2 pb-2 pt-1 grid grid-cols-2 gap-1 text-[10px]">
+        <PanelFooterBtn
+          C={C}
+          onClick={() => setPicking((v) => !v)}
+          icon="＋"
+          label="新建…"
+          title="把已有素材加入所属插槽"
+        />
+        <PanelFooterBtn
+          C={C}
+          onClick={onParent}
+          icon="↖"
+          label="父级"
+          title="设置父级（拾取骨骼）"
+        />
       </div>
     </div>
   );

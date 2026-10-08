@@ -81,6 +81,15 @@ export interface PixiBonesState {
   slotTransforms: Record<string, { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }>;
   setSlotTransform: (id: string, t: { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }) => void;
   resetSlotTransform: (id: string) => void;
+  /** 插槽的颜色与混合模式（key = slotId）。
+   *  - color：CSS hex（如 '#ff8800'）；'' = 不覆盖
+   *  - blend：PIXI v8 合法 blend 字符串（'normal' / 'add' / 'multiply' / 'screen' …）
+   *  渲染：最终颜色 = 插槽 color × 附件 color（逐分量相乘）；最终混合 = 附件 blend 优先，否则插槽 blend。 */
+  slotStyle: Record<string, { color: string; blend: string }>;
+  setSlotStyle: (slotId: string, patch: Partial<{ color: string; blend: string }>) => void;
+  /** 附件的颜色与混合模式（key = attachmentId = PixiBonesLayer.id）。语义同 slotStyle。 */
+  attachmentStyle: Record<string, { color: string; blend: string }>;
+  setAttachmentStyle: (attachmentId: string, patch: Partial<{ color: string; blend: string }>) => void;
   /** 绘制顺序（slotId 列表，索引 0 = 最先绘制 = 最底层）。
    *  空数组 = 用自然顺序。 */
   slotOrder: string[];
@@ -93,6 +102,15 @@ export interface PixiBonesState {
    *  - 多选：selectedSlotIds = [a,b,c]，selectedSlotId = 第一个（兼容旧代码）
    */
   selectedSlotIds: string[];
+  /** 当前选中的**附件** id（= PixiBonesLayer.id）。null = 选中的是插槽本身。
+   *  用途：底部面板由此区分「插槽属性」与「附件属性」。 */
+  selectedAttachmentId: string | null;
+  /** 当前选中的**树行 key**（如 'slot:xxx' / 'slotatt:xxx:yyy'）。
+   *  仅用于层级树高亮 —— 精确到「被点击的那一行」，避免同一插槽在
+   *  主树 / 绘制顺序 / 图片分区多处同时高亮。 */
+  selectedRowKey: string | null;
+  /** 选中一个附件（同时选中它所属的插槽）。rowKey = 被点击的树行 key。 */
+  selectAttachment: (slotId: string, attachmentId: string, rowKey?: string) => void;
   /** 按**附件 id** 反查它所属的插槽 id（找不到返回 null） */
   slotIdOfAttachment: (attachmentId: string | null) => string | null;
   /** 多选插槽。additive=true 增量追加，false 替换 */
@@ -200,7 +218,7 @@ export interface PixiBonesState {
   toggleSlotVisibility: (id: string) => void;
   /** 选中插槽。★ 仿 Spine：姿势模式下（画布不可选图层）在层级树选中插槽/图片时，
    *  自动切到「旋转」变换工具（变换工具与 mode 卡互斥，故会一并退出 pose）。 */
-  selectSlot: (id: string | null) => void;
+  selectSlot: (id: string | null, rowKey?: string) => void;
   setViewMode: (m: ViewMode) => void;
 
   toggleLeftPanel: () => void;
@@ -395,10 +413,21 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     delete next[id];
     return { slotTransforms: next };
   }),
+  // 插槽 / 附件的颜色与混合模式（渲染时叠加）
+  slotStyle: {},
+  setSlotStyle: (slotId, patch) => set((state) => ({
+    slotStyle: { ...state.slotStyle, [slotId]: { ...state.slotStyle[slotId], ...patch } },
+  })),
+  attachmentStyle: {},
+  setAttachmentStyle: (attachmentId, patch) => set((state) => ({
+    attachmentStyle: { ...state.attachmentStyle, [attachmentId]: { ...state.attachmentStyle[attachmentId], ...patch } },
+  })),
   slotOrder: [],
   setSlotOrder: (ids) => set({ slotOrder: ids }),
   selectedSlotId: null,
   selectedSlotIds: [],
+  selectedAttachmentId: null,
+  selectedRowKey: null,
   selectedSectionKey: null,
   viewMode: 'editor',
   attachingSlotId: null,
@@ -568,9 +597,13 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       slots,
       slotVisibility: {},
       slotTransforms: {},
+      slotStyle: {},
+      attachmentStyle: {},
       slotOrder: [],
       selectedSlotId: null,
       selectedSlotIds: [],
+      selectedAttachmentId: null,
+      selectedRowKey: null,
       bones: rootId
         ? [{
             id: rootId,
@@ -627,6 +660,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
         // 选中新建的插槽
         selectedSlotId: slot.id,
         selectedSlotIds: [slot.id],
+        selectedAttachmentId: null,
+        selectedRowKey: 'slot:' + slot.id,
         selectedBoneId: null,
         selectedSectionKey: null,
         attachingSlotId: null,
@@ -652,14 +687,22 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       const dropKeys = <T,>(rec: Record<string, T>) =>
         Object.fromEntries(Object.entries(rec).filter(([k]) => !deadSlots.has(k)));
       const selDead = state.selectedSlotId !== null && deadSlots.has(state.selectedSlotId);
+      // 附件级样式：删掉该附件的记录
+      const nextAttachmentStyle = { ...state.attachmentStyle };
+      delete nextAttachmentStyle[id];
+      const attSelected = state.selectedAttachmentId === id;
       return {
         images: state.images.filter((l) => l.id !== id),
         slots,
         selectedSlotId: selDead ? null : state.selectedSlotId,
         selectedSlotIds: selDead ? [] : state.selectedSlotIds.filter((sid) => !deadSlots.has(sid)),
+        selectedAttachmentId: attSelected ? null : state.selectedAttachmentId,
+        selectedRowKey: (selDead || attSelected) ? null : state.selectedRowKey,
         slotBindings: dropKeys(state.slotBindings),
         slotTransforms: dropKeys(state.slotTransforms),
         slotVisibility: dropKeys(state.slotVisibility),
+        slotStyle: dropKeys(state.slotStyle),
+        attachmentStyle: nextAttachmentStyle,
         slotOrder: state.slotOrder.filter((sid) => !deadSlots.has(sid)),
       };
     }),
@@ -668,9 +711,13 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     set((state) => ({
       slotVisibility: { ...state.slotVisibility, [slotId]: !(state.slotVisibility[slotId] ?? true) },
     })),
-  selectSlot: (id) => set((s) => ({
+  selectSlot: (id, rowKey) => set((s) => ({
     selectedSlotId: id,
     selectedSlotIds: id ? [id] : [],
+    // 选中插槽 = 未选中具体附件（底部面板显示「插槽属性」）
+    selectedAttachmentId: null,
+    // 高亮精确到「被点击的那一行」（默认 = 主树的插槽行）
+    selectedRowKey: rowKey ?? (id ? 'slot:' + id : null),
     selectedBoneId: null,
     selectedBoneIds: [],
     selectedSectionKey: null,
@@ -681,12 +728,29 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       ? { activeTool: 'rotate' as const, editorMode: 'idle' as const }
       : {}),
   })),
+  // 选中一个附件（层级树附件行 / 点小圆点切当前）：同时选中它所属插槽
+  selectAttachment: (slotId, attachmentId, rowKey) => set((s) => ({
+    selectedSlotId: slotId,
+    selectedSlotIds: [slotId],
+    selectedAttachmentId: attachmentId,
+    selectedRowKey: rowKey ?? ('slotatt:' + slotId + ':' + attachmentId),
+    selectedBoneId: null,
+    selectedBoneIds: [],
+    selectedSectionKey: null,
+    attachingSlotId: null,
+    // 与 selectSlot 一致：pose 模式下切到旋转工具
+    ...(s.editorMode === 'pose'
+      ? { activeTool: 'rotate' as const, editorMode: 'idle' as const }
+      : {}),
+  })),
   // 多选素材：additive=true 增量追加，false 替换
   selectSlots: (ids, additive = false) => set((s) => {
     const next = additive ? Array.from(new Set([...s.selectedSlotIds, ...ids])) : ids;
     return {
       selectedSlotIds: next,
       selectedSlotId: next[0] ?? null,
+      selectedAttachmentId: null,
+      selectedRowKey: next[0] ? 'slot:' + next[0] : null,
       selectedBoneId: null,
       selectedBoneIds: [],
       selectedSectionKey: null,
@@ -697,6 +761,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   setTargetSlot: (id) => set({
     selectedSlotId: id,
     selectedSlotIds: id ? [id] : [],
+    selectedAttachmentId: null,
+    selectedRowKey: id ? 'slot:' + id : null,
     selectedSectionKey: null,
     attachingSlotId: null,
   }),
@@ -710,6 +776,9 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       selectedBoneId: boneIds[0] ?? null,
       selectedSlotIds: layers,
       selectedSlotId: layers[0] ?? null,
+      selectedAttachmentId: null,
+      // 画布框选只有插槽粒度 → 高亮对应主树插槽行
+      selectedRowKey: layers[0] ? 'slot:' + layers[0] : null,
       selectedSectionKey: null,
       attachingSlotId: null,
     };
@@ -720,6 +789,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     selectedBoneIds: [],
     selectedSlotId: null,
     selectedSlotIds: [],
+    selectedAttachmentId: null,
+    selectedRowKey: null,
     attachingSlotId: null,
   }),
   setViewMode: (m) => set({ viewMode: m }),
@@ -736,17 +807,21 @@ setEditorMode: (m) => set({
   editorMode: m,
   activeTool: null,
   // ★ 姿势模式下画布上的图层不可选：进入 pose 时清空图层选中（避免高亮残留）
-  ...(m === 'pose' ? { selectedSlotId: null, selectedSlotIds: [] } : {}),
+  ...(m === 'pose'
+    ? { selectedSlotId: null, selectedSlotIds: [], selectedAttachmentId: null, selectedRowKey: null }
+    : {}),
 }),
 setActiveTool: (t) => set((s) => ({
   activeTool: t,
   // 选 transform tool 时退出 pose/weights/create；其他情况保持现状
   editorMode: t !== null ? 'idle' as const : 'pose' as const,
   // 关闭 transform tool ⇒ 回到 pose ⇒ 同样清空图层选中
-  ...(t === null ? { selectedSlotId: null, selectedSlotIds: [] } : {}),
+  ...(t === null
+    ? { selectedSlotId: null, selectedSlotIds: [], selectedAttachmentId: null, selectedRowKey: null }
+    : {}),
   // ★ 激活变换工具时：若骨骼与图层同时被选中，以骨骼为主（清掉图层）
   ...(t !== null && s.selectedBoneIds.length > 0
-    ? { selectedSlotId: null, selectedSlotIds: [] }
+    ? { selectedSlotId: null, selectedSlotIds: [], selectedAttachmentId: null, selectedRowKey: null }
     : {}),
 })),
   setTransformSpace: (s) => set({ transformSpace: s }),
@@ -833,6 +908,8 @@ setActiveTool: (t) => set((s) => ({
     selectedBoneIds: id ? [id] : [],
     selectedSlotId: null,
     selectedSlotIds: [],
+    selectedAttachmentId: null,
+    selectedRowKey: null,
     selectedSectionKey: null,
   }),
   // 多选：additive=true 增量追加，false 替换
@@ -844,6 +921,8 @@ setActiveTool: (t) => set((s) => ({
         selectedBoneId: next[0] ?? null,
         selectedSlotId: null,
         selectedSlotIds: [],
+        selectedAttachmentId: null,
+        selectedRowKey: null,
         selectedSectionKey: null,
       };
     }
@@ -852,6 +931,8 @@ setActiveTool: (t) => set((s) => ({
       selectedBoneId: ids[0] ?? null,
       selectedSlotId: null,
       selectedSlotIds: [],
+      selectedAttachmentId: null,
+      selectedRowKey: null,
       selectedSectionKey: null,
     };
   }),

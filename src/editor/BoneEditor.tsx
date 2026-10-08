@@ -475,6 +475,34 @@ export function BoneEditor() {
         }
       };
 
+      /**
+       * 应用插槽 / 附件的颜色与混合模式（仿 Spine）：
+       *   - 颜色：tint = 插槽色 × 附件色（逐分量相乘），都没设 = 白（不改）
+       *   - 混合：附件 blend 优先，否则插槽 blend，都没设则沿用 PSD 自带的 layer.blendMode
+       * 成本很低（遍历 slot × 附件，只写 sprite 属性），所以每次状态变化都可调用。
+       */
+      const applySlotStyles = (
+        psd: PixiBonesPsd | null,
+        images: PixiBonesLayer[],
+        slots: PixiBonesSlot[],
+        slotStyle: Record<string, { color: string; blend: string }>,
+        attachmentStyle: Record<string, { color: string; blend: string }>,
+      ) => {
+        const byId = new Map(allAttachmentsOf(psd, images).map((l) => [l.id, l]));
+        for (const slot of slots) {
+          for (const aid of slot.attachmentIds) {
+            const wrap = spriteByAttachmentId.get(aid);
+            const sprite = wrap?.children[0] as Sprite | undefined;
+            if (!sprite) continue;
+            const layer = byId.get(aid);
+            if (!layer) continue;
+            sprite.tint = composeTint(attachmentStyle[aid]?.color, slotStyle[slot.id]?.color);
+            const blend = attachmentStyle[aid]?.blend || slotStyle[slot.id]?.blend || layer.blendMode;
+            (sprite as unknown as { blendMode: string }).blendMode = blend || 'normal';
+          }
+        }
+      };
+
       /** 鼠标悬停在手柄上时的高亮分区（与 zone 同义，但供绘图使用）。 */
       let slotHandleHover: 'red' | 'green' | 'center' | null = null;
 
@@ -2512,6 +2540,7 @@ export function BoneEditor() {
       drawHighlight(initial.psd, initial.images, initial.slots, initial.selectedSlotIds);
       buildSkeleton(initial.bones);
       applyBindings(initial.psd, initial.images, initial.slots, initial.slotBindings, initial.slotTransforms);
+      applySlotStyles(initial.psd, initial.images, initial.slots, initial.slotStyle, initial.attachmentStyle);
       drawBones(initial.bones, initial.selectedBoneId);
 
       let prev = usePixiBonesStore.getState();
@@ -2586,6 +2615,7 @@ export function BoneEditor() {
         }
         applyVisibility(state.psd, state.images, state.slots, state.slotVisibility);
         applyBindings(state.psd, state.images, state.slots, state.slotBindings, state.slotTransforms);
+        applySlotStyles(state.psd, state.images, state.slots, state.slotStyle, state.attachmentStyle);
         drawHighlight(state.psd, state.images, state.slots, state.selectedSlotIds);
         drawBones(state.bones, state.selectedBoneId, state.selectedBoneIds);
         drawSlotHandles(state.psd, state.images, state.slots, state.selectedSlotId, state.activeTool, state.slotTransforms);
@@ -2722,6 +2752,31 @@ function drawDashedRect(
   seg(x + w, y + h, x, y + h);
   seg(x, y + h, x, y);
   g.stroke({ width, color });
+}
+
+/** CSS hex（'#rrggbb' / 'rrggbb'）→ RGB 分量；非法 / 空则 null。 */
+function hexToRgb(hex: string | undefined): [number, number, number] | null {
+  if (!hex) return null;
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+/**
+ * 把若干 CSS hex 颜色相乘（逐分量）得到 PIXI tint（0xRRGGBB）。
+ * 空 / 非法的颜色视为白色（不参与相乘），因此全空时返回 0xffffff。
+ */
+function composeTint(...colors: Array<string | undefined>): number {
+  let r = 255, g = 255, b = 255;
+  for (const c of colors) {
+    const rgb = hexToRgb(c);
+    if (!rgb) continue;
+    r = Math.round((r * rgb[0]) / 255);
+    g = Math.round((g * rgb[1]) / 255);
+    b = Math.round((b * rgb[2]) / 255);
+  }
+  return (r << 16) | (g << 8) | b;
 }
 
 /**
