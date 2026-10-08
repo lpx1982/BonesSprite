@@ -1,5 +1,5 @@
-import { useEffect, type CSSProperties } from 'react';
-import { usePixiBonesStore } from './store';
+import { Fragment, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { usePixiBonesStore, DOCK_PANEL_DEFAULT_WIDTH, DOCK_PANEL_MIN_WIDTH, DOCK_RESIZER_WIDTH } from './store';
 import { HierarchyPanel } from './HierarchyPanel';
 import { BoneEditor } from './BoneEditor';
 import { BottomToolbar } from './BottomToolbar';
@@ -192,13 +192,83 @@ function RightDock() {
       className="absolute top-0 right-0 bottom-0 flex"
       style={{ zIndex: 10 }}
     >
-      {open.map((k) =>
-        k === 'hierarchy' ? <HierarchyPanel key={k} />
-          : k === 'grid_tool' ? <MeshToolsPanel key={k} />
-            : k === 'weights' ? <WeightsPanel key={k} />
-              : null,
-      )}
+      {open.map((k) => (
+        <Fragment key={k}>
+          {/* 每块面板左边缘一根可拖动分隔条 → 拖动即可横向缩放该面板 */}
+          <DockResizer panelKey={k} />
+          {k === 'hierarchy' ? <HierarchyPanel />
+            : k === 'grid_tool' ? <MeshToolsPanel />
+              : k === 'weights' ? <WeightsPanel />
+                : null}
+        </Fragment>
+      ))}
     </div>
+  );
+}
+
+/**
+ * 停靠面板的横向缩放手柄（面板左边缘那根分隔条）。
+ *
+ * 面板整体右对齐，所以「往左拖 = 变宽、往右拖 = 变窄」：
+ *   newWidth = 起始宽度 + (起始鼠标 x − 当前鼠标 x)
+ * 用 Pointer Capture 保证鼠标移出手柄/面板后仍然跟着走。
+ */
+function DockResizer({ panelKey }: { panelKey: string }) {
+  const width = usePixiBonesStore(
+    (s) => s.dockPanelWidths[panelKey] ?? DOCK_PANEL_DEFAULT_WIDTH[panelKey] ?? 300,
+  );
+  const setPanelWidth = usePixiBonesStore((s) => s.setDockPanelWidth);
+  const drag = useRef<{ startX: number; startW: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
+
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    drag.current = { startX: e.clientX, startW: width };
+    setDragging(true);
+    e.currentTarget.setPointerCapture(e.pointerId);
+    // 拖动期间禁止选中文本
+    document.body.style.userSelect = 'none';
+  };
+
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = drag.current;
+    if (!d) return;
+    // 上限：不小于拖动前已有宽度，也不小于窗口宽度的 60%（避免窄窗口下「往左拖反而变窄」）
+    const max = Math.max(d.startW, DOCK_PANEL_MIN_WIDTH + 60, window.innerWidth * 0.6);
+    const w = Math.round(
+      Math.max(DOCK_PANEL_MIN_WIDTH, Math.min(d.startW + (d.startX - e.clientX), max)),
+    );
+    if (w !== width) setPanelWidth(panelKey, w);
+  };
+
+  const endDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!drag.current) return;
+    drag.current = null;
+    setDragging(false);
+    document.body.style.userSelect = '';
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+  };
+
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="拖动调整面板宽度"
+      title="按住拖动可调整面板宽度"
+      className={'dock-resizer' + (dragging ? ' dragging' : '')}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
+      style={{
+        width: DOCK_RESIZER_WIDTH,
+        flex: 'none',
+        cursor: 'col-resize',
+        touchAction: 'none',
+      }}
+    />
   );
 }
 
@@ -217,6 +287,8 @@ function MeshToolsPanel() {
   const setFeather    = usePixiBonesStore((s) => s.setMeshSoftFeather);
   const hull          = usePixiBonesStore((s) => s.meshSoftHull);
   const setHull       = usePixiBonesStore((s) => s.setMeshSoftHull);
+  // 宽度由左边缘的拖动分隔条控制（store 里的 dockPanelWidths）
+  const width = usePixiBonesStore((s) => s.dockPanelWidths.grid_tool ?? DOCK_PANEL_DEFAULT_WIDTH.grid_tool);
 
   const rowStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 8 };
   const labelStyle: CSSProperties = {
@@ -232,7 +304,7 @@ function MeshToolsPanel() {
     <aside
       className="flex flex-col overflow-hidden shrink-0"
       style={{
-        width: 300,
+        width,
         background: 'var(--spine-bg-panel)',
         color: 'var(--spine-text)',
         borderLeft: '1px solid var(--spine-border)',
@@ -351,6 +423,8 @@ function WeightsPanel() {
   const setOverlay    = usePixiBonesStore((s) => s.setWeightOverlay);
   const selectedOnly  = usePixiBonesStore((s) => s.weightSelectedOnly);
   const setSelOnly    = usePixiBonesStore((s) => s.setWeightSelectedOnly);
+  // 宽度由左边缘的拖动分隔条控制（store 里的 dockPanelWidths）
+  const width = usePixiBonesStore((s) => s.dockPanelWidths.weights ?? DOCK_PANEL_DEFAULT_WIDTH.weights);
 
   const rowStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 6 };
   const labelStyle: CSSProperties = {
@@ -370,7 +444,7 @@ function WeightsPanel() {
     <aside
       className="flex flex-col overflow-hidden shrink-0"
       style={{
-        width: 300,
+        width,
         background: 'var(--spine-bg-panel)',
         color: 'var(--spine-text)',
         borderLeft: '1px solid var(--spine-border)',

@@ -8,6 +8,20 @@ import type { Locale } from './i18n';
 export type ViewMode = 'editor' | 'demo';
 export type EditorTab = 'setup' | 'animate';
 
+// =================================================================================
+//  右侧停靠区尺寸常量
+//    DOCK_PANEL_DEFAULT_WIDTH：各面板的默认宽度（新增面板记得在这里加默认值）
+//    DOCK_PANEL_MIN_WIDTH：拖动缩放时的最小宽度
+//    DOCK_RESIZER_WIDTH：面板左边缘那根可拖动分隔条的宽度（占布局宽度）
+// =================================================================================
+export const DOCK_PANEL_DEFAULT_WIDTH: Record<string, number> = {
+  hierarchy: 288,
+  grid_tool: 300,
+  weights: 300,
+};
+export const DOCK_PANEL_MIN_WIDTH = 180;
+export const DOCK_RESIZER_WIDTH = 6;
+
 /**
  * 骨骼的可序列化表示。所有 BoneNode 共同构成一棵骨树（parentId === null 是根）。
  *
@@ -252,6 +266,9 @@ export interface PixiBonesState {
    * 关闭面板不会把它从数组里移除 → 重新打开时回到原来的位置。
    */
   viewDockOrder: string[];
+  /** 右侧停靠区各面板的宽度（key 同 viewDockOrder）；拖动面板左边缘的把手改这个值 */
+  dockPanelWidths: Record<string, number>;
+  setDockPanelWidth: (key: string, w: number) => void;
   editorMode: 'idle' | 'pose' | 'weights' | 'create';
   transformSpace: 'local' | 'world';
   /** 工具栏上「旋转 / 移动 / 缩放 / 倾斜」四张卡片的当前激活工具 */
@@ -687,6 +704,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   viewPreview:     false, toggleViewPreview:     () => set((s) => ({ viewPreview:    !s.viewPreview })),
   viewAllHidden:   false, setViewAllHidden:      (v) => set({ viewAllHidden: v }),
   viewDockOrder: [],
+  dockPanelWidths: { ...DOCK_PANEL_DEFAULT_WIDTH },
+  setDockPanelWidth: (key, w) => set((s) => ({ dockPanelWidths: { ...s.dockPanelWidths, [key]: w } })),
   fitRequestId: 0,
   editorMode: 'idle',
     transformSpace: 'local',

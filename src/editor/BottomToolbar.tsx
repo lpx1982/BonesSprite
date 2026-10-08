@@ -1,5 +1,5 @@
 import { useMemo, useRef, useEffect, useState } from 'react';
-import { usePixiBonesStore, findBone, type BoneNode } from './store';
+import { usePixiBonesStore, findBone, DOCK_PANEL_DEFAULT_WIDTH, DOCK_RESIZER_WIDTH, type BoneNode } from './store';
 import { useT } from './i18n';
 import moveIcon from './icons/move.png';
 import rotateIcon from './icons/rotate.png';
@@ -97,9 +97,17 @@ export function BottomToolbar() {
   const showRightPanel = usePixiBonesStore((s) => s.showRightPanel);
   const viewGridTool = usePixiBonesStore((s) => s.viewGridTool);
   const viewWeights = usePixiBonesStore((s) => s.viewWeights);
-  // 右侧停靠区总宽度（层级树 288 + 网格工具 300 + 权重 300），卡片组让出这么多，避免被面板压住
-  const dockWidth =
-    (showRightPanel ? 288 : 0) + (viewGridTool ? 300 : 0) + (viewWeights ? 300 : 0);
+  const dockPanelWidths = usePixiBonesStore((s) => s.dockPanelWidths);
+  // 右侧停靠区总宽度 = 各已开面板宽度之和 + 每块面板左边缘那根拖动分隔条的宽度
+  const dockOpen = [
+    showRightPanel && 'hierarchy',
+    viewGridTool && 'grid_tool',
+    viewWeights && 'weights',
+  ].filter(Boolean) as string[];
+  const dockWidth = dockOpen.reduce(
+    (sum, k) => sum + (dockPanelWidths[k] ?? DOCK_PANEL_DEFAULT_WIDTH[k] ?? 300) + DOCK_RESIZER_WIDTH,
+    0,
+  );
   /** 网格编辑模式：底部卡片组向下渐隐让位给「编辑网格」浮动面板 */
   const meshEditSlotId = usePixiBonesStore((s) => s.meshEditSlotId);
   const toolbarHidden = !!meshEditSlotId;

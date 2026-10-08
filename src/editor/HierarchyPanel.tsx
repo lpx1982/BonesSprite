@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, type BoneNode, type SlotBinding } from './store';
+import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, DOCK_PANEL_DEFAULT_WIDTH, type BoneNode, type SlotBinding } from './store';
 import { type PixiBonesLayer, type PixiBonesSlot } from '@psd/index';
 import { importAssetFile } from './importAsset';
 
@@ -100,6 +100,10 @@ export function HierarchyPanel() {
   const setBoneRotation = usePixiBonesStore((s) => s.setBoneRotation);
   const setBoneLength = usePixiBonesStore((s) => s.setBoneLength);
   const setBoneParent = usePixiBonesStore((s) => s.setBoneParent);
+  // 宽度由左边缘的拖动分隔条控制（store 里的 dockPanelWidths）
+  const panelWidth = usePixiBonesStore(
+    (s) => s.dockPanelWidths.hierarchy ?? DOCK_PANEL_DEFAULT_WIDTH.hierarchy,
+  );
 
   const [search, setSearch] = useState('');
   const [showTree, setShowTree] = useState(true);  // 🔼 折叠 / 展开树
@@ -534,8 +538,9 @@ export function HierarchyPanel() {
 
   return (
     <aside
-      className="w-72 flex flex-col overflow-hidden text-sm hierarchy-pop-enter shrink-0"
+      className="flex flex-col overflow-hidden text-sm hierarchy-pop-enter shrink-0"
       style={{
+        width: panelWidth,
         background: C.panel, color: C.text,
         borderLeft: '1px solid ' + C.border,
         transformOrigin: 'top right',

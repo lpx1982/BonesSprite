@@ -206,6 +206,18 @@ html, body, #root {
   border: none;
 }
 
+/* ============ 右侧停靠面板左边缘的拖动分隔条（横向缩放手柄） ============ */
+.dock-resizer {
+  background: transparent;
+  transition: background 0.12s ease;
+}
+.dock-resizer:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+.dock-resizer.dragging {
+  background: var(--spine-accent);
+}
+
 /* ============ TopMenu 下拉弹出动画（Spine 风格：拉伸→回弹） ============ */
 @keyframes topmenu-drop {
   0%   { transform: scaleY(0.15); opacity: 0; }
