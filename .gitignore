@@ -13,3 +13,8 @@ dist-ssr
 
 # IDE 编辑临时文件（Trae/VSCode 等）
 .!*
+
+# TypeScript / Vite 构建中间产物（tsc -b 会生成，不入库）
+*.tsbuildinfo
+vite.config.d.ts
+vite.config.js
