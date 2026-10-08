@@ -175,13 +175,15 @@ export function Editor() {
 function RightDock() {
   const showRightPanel = usePixiBonesStore((s) => s.showRightPanel);
   const viewGridTool = usePixiBonesStore((s) => s.viewGridTool);
+  const viewWeights = usePixiBonesStore((s) => s.viewWeights);
   const viewDockOrder = usePixiBonesStore((s) => s.viewDockOrder);
 
   // 当前开着的面板；反转后 DOM 从左到右 = 从「最晚出现」到「最早出现」
   const open = [...viewDockOrder].reverse().filter((k) =>
     k === 'hierarchy' ? showRightPanel
       : k === 'grid_tool' ? viewGridTool
-        : false,
+        : k === 'weights' ? viewWeights
+          : false,
   );
   if (open.length === 0) return null;
 
@@ -193,7 +195,8 @@ function RightDock() {
       {open.map((k) =>
         k === 'hierarchy' ? <HierarchyPanel key={k} />
           : k === 'grid_tool' ? <MeshToolsPanel key={k} />
-            : null,
+            : k === 'weights' ? <WeightsPanel key={k} />
+              : null,
       )}
     </div>
   );
@@ -222,11 +225,6 @@ function MeshToolsPanel() {
   const checkStyle: CSSProperties = {
     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
     fontSize: 12.5, color: 'var(--spine-text)', cursor: 'pointer', userSelect: 'none',
-  };
-  /** 轨道：左半浅灰（已填充）、右半深灰（仿 Spine 的两段式轨道） */
-  const trackBg = (v: number, min: number, max: number) => {
-    const pct = Math.max(0, Math.min(1, (v - min) / (max - min))) * 100;
-    return `linear-gradient(to right, #8b8b8b 0 ${pct}%, #464646 ${pct}% 100%)`;
   };
   const SIZE_MIN = 1, SIZE_MAX = 200;
 
@@ -330,6 +328,334 @@ function InfoIcon() {
       <rect x="6.15" y="5.9" width="1.7" height="4.4" rx="0.6" fill="#fff" />
     </svg>
   );
+}
+
+// =================================================================================
+//  权重视图（仿 Spine 的「权重」）
+//    权重 = 把附件顶点绑定到骨骼（线性混合蒙皮）；骨骼一动，网格跟着变形。
+//    面板分区（对齐 Spine 截图）：
+//      影响 / 模式 / 权重 → 平滑·自动·焊接 → 饼图·叠加·已选 → 骨骼列表 → 绑定·交换·删除
+//    ★ 除「影响 / 模式 / 权重 / 饼图 / 叠加 / 已选」这些纯 UI 状态外，
+//      绑定 / 自动 / 平滑 / 焊接 / 修剪 / 更新 / 交换 / 删除 及骨骼列表暂为占位。
+// =================================================================================
+function WeightsPanel() {
+  const influence     = usePixiBonesStore((s) => s.weightInfluence);
+  const setInfluence  = usePixiBonesStore((s) => s.setWeightInfluence);
+  const mode          = usePixiBonesStore((s) => s.weightMode);
+  const setMode       = usePixiBonesStore((s) => s.setWeightMode);
+  const value         = usePixiBonesStore((s) => s.weightValue);
+  const setValue      = usePixiBonesStore((s) => s.setWeightValue);
+  const pie           = usePixiBonesStore((s) => s.weightPie);
+  const setPie        = usePixiBonesStore((s) => s.setWeightPie);
+  const overlay       = usePixiBonesStore((s) => s.weightOverlay);
+  const setOverlay    = usePixiBonesStore((s) => s.setWeightOverlay);
+  const selectedOnly  = usePixiBonesStore((s) => s.weightSelectedOnly);
+  const setSelOnly    = usePixiBonesStore((s) => s.setWeightSelectedOnly);
+
+  const rowStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 6 };
+  const labelStyle: CSSProperties = {
+    width: 34, textAlign: 'right', fontSize: 12.5, color: 'var(--spine-text)', flex: 'none',
+  };
+  const checkStyle: CSSProperties = {
+    display: 'flex', alignItems: 'center', gap: 4, fontSize: 12.5,
+    color: 'var(--spine-text)', cursor: 'pointer', userSelect: 'none',
+  };
+  const selectStyle: CSSProperties = {
+    flex: 1, height: 20, background: '#4A4A4A', color: '#DDDDDD',
+    border: '1px solid #555555', borderRadius: 3, fontSize: 11, padding: '0 4px',
+    cursor: 'pointer', outline: 'none',
+  };
+
+  return (
+    <aside
+      className="flex flex-col overflow-hidden shrink-0"
+      style={{
+        width: 300,
+        background: 'var(--spine-bg-panel)',
+        color: 'var(--spine-text)',
+        borderLeft: '1px solid var(--spine-border)',
+        position: 'relative',
+      }}
+    >
+      {/* 标题栏：ℹ + 权重图标 + 「权重」+ 折叠图标 */}
+      <div
+        className="flex items-center px-2 py-1.5"
+        style={{ borderBottom: '1px solid var(--spine-border)', background: 'var(--spine-bg-toolbar)' }}
+      >
+        <InfoIcon />
+        <span style={{ marginLeft: 5, display: 'inline-flex' }}><WeightsTitleIcon /></span>
+        <span style={{ marginLeft: 5, fontSize: 13, fontWeight: 600 }}>权重</span>
+        <button
+          type="button"
+          title="折叠（占位）"
+          style={{
+            marginLeft: 'auto', background: 'transparent', border: 'none',
+            color: 'var(--spine-text)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: 0,
+          }}
+        >≡</button>
+      </div>
+
+      {/* 内容卡片（撑满剩余高度，骨骼列表占满下半部分） */}
+      <div style={{ padding: 8, flex: 1, minHeight: 0, display: 'flex' }}>
+        <div
+          style={{
+            flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 13,
+            background: 'var(--spine-bg-panel-dark)',
+            border: '1px solid var(--spine-border)',
+            borderRadius: 3,
+            padding: '12px 9px 9px',
+          }}
+        >
+          {/* 影响 */}
+          <div style={rowStyle}>
+            <span style={labelStyle}>影响:</span>
+            <input
+              type="range" className="soft-slider" min={0} max={1} step={0.01}
+              value={influence} title="权重工具的施加强度"
+              onChange={(e) => setInfluence(parseFloat(e.target.value))}
+              style={{ flex: 1, background: trackBg(influence, 0, 1) }}
+            />
+            <ProBtn label="修剪" icon={<IconScissors />} />
+          </div>
+
+          {/* 模式 */}
+          <div style={rowStyle}>
+            <span style={labelStyle}>模式:</span>
+            <select
+              value={mode}
+              onChange={(e) => setMode(e.target.value as 'direct' | 'brush')}
+              style={selectStyle}
+              title="直接 = 精确设值；画笔 = 拖动涂抹"
+            >
+              <option value="direct">直接</option>
+              <option value="brush">画笔</option>
+            </select>
+            <ProBtn label="更新" icon={<IconUpdate />} />
+          </div>
+
+          {/* 权重 */}
+          <div style={rowStyle}>
+            <span style={labelStyle}>权重:</span>
+            <input
+              type="range" className="soft-slider" min={0} max={1} step={0.01}
+              value={value} title="直接模式下设置的精确权重值"
+              onChange={(e) => setValue(parseFloat(e.target.value))}
+              style={{ flex: 1, background: trackBg(value, 0, 1) }}
+            />
+          </div>
+
+          {/* 平滑 / 自动 / 焊接 */}
+          <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
+            <ProBtn label="平滑" icon={<IconDroplet />} />
+            <ProBtn label="自动" icon={<IconRefresh />} />
+            <ProBtn label="焊接" icon={<IconWand />} />
+          </div>
+
+          {/* 饼图 / 叠加 / 已选 */}
+          <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+            <label style={checkStyle} title="为每个顶点画权重饼图">
+              <input type="checkbox" checked={pie} onChange={(e) => setPie(e.target.checked)} style={{ accentColor: 'var(--spine-accent)' }} />
+              饼图
+            </label>
+            <label style={checkStyle} title="用骨骼颜色填充网格来显示权重">
+              <input type="checkbox" checked={overlay} onChange={(e) => setOverlay(e.target.checked)} style={{ accentColor: 'var(--spine-accent)' }} />
+              叠加
+            </label>
+            <label style={checkStyle} title="只显示选中顶点 / 选中骨骼的饼图">
+              <input type="checkbox" checked={selectedOnly} onChange={(e) => setSelOnly(e.target.checked)} style={{ accentColor: 'var(--spine-accent)' }} />
+              已选
+            </label>
+          </div>
+
+          {/* 分隔线 */}
+          <div style={{ borderTop: '1px dashed rgba(255,255,255,0.14)' }} />
+
+          {/* 骨骼：标题行 + 3 个小图标按钮 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontSize: 12.5 }}>骨骼:</span>
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 5 }}>
+              <MiniIconBtn title="复制骨骼列表（待实现）"><IconCopyBones /></MiniIconBtn>
+              <MiniIconBtn title="骨骼列表（待实现）"><IconListLines /></MiniIconBtn>
+              <MiniIconBtn title="按曲线排序（待实现）"><IconCurve /></MiniIconBtn>
+            </div>
+          </div>
+
+          {/* 骨骼列表（绑定后在此显示骨骼；绑定功能待实现，暂为空） */}
+          <div
+            style={{
+              flex: 1, minHeight: 120, background: '#2b2b2b',
+              border: '1px solid var(--spine-border)', borderRadius: 2, overflow: 'auto',
+            }}
+          />
+
+          {/* 绑定 / 交换 / 删除 */}
+          <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
+            <ProBtn label="绑定" icon={<IconBind />} />
+            <ProBtn label="交换" icon={<IconSwap />} />
+            <button
+              type="button" disabled title="解绑选中的骨骼（待实现）"
+              style={{ ...weightBtn, opacity: 0.55, cursor: 'not-allowed' }}
+            >
+              <IconCross />删除
+            </button>
+          </div>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+/** 权重面板里的按钮外观（仿 Spine：中灰底 + 图标 + 文字） */
+const weightBtn: CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 3,
+  padding: '3px 7px', borderRadius: 3,
+  border: '1px solid #555555', background: '#4A4A4A',
+  color: '#DDDDDD', fontSize: 11, lineHeight: '14px',
+  whiteSpace: 'nowrap', userSelect: 'none', cursor: 'pointer',
+};
+
+/**
+ * 带「PRO」角标的按钮。Spine 里 PRO = 该功能需要 Pro 版；
+ * 我们这里把还没实现的按钮都标成 PRO（占位），功能接入后再去掉。
+ */
+function ProBtn({ label, icon }: { label: string; icon?: React.ReactNode }) {
+  return (
+    <span style={{ position: 'relative', display: 'inline-flex', flex: 'none' }}>
+      <span
+        style={{
+          position: 'absolute', top: -7, left: -1, zIndex: 1, pointerEvents: 'none',
+          background: '#C0261F', color: '#fff', fontSize: 8, lineHeight: '10px',
+          padding: '0 3px', borderRadius: 2, letterSpacing: 0.2, fontWeight: 700,
+        }}
+      >PRO</span>
+      <button type="button" disabled title={`${label}（待实现）`} style={{ ...weightBtn, opacity: 0.55, cursor: 'not-allowed' }}>
+        {icon}{label}
+      </button>
+    </span>
+  );
+}
+
+/** 骨骼列表右上角的 18×20 小图标按钮（图标自带 svg 外壳） */
+function MiniIconBtn({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <button
+      type="button" title={title}
+      className="flex items-center justify-center"
+      style={{
+        width: 20, height: 18, padding: 0, borderRadius: 2,
+        background: '#4A4A4A', border: '1px solid #555555',
+        color: '#CCCCCC', cursor: 'pointer',
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+/**
+ * 权重面板小图标的统一外壳（13×13、viewBox 14×14）。
+ * ★ 必须先包 <svg> 再放 <circle>/<path>，否则 React 会把它们当未知 HTML 标签报警告。
+ */
+function WIcon({ children }: { children: React.ReactNode }) {
+  return <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden>{children}</svg>;
+}
+
+// ---- 权重面板的小图标（几何风格）----
+function WeightsTitleIcon() {
+  return (
+    <svg width="15" height="14" viewBox="0 0 16 14" aria-hidden>
+      <rect x="1" y="4" width="14" height="6" rx="1" fill="#8A5A2B" />
+      <rect x="1" y="4" width="5" height="6" fill="#C0392B" />
+      <rect x="10" y="4" width="5" height="6" fill="#4A6FA5" />
+      <rect x="1" y="4" width="14" height="6" rx="1" fill="none" stroke="#E0A050" strokeWidth="0.8" />
+    </svg>
+  );
+}
+function IconScissors() {
+  return (
+    <WIcon>
+      <circle cx="3.4" cy="10.6" r="1.9" stroke="#DDD" strokeWidth="1.2" />
+      <circle cx="10.6" cy="10.6" r="1.9" stroke="#DDD" strokeWidth="1.2" />
+      <path d="M4.6 9.3 L11 2.2 M9.4 9.3 L3 2.2" stroke="#DDD" strokeWidth="1.2" strokeLinecap="round" />
+    </WIcon>
+  );
+}
+function IconUpdate() {
+  return (
+    <WIcon>
+      <path d="M11.6 5.2 A4.6 4.6 0 1 0 12.2 8.4" stroke="#DDD" strokeWidth="1.3" strokeLinecap="round" fill="none" />
+      <path d="M8.4 2.2 L12 5.2 L8.8 7.6" stroke="#DDD" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    </WIcon>
+  );
+}
+function IconDroplet() {
+  return <WIcon><path d="M7 1.6 C9.6 5, 11 6.6, 11 8.6 A4 4 0 0 1 3 8.6 C3 6.6, 4.4 5, 7 1.6 Z" fill="#DDD" /></WIcon>;
+}
+function IconRefresh() {
+  return (
+    <WIcon>
+      <path d="M12 7 A5 5 0 1 1 10.2 3.2" stroke="#DDD" strokeWidth="1.4" strokeLinecap="round" fill="none" />
+      <path d="M10.6 1.2 L11.4 4.2 L8.4 4.4" stroke="#DDD" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    </WIcon>
+  );
+}
+function IconWand() {
+  return (
+    <WIcon>
+      <path d="M2.2 11.8 L9.4 4.6" stroke="#DDD" strokeWidth="1.6" strokeLinecap="round" />
+      <path d="M9.6 2.2 L10.3 3.8 L11.9 4.5 L10.3 5.2 L9.6 6.8 L8.9 5.2 L7.3 4.5 L8.9 3.8 Z" fill="#DDD" />
+    </WIcon>
+  );
+}
+function IconCopyBones() {
+  return (
+    <WIcon>
+      <rect x="1.6" y="2.4" width="7.6" height="8" rx="1" stroke="#CCC" strokeWidth="1.1" fill="none" />
+      <rect x="4.8" y="4.4" width="7.6" height="8" rx="1" stroke="#CCC" strokeWidth="1.1" fill="none" />
+    </WIcon>
+  );
+}
+function IconListLines() {
+  return (
+    <WIcon>
+      <rect x="1.6" y="2.2" width="10.8" height="9.6" rx="1" stroke="#CCC" strokeWidth="1.1" fill="none" />
+      <path d="M3.6 5.4 H10.4 M3.6 7.6 H10.4 M3.6 9.8 H8" stroke="#CCC" strokeWidth="1" strokeLinecap="round" />
+    </WIcon>
+  );
+}
+function IconCurve() {
+  return <WIcon><path d="M1.6 11.6 C4.4 3, 9.2 3, 12.4 11.6" stroke="#CCC" strokeWidth="1.3" fill="none" strokeLinecap="round" /></WIcon>;
+}
+function IconBind() {
+  return (
+    <WIcon>
+      <circle cx="4.2" cy="9.4" r="2.4" stroke="#DDD" strokeWidth="1.2" fill="none" />
+      <circle cx="4.2" cy="4.6" r="2.4" stroke="#DDD" strokeWidth="1.2" fill="none" />
+      <path d="M6.4 6.2 L12.2 10.6" stroke="#DDD" strokeWidth="1.3" strokeLinecap="round" />
+    </WIcon>
+  );
+}
+function IconSwap() {
+  return (
+    <WIcon>
+      <path d="M2.4 5.2 H11.4 M9 2.8 L11.4 5.2 L9 7.6" stroke="#DDD" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+      <path d="M11.6 9.2 H2.6 M5 6.8 L2.6 9.2 L5 11.6" stroke="#DDD" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    </WIcon>
+  );
+}
+function IconCross() {
+  return (
+    <WIcon>
+      <circle cx="7" cy="7" r="5.6" fill="#8A8A8A" />
+      <path d="M4.8 4.8 L9.2 9.2 M9.2 4.8 L4.8 9.2" stroke="#2b2b2b" strokeWidth="1.5" strokeLinecap="round" />
+    </WIcon>
+  );
+}
+
+/** 滑轨：左半浅灰（已填充）、右半深灰（仿 Spine 的两段式轨道） */
+function trackBg(v: number, min: number, max: number) {
+  const pct = Math.max(0, Math.min(1, (v - min) / (max - min))) * 100;
+  return `linear-gradient(to right, #8b8b8b 0 ${pct}%, #464646 ${pct}% 100%)`;
 }
 // =================================================================================
 //  header 右上角：hideviews.png（隐藏所有视图）+ ViewMenu 组件（11 项 toggle）

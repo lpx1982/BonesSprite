@@ -119,6 +119,19 @@ export interface PixiBonesState {
   setMeshVertices: (attachmentId: string, vertices: number[]) => void;
   /** 整体写入网格数据（增删顶点 / 细分边等改变拓扑时用） */
   setMeshData: (attachmentId: string, mesh: MeshData) => void;
+  // ---- 权重工具（视图菜单「权重」）UI 状态 ----
+  /** 影响（0..1）：权重工具的施加强度 */
+  weightInfluence: number; setWeightInfluence: (v: number) => void;
+  /** 模式：直接（精确设值）/ 画笔 */
+  weightMode: 'direct' | 'brush'; setWeightMode: (m: 'direct' | 'brush') => void;
+  /** 权重（0..1）：直接模式下设置精确权重值 */
+  weightValue: number; setWeightValue: (v: number) => void;
+  /** 饼图：为每个顶点画权重饼图 */
+  weightPie: boolean; setWeightPie: (v: boolean) => void;
+  /** 叠加：用骨骼颜色填充网格来显示权重 */
+  weightOverlay: boolean; setWeightOverlay: (v: boolean) => void;
+  /** 已选：只画选中顶点 / 选中骨骼的饼图（叠加时未选骨骼用黑色） */
+  weightSelectedOnly: boolean; setWeightSelectedOnly: (v: boolean) => void;
   /** 正在编辑网格的插槽 id（null = 未进入网格编辑模式） */
   meshEditSlotId: string | null;
   setMeshEditSlot: (slotId: string | null) => void;
@@ -612,6 +625,19 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   setMeshSoftFeather: (v) => set({ meshSoftFeather: v }),
   meshSoftHull: true,
   setMeshSoftHull: (v) => set({ meshSoftHull: v }),
+  // 权重工具 UI 状态（默认值对齐 Spine 面板初始态：饼图开、叠加/已选关）
+  weightInfluence: 0.5,
+  setWeightInfluence: (v) => set({ weightInfluence: v }),
+  weightMode: 'direct',
+  setWeightMode: (m) => set({ weightMode: m }),
+  weightValue: 1,
+  setWeightValue: (v) => set({ weightValue: v }),
+  weightPie: true,
+  setWeightPie: (v) => set({ weightPie: v }),
+  weightOverlay: false,
+  setWeightOverlay: (v) => set({ weightOverlay: v }),
+  weightSelectedOnly: false,
+  setWeightSelectedOnly: (v) => set({ weightSelectedOnly: v }),
   meshNewPolygon: null,
   setMeshNewPolygon: (pts) => set({ meshNewPolygon: pts }),
   meshWireframe: {},
@@ -639,7 +665,10 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   showRulers: true,
 
   // 视图菜单 11 项默认值（false=关闭）
-  viewWeights:     false, toggleViewWeights:     () => set((s) => ({ viewWeights:    !s.viewWeights })),
+  viewWeights:     false, toggleViewWeights:     () => set((s) => {
+    const on = !s.viewWeights;
+    return { viewWeights: on, ...(on && !s.viewDockOrder.includes('weights') ? { viewDockOrder: [...s.viewDockOrder, 'weights'] } : {}) };
+  }),
   viewSkin:        false, toggleViewSkin:        () => set((s) => ({ viewSkin:       !s.viewSkin })),
   viewGridTool:    false, toggleViewGridTool:    () => set((s) => {
     const on = !s.viewGridTool;

@@ -96,8 +96,10 @@ export function BottomToolbar() {
   const setToolbarOffsetX = usePixiBonesStore((s) => s.setToolbarOffsetX);
   const showRightPanel = usePixiBonesStore((s) => s.showRightPanel);
   const viewGridTool = usePixiBonesStore((s) => s.viewGridTool);
-  // 右侧停靠区总宽度（层级树 288 + 网格工具 300），卡片组让出这么多，避免被面板压住
-  const dockWidth = (showRightPanel ? 288 : 0) + (viewGridTool ? 300 : 0);
+  const viewWeights = usePixiBonesStore((s) => s.viewWeights);
+  // 右侧停靠区总宽度（层级树 288 + 网格工具 300 + 权重 300），卡片组让出这么多，避免被面板压住
+  const dockWidth =
+    (showRightPanel ? 288 : 0) + (viewGridTool ? 300 : 0) + (viewWeights ? 300 : 0);
   /** 网格编辑模式：底部卡片组向下渐隐让位给「编辑网格」浮动面板 */
   const meshEditSlotId = usePixiBonesStore((s) => s.meshEditSlotId);
   const toolbarHidden = !!meshEditSlotId;
