@@ -28,6 +28,18 @@ export interface BoneNode {
   layerId: string | null;
 }
 
+/**
+ * 「图层 → 骨骼」绑定。
+ *
+ * ref = 绑定那一刻该骨骼的世界矩阵（列主序 6 元组 [a, b, c, d, tx, ty]，等价 PIXI Matrix）。
+ * 渲染时用增量变换 delta = 当前世界矩阵 × ref⁻¹ 去驱动图层，
+ * 这样「绑定」这个动作本身不会让图层跳动，之后骨骼怎么动图层就怎么跟。
+ */
+export interface LayerBinding {
+  boneId: string;
+  ref: number[];
+}
+
 export interface PixiBonesState {
   // ---- Day 1 残留字段（Demo 用自己的 skeleton，这里保留兼容）----
   skeleton: Skeleton | null;
@@ -38,9 +50,42 @@ export interface PixiBonesState {
 
   // ---- Day 2 ----
   psd: PixiBonesPsd | null;
+  /** 单独导入的图片素材（PNG/JPG 等，非 PSD 图层）。
+   *  和 PSD 图层一起挂在层级树的「图片」节点下。 */
+  images: PixiBonesLayer[];
+  addImage: (layer: PixiBonesLayer) => void;
+  removeImage: (id: string) => void;
   layerVisibility: Record<string, boolean>;
+  /** 绘制顺序（layerId 列表，索引 0 = 最先绘制 = 最底层）。
+   *  空数组 = 用自然顺序（PSD 图层 + 单独导入图片的原始顺序）。 */
+  layerOrder: string[];
+  /** 设置整份绘制顺序（在「绘制顺序」分区里拖拽排序后写入） */
+  setLayerOrder: (ids: string[]) => void;
+  /** 单选兼容字段：= selectedLayerIds[0]。见 selectedLayerIds 注释。 */
   selectedLayerId: string | null;
+  /** 多选素材（画布框选 / Shift 加选）。
+   *  - 单选：selectedLayerIds = [id]，selectedLayerId = id
+   *  - 多选：selectedLayerIds = [a,b,c]，selectedLayerId = 第一个（兼容旧代码）
+   */
+  selectedLayerIds: string[];
+  /** 多选素材。additive=true 增量追加，false 替换 */
+  selectLayers: (ids: string[], additive?: boolean) => void;
+  /** 只设置「目标素材」，**不改变骨骼选中**。
+   *  创建模式下 ⌘ 点击素材用它 —— 这样父骨骼链不会断（新骨仍是当前骨骼的子骨）。 */
+  setTargetLayer: (id: string | null) => void;
+  /** 框选：一次性设置骨骼 + 素材两个选中集（两者互不清空）。 */
+  selectBox: (boneIds: string[], layerIds: string[]) => void;
+  /** 当前选中的分区节点 key（如 'images'）。null = 未选中分区。 */
+  selectedSectionKey: string | null;
+  /** 选中分区节点（如 'images'）。会清掉骨骼 / 素材选中态。 */
+  selectSection: (key: string | null) => void;
   viewMode: ViewMode;
+  /** 正在等待拾取父级骨骼的素材 id。非 null = 「附件：设置父级」拾取模式。 */
+  attachingLayerId: string | null;
+  /** 进入拾取父级模式（点击图片属性面板的「父级」按钮） */
+  startAttach: (layerId: string) => void;
+  /** 退出拾取父级模式 */
+  cancelAttach: () => void;
 
   // ---- Day 3 ----
   bones: BoneNode[];
@@ -69,8 +114,10 @@ export interface PixiBonesState {
   viewIssues:         boolean; toggleViewIssues:         () => void;
   viewPreview:        boolean; toggleViewPreview:        () => void;
   viewAllHidden:      boolean; setViewAllHidden:         (v: boolean) => void;
-  editorMode: 'pose' | 'weights' | 'create';
+  editorMode: 'idle' | 'pose' | 'weights' | 'create';
   transformSpace: 'local' | 'world';
+  /** 工具栏上「旋转 / 移动 / 缩放 / 倾斜」四张卡片的当前激活工具 */
+  activeTool: 'rotate' | 'move' | 'scale' | 'shear' | null;
   /** 当前项目名（默认 raptor-pro，可被 setProjectName 覆盖，如导入 PSD 后用文件名） */
   projectName: string;
   setProjectName: (name: string) => void;
@@ -90,6 +137,12 @@ export interface PixiBonesState {
   undo: () => void;
   redo: () => void;
   viewport: { panX: number; panY: number; zoom: number };
+  /** 图层 → 骨骼 的绑定表（key = layerId）。见初始值处注释。 */
+  layerBindings: Record<string, LayerBinding>;
+  /** 把一个图层绑定到骨骼（ref = 绑定那一刻骨骼的世界矩阵，做参考基准） */
+  bindLayer: (layerId: string, binding: LayerBinding) => void;
+  /** 解除某个图层的绑定 */
+  unbindLayer: (layerId: string) => void;
   /** BoneEditor 的实际渲染原点/缩放，用于标尺换算（世界 0,0 在屏幕的哪里） */
   render: { x: number; y: number; scale: number };
   /** 编辑器顶部 tab：setup（装配/骨骼）/ animate（动画） */
@@ -126,7 +179,8 @@ export interface PixiBonesState {
   toggleRulers: () => void;
   fitRequestId: number;
   requestFitContent: () => void;
-  setEditorMode: (m: 'pose' | 'weights' | 'create') => void;
+  setEditorMode: (m: 'idle' | 'pose' | 'weights' | 'create') => void;
+  setActiveTool: (t: 'rotate' | 'move' | 'scale' | 'shear' | null) => void;
   setTransformSpace: (s: 'local' | 'world') => void;
   setViewport: (v: { panX: number; panY: number; zoom: number }) => void;
   setRender: (r: { x: number; y: number; scale: number }) => void;
@@ -206,9 +260,17 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   selectedBoneName: null,
 
   psd: null,
+  images: [],
   layerVisibility: {},
+  layerOrder: [],
+  setLayerOrder: (ids) => set({ layerOrder: ids }),
   selectedLayerId: null,
+  selectedLayerIds: [],
+  selectedSectionKey: null,
   viewMode: 'editor',
+  attachingLayerId: null,
+  startAttach: (layerId) => set({ attachingLayerId: layerId }),
+  cancelAttach: () => set({ attachingLayerId: null }),
 
   bones: [],
   selectedBoneId: null,
@@ -231,10 +293,13 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   viewPreview:     false, toggleViewPreview:     () => set((s) => ({ viewPreview:    !s.viewPreview })),
   viewAllHidden:   false, setViewAllHidden:      (v) => set({ viewAllHidden: v }),
   fitRequestId: 0,
-  editorMode: 'pose',
-  transformSpace: 'local',
+  editorMode: 'idle',
+    transformSpace: 'local',
+    activeTool: 'rotate',
   viewport: { panX: 0, panY: 0, zoom: 1 },
   render: { x: 0, y: 0, scale: 1 },
+  /** 图层 → 骨骼 的绑定表：key = layerId。语义见 LayerBinding 注释。 */
+  layerBindings: {},
 
   locale: 'zh',
   setLocale: (l) => set({ locale: l }),
@@ -345,30 +410,144 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   setSelectedBoneName: (n) => set({ selectedBoneName: n }),
 
   // Day 2 setters
-  setPsd: (p) =>
+  setPsd: (p) => {
+    // 切 / 导入 PSD 时骨全清，但必须重建一根根骨骼：
+    //   - 没有根骨时「创建模式」找不到父骨骼，会导致新建子骨骼直接失败
+    const rootId = p ? genBoneId() : null;
     set({
       psd: p,
       layerVisibility: {},
+      layerOrder: [],
       selectedLayerId: null,
-      bones: [],          // 切 PSD 时骨全清
-      selectedBoneId: null,
-      selectedBoneIds: [],
+      selectedLayerIds: [],
+      bones: rootId
+        ? [{
+            id: rootId,
+            name: 'root',
+            parentId: null,
+            x: 0, y: 0,
+            rotation: 0,
+            scaleX: 1, scaleY: 1,
+            length: 0,
+            layerId: null,
+          }]
+        : [],
+      selectedBoneId: rootId,
+      selectedBoneIds: rootId ? [rootId] : [],
+      selectedSectionKey: null,
+      attachingLayerId: null,
+      layerBindings: {},   // 新 PSD：清空所有绑定
+    });
+  },
+  bindLayer: (layerId, binding) =>
+    set((state) => {
+      // 仿 Spine：绑定后该骨骼成为「图层插槽的父级」，并以图层名重命名
+      const layer = findLayer(state.psd, layerId) ?? state.images.find((l) => l.id === layerId) ?? null;
+      const bones = layer
+        ? state.bones.map((b) =>
+            b.id === binding.boneId && b.name !== layer.name ? { ...b, name: layer.name } : b,
+          )
+        : state.bones;
+      return {
+        bones,
+        layerBindings: { ...state.layerBindings, [layerId]: binding },
+        attachingLayerId: null,   // 绑定完成即退出拾取模式
+      };
     }),
+  unbindLayer: (layerId) =>
+    set((state) => {
+      const next = { ...state.layerBindings };
+      delete next[layerId];
+      return { layerBindings: next };
+    }),
+  // 单独导入的图片素材（PNG/JPG）：追加到 images，默认可见
+  addImage: (layer) =>
+    set((state) => ({
+      images: [...state.images, layer],
+      layerVisibility: { ...state.layerVisibility, [layer.id]: true },
+      selectedLayerId: layer.id,
+      selectedLayerIds: [layer.id],
+      selectedBoneId: null,
+      selectedSectionKey: null,
+      attachingLayerId: null,
+    })),
+  removeImage: (id) =>
+    set((state) => ({
+      images: state.images.filter((l) => l.id !== id),
+      selectedLayerId: state.selectedLayerId === id ? null : state.selectedLayerId,
+      selectedLayerIds: state.selectedLayerIds.filter((lid) => lid !== id),
+      layerBindings: Object.fromEntries(
+        Object.entries(state.layerBindings).filter(([k]) => k !== id),
+      ),
+    })),
   toggleLayerVisibility: (id) =>
     set((state) => {
       const cur = state.layerVisibility[id];
-      const psdLayer = findLayer(state.psd, id);
-      const effective = cur ?? psdLayer?.visible ?? true;
+      // 素材可能来自 PSD 图层，也可能是单独导入的图片
+      const src = findLayer(state.psd, id) ?? state.images.find((l) => l.id === id) ?? null;
+      const effective = cur ?? src?.visible ?? true;
       return { layerVisibility: { ...state.layerVisibility, [id]: !effective } };
     }),
-  selectLayer: (id) => set({ selectedLayerId: id, selectedBoneId: null }),
+  selectLayer: (id) => set({
+    selectedLayerId: id,
+    selectedLayerIds: id ? [id] : [],
+    selectedBoneId: null,
+    selectedBoneIds: [],
+    selectedSectionKey: null,
+    attachingLayerId: null,
+  }),
+  // 多选素材：additive=true 增量追加，false 替换
+  selectLayers: (ids, additive = false) => set((s) => {
+    const next = additive ? Array.from(new Set([...s.selectedLayerIds, ...ids])) : ids;
+    return {
+      selectedLayerIds: next,
+      selectedLayerId: next[0] ?? null,
+      selectedBoneId: null,
+      selectedBoneIds: [],
+      selectedSectionKey: null,
+      attachingLayerId: null,
+    };
+  }),
+  // 只设置目标素材，保留骨骼选中（创建模式 ⌘ 点击素材用）
+  setTargetLayer: (id) => set({
+    selectedLayerId: id,
+    selectedLayerIds: id ? [id] : [],
+    selectedSectionKey: null,
+    attachingLayerId: null,
+  }),
+  // 框选：同时设置骨骼 + 素材（互不清空）
+  selectBox: (boneIds, layerIds) => set({
+    selectedBoneIds: boneIds,
+    selectedBoneId: boneIds[0] ?? null,
+    selectedLayerIds: layerIds,
+    selectedLayerId: layerIds[0] ?? null,
+    selectedSectionKey: null,
+    attachingLayerId: null,
+  }),
+  selectSection: (key) => set({
+    selectedSectionKey: key,
+    selectedBoneId: null,
+    selectedBoneIds: [],
+    selectedLayerId: null,
+    selectedLayerIds: [],
+    attachingLayerId: null,
+  }),
   setViewMode: (m) => set({ viewMode: m }),
 
   toggleLeftPanel: () => set((s) => ({ showLeftPanel: !s.showLeftPanel })),
   toggleRightPanel: () => set((s) => ({ showRightPanel: !s.showRightPanel })),
   toggleRulers: () => set((s) => ({ showRulers: !s.showRulers })),
   requestFitContent: () => set((s) => ({ fitRequestId: s.fitRequestId + 1 })),
-  setEditorMode: (m) => set({ editorMode: m }),
+  // mode 卡（姿势/权重/创建）和 transform 卡（旋转/移动/缩放/倾斜）互斥：
+//   - 选 mode ⇒ editorMode = m，activeTool = null
+//   - 选 transform tool ⇒ activeTool = t，editorMode = 'idle'
+// 调用方不需要关心互斥，store 自动保证两者只有一个高亮。
+setEditorMode: (m) => set({ editorMode: m, activeTool: null }),
+setActiveTool: (t) => set({
+  activeTool: t,
+  // 选 transform tool 时退出 pose/weights/create；其他情况保持现状
+  editorMode: t !== null ? 'idle' as const : 'pose' as const,
+}),
   setTransformSpace: (s) => set({ transformSpace: s }),
   setViewport: (v) => set({ viewport: v }),
   setRender: (r) => set({ render: r }),
@@ -398,14 +577,23 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   },
 
   removeBone: (id) => {
+    // ★ 硬要求：根骨骼（parentId === null）禁止删除
+    const target = get().bones.find((n) => n.id === id);
+    if (!target || target.parentId === null) return;
     get().pushHistory();
     set((state) => {
       const toRemove = collectDescendants(state.bones, id);
       const removedSel = state.selectedBoneId && toRemove.has(state.selectedBoneId);
+      // 被删骨骼上的图层绑定也一并清掉
+      const nextBindings = { ...state.layerBindings };
+      for (const [layerId, b] of Object.entries(nextBindings)) {
+        if (toRemove.has(b.boneId)) delete nextBindings[layerId];
+      }
       return {
         bones: state.bones.filter((n) => !toRemove.has(n.id)),
         selectedBoneId: removedSel ? null : state.selectedBoneId,
         selectedBoneIds: removedSel ? [] : state.selectedBoneIds.filter((bid) => !toRemove.has(bid)),
+        layerBindings: nextBindings,
       };
     });
   },
@@ -443,6 +631,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     selectedBoneId: id,
     selectedBoneIds: id ? [id] : [],
     selectedLayerId: null,
+    selectedLayerIds: [],
+    selectedSectionKey: null,
   }),
   // 多选：additive=true 增量追加，false 替换
   selectBones: (ids, additive = false) => set((s) => {
@@ -452,12 +642,16 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
         selectedBoneIds: next,
         selectedBoneId: next[0] ?? null,
         selectedLayerId: null,
+        selectedLayerIds: [],
+        selectedSectionKey: null,
       };
     }
     return {
       selectedBoneIds: ids,
       selectedBoneId: ids[0] ?? null,
       selectedLayerId: null,
+      selectedLayerIds: [],
+      selectedSectionKey: null,
     };
   }),
 
@@ -467,3 +661,19 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
 
 // 兼容：导出供 store 外的消费者复用
 export { findBone, collectDescendants };
+
+/**
+ * 按「绘制顺序」重排素材。
+ *   - 在 order 里的按 order 的位置排；
+ *   - 不在 order 里的（新导入的）按原始相对顺序跟在最后。
+ * order 为空时原样返回。
+ */
+export function orderLayers(layers: PixiBonesLayer[], order: string[]): PixiBonesLayer[] {
+  if (order.length === 0) return layers;
+  const pos = new Map(order.map((id, i) => [id, i]));
+  const n = order.length;
+  return layers
+    .map((l, i) => ({ l, k: pos.has(l.id) ? pos.get(l.id)! : n + i }))
+    .sort((a, b) => a.k - b.k)
+    .map((x) => x.l);
+}

@@ -2,3 +2,4 @@
 export * from './types';
 export * from './blendMode';
 export * from './parsePsd';
+export * from './parseImage';

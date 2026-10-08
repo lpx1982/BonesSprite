@@ -1,6 +1,5 @@
 import { useEffect } from 'react';
 import { usePixiBonesStore } from './store';
-import { PsdPanel } from './PsdPanel';
 import { HierarchyPanel } from './HierarchyPanel';
 import { BoneEditor } from './BoneEditor';
 import { BottomToolbar } from './BottomToolbar';
@@ -13,12 +12,11 @@ import hideViewsIcon from './icons/hideviews.png';
 /**
  * Day 3.5 · Spine 风格主编辑器
  *   - 顶部 header：logo + 快捷按钮 + 项目名 + 面板 toggle / view mode
- *   - 主体：左侧可选 PsdPanel（toggle） + 画布（永远在中间，full width） + 右侧可选 PropertyPanel
+ *   - 主体：画布（始终 full width） + 右侧可选层级树面板
  *   - 底部：工具栏
- *   - 导入 PSD 走画布拖拽 / 顶部菜单（不再在 header 放按钮）
+ *   - 导入素材走画布拖拽 / 顶部菜单（图片素材显示在层级树的「图片」节点下）
  */
 export function Editor() {
-  const showLeftPanel = usePixiBonesStore((s) => s.showLeftPanel);
   const showRightPanel = usePixiBonesStore((s) => s.showRightPanel);
   const editorTab = usePixiBonesStore((s) => s.editorTab);
   const psd = usePixiBonesStore((s) => s.psd);
@@ -47,6 +45,7 @@ export function Editor() {
   }, [viewAllHidden]);
 
   // 全局键盘快捷键：Cmd+Z / Ctrl+Z 撤销，Cmd+Shift+Z / Ctrl+Y 重做
+  // Del / Backspace = 触发"删除确认"事件（由 BoneEditor 监听 + 弹 ConfirmDialog）
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // 焦点在输入控件上时让浏览器原生行为走（输入框里的字也要能撤销）
@@ -55,7 +54,33 @@ export function Editor() {
         return;
       }
       const mod = e.metaKey || e.ctrlKey;
-      if (!mod) return;
+      if (!mod) {
+        const key = e.key;
+        // Esc：退出「附件：设置父级」拾取模式
+        if (key === 'Escape') {
+          const s = usePixiBonesStore.getState();
+          if (s.attachingLayerId) {
+            e.preventDefault();
+            s.cancelAttach();
+          }
+          return;
+        }
+        if (key === 'Delete' || key === 'Backspace') {
+          const s = usePixiBonesStore.getState();
+          // ★ 根骨骼禁止删除：剔除选中列表里的根骨后再派发事件
+          const deletable = s.selectedBoneIds.filter((id) => {
+            const n = s.bones.find((b) => b.id === id);
+            return n && n.parentId !== null;
+          });
+          if (deletable.length > 0) {
+            e.preventDefault();
+            window.dispatchEvent(new CustomEvent('spine:ask-delete', {
+              detail: { ids: deletable },
+            }));
+          }
+        }
+        return;
+      }
       const key = e.key.toLowerCase();
       if (key === 'z' && !e.shiftKey) {
         e.preventDefault();
@@ -121,7 +146,6 @@ export function Editor() {
       </header>
 
       <main className="flex-1 relative flex overflow-hidden">
-        {showLeftPanel && <PsdPanel />}
         <BoneEditor />
         {showRightPanel && <HierarchyPanel />}
         <BottomToolbar />

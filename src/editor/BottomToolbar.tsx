@@ -25,12 +25,12 @@ import frameKeyIcon from './icons/frame_key.png';
 //
 const T = {
   ROW_HEIGHT:        26,
-  LABEL_BOX_WIDTH:   80,
+  LABEL_BOX_WIDTH:   70,                                      // 左侧按钮宽度（旋转/移动/缩放/倾斜 4 行共用）
   LABEL_BOX_PAD_L:   8,
   LABEL_ICON_SIZE:   18,
   ROW_H_PAD:         4,
   INPUT_HEIGHT:      26,
-  INPUT_FONT_SIZE:   11,
+  INPUT_FONT_SIZE:   13,
   INPUT_WIDTH:       60,                                          // 单个 input 框宽度（双 input 行每个用这个）
   INPUT_GAP:         4,                                          // 双 input 之间的间距（保留备查；当前由 DIVIDER_WIDTH 替代）
   DIVIDER_WIDTH:    1,                                          // 双 input 中间的分隔竖线宽度
@@ -41,6 +41,17 @@ const T = {
   ROW_RADIUS:        4,
   INPUT_RADIUS:      0,
   ROW_BG:            'rgba(255, 255, 255, 0.06)',
+  ROW_BG_HOVER:      'rgba(255, 255, 255, 0.14)',   // 悬停时的行底色（比默认亮一档）
+  KEYFRAME_GREEN:    'rgba(0, 253, 93, 0.45)',     // 动画 tab 下钥匙按钮的激活底色
+  KEYFRAME_GREEN_HOVER: 'rgba(34, 197, 94, 0.65)',  // 动画 tab 下钥匙按钮 hover 的更亮一档
+
+  // ===== 通用按钮（5 张卡片共用）：active + hover 样式常量 =====
+  BTN_BG_ACTIVE:    'var(--spine-accent)',                      // mode 卡激活（蓝）；transform/space/reference 激活也是它
+  BTN_BG_HOVER:     'rgba(255, 255, 255, 0.14)',                // hover（亮一档）
+  BTN_BG_DEFAULT:   'rgba(255, 255, 255, 0.06)',
+  BTN_COLOR_ACTIVE: '#fff',                                       // 激活时文字白
+  BTN_COLOR_DEFAULT: 'var(--spine-text)',
+
   ROW_FONT_SIZE:     13,
 
   // Card 卡片外壳（5 张卡片共用）尺寸
@@ -70,6 +81,8 @@ const T = {
 export function BottomToolbar() {
   const editorMode = usePixiBonesStore((s) => s.editorMode);
   const setEditorMode = usePixiBonesStore((s) => s.setEditorMode);
+  const activeTool = usePixiBonesStore((s) => s.activeTool);
+  const setActiveTool = usePixiBonesStore((s) => s.setActiveTool);
   const transformSpace = usePixiBonesStore((s) => s.transformSpace);
   const setTransformSpace = usePixiBonesStore((s) => s.setTransformSpace);
   const bones = usePixiBonesStore((s) => s.bones);
@@ -147,9 +160,8 @@ export function BottomToolbar() {
   const selected = selectedBoneId ? findBone(bones, selectedBoneId) : null;
   const breadcrumb = useMemo(() => buildPath(bones, selectedBoneId), [bones, selectedBoneId]);
 
-  // transform 4 行 —— 默认选中第一行（旋转）
-  const activeTransform: TransformKey = 'rotate' as TransformKey;
-  // reference / space 默认值
+  // transform 4 行 —— 当前激活的工具（activeTool 为 null 表示未选中任何 transform 工具）
+  const activeTransform = activeTool;
   const activeSpace: SpaceKey = (transformSpace === 'world' ? 'world' : 'local') as SpaceKey;
   const activeRef: RefKey = 'bone' as RefKey;
 
@@ -235,6 +247,8 @@ export function BottomToolbar() {
             xValue="0.0"
             active={activeTransform === 'rotate'}
             columns="one"
+            hoverable
+            transformType="rotate"
           />
           <TransformRow
             icon={<IconMove />}
@@ -243,6 +257,8 @@ export function BottomToolbar() {
             yValue={selected ? selected.y.toFixed(1) : '0.0'}
             active={activeTransform === 'move'}
             columns="two"
+            hoverable
+            transformType="move"
           />
           <TransformRow
             icon={<IconScale />}
@@ -251,6 +267,8 @@ export function BottomToolbar() {
             yValue={selected ? selected.scaleY.toFixed(2) : '1.00'}
             active={activeTransform === 'scale'}
             columns="two"
+            hoverable
+            transformType="scale"
           />
           <TransformRow
             icon={<IconShear />}
@@ -259,6 +277,8 @@ export function BottomToolbar() {
             yValue="0.0"
             active={activeTransform === 'shear'}
             columns="two"
+            hoverable
+            transformType="shear"
           />
         </Card>
           {/* 卡片 3：transform space */}
@@ -341,6 +361,46 @@ function Card({ children }: { children: React.ReactNode }) {
 // ============================================================
 //  按钮们
 // ============================================================
+function Toolbutton({
+  active, hover, onHoverChange, onClick, height, minWidth, padding, extraSlot, children,
+}: {
+  active: boolean;
+  hover: boolean;
+  onHoverChange: (v: boolean) => void;
+  onClick: () => void;
+  height: number;
+  minWidth: number;
+  padding: string;
+  extraSlot?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      onMouseEnter={() => onHoverChange(true)}
+      onMouseLeave={() => onHoverChange(false)}
+      className="relative flex items-center gap-2 transition-colors"
+      style={{
+        height,
+        minWidth,
+        padding,
+        background: active ? T.BTN_BG_ACTIVE : (hover ? T.BTN_BG_HOVER : T.BTN_BG_DEFAULT),
+        color: active ? T.BTN_COLOR_ACTIVE : T.BTN_COLOR_DEFAULT,
+        border: 'none',
+        borderRadius: T.ROW_RADIUS,
+        fontSize: 12,
+        fontWeight: 400,
+        cursor: 'pointer',
+        lineHeight: 1,
+      }}
+    >
+      {extraSlot}
+      {children}
+    </button>
+  );
+}
+
 function ModeButton({
   icon, label, badge, active, onClick,
 }: {
@@ -351,32 +411,17 @@ function ModeButton({
   onClick: () => void;
 }) {
   const [hover, setHover] = useState(false);
+  // 复用通用 ToolButton 颜色逻辑，badge 专属逻辑保留
   return (
-    <button
+    <Toolbutton
+      active={active}
+      hover={hover}
+      onHoverChange={setHover}
       onClick={onClick}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      className="flex items-center gap-2 px-3 relative transition-colors"
-      style={{
-        height: 26,
-        minWidth: 80,
-        padding: '0 10px',
-        // active 优先级最高 > hover > 默认
-        background: active
-          ? 'var(--spine-accent)'
-          : hover
-            ? 'rgba(255, 255, 255, 0.14)'
-            : 'rgba(255, 255, 255, 0.06)',
-        color: active ? '#fff' : 'var(--spine-text)',
-        fontWeight: active ? 600 : 400,
-        fontSize: 12,
-        borderRadius: 4,
-        border: active ? 'none' : '1px solid transparent',
-      }}
-    >
-      <span style={{ width: 16, height: 16, display: 'flex' }}>{icon}</span>
-      <span style={{ whiteSpace: 'nowrap' }}>{label}</span>
-      {badge && (
+      height={26}
+      minWidth={80}
+      padding="0 10px"
+      extraSlot={badge ? (
         <span
           style={{
             position: 'absolute',
@@ -392,46 +437,99 @@ function ModeButton({
         >
           {badge}
         </span>
-      )}
-    </button>
+      ) : null}
+    >
+      <span style={{ width: 16, height: 16, display: 'flex' }}>{icon}</span>
+      <span style={{ whiteSpace: 'nowrap' }}>{label}</span>
+    </Toolbutton>
   );
 }
 
 function TransformRow({
-  icon, label, xValue, yValue, active, columns,
+  icon, label, xValue, yValue, columns, hoverable = false, active = false, transformType,
 }: {
   icon: React.ReactNode;
   label: string;
   xValue: string;
   yValue?: string;
-  active: boolean;
+  active?: boolean;
   columns: 'one' | 'two';
+  /** 该行是否已解锁（解锁后才有鼠标悬停效果） */
+  hoverable?: boolean;
+  /** 点击左侧按钮时切换到该工具；点击同一个则取消激活 */
+  transformType: 'rotate' | 'move' | 'scale' | 'shear';
 }) {
+  // 两块独立 hover：左按钮 / 中输入
+  // 钥匙按钮自身锁死与否取决于外部 editorTab（设置 / 动画）
+  const [hoverLeft, setHoverLeft] = useState(false);
+  const [hoverMid, setHoverMid] = useState(false);
+  const activeTool = usePixiBonesStore((s) => s.activeTool);
+  const setActiveTool = usePixiBonesStore((s) => s.setActiveTool);
+  const editorTab = usePixiBonesStore((s) => s.editorTab);
+  // 设置 tab：钥匙锁死（深灰、不可点）；
+  // 动画 tab：钥匙激活（亮绿、hover 加亮、可点击）
+  const keyframeLocked = editorTab !== 'animate';
+  // 钥匙按钮自己的 hover（动画 tab 才生效）
+  const [hoverKey, setHoverKey] = useState(false);
+  const keyframeBg = !keyframeLocked && hoverKey ? T.KEYFRAME_GREEN_HOVER : T.KEYFRAME_GREEN;
   return (
     <div
-      className="flex items-center relative"
+      className="flex items-center"
       style={{
         height: T.ROW_HEIGHT,
-        background: T.ROW_BG,
         color: 'var(--spine-text)',
         fontSize: T.ROW_FONT_SIZE,
-        borderRadius: T.ROW_RADIUS,
-        paddingLeft: T.ROW_H_PAD,
-        paddingRight: T.ROW_H_PAD,
+        gap: 0,           // 三块紧贴
       }}
     >
-      <span
-        className="flex items-center gap-2 shrink-0"
-        style={{ width: T.LABEL_BOX_WIDTH, paddingLeft: T.LABEL_BOX_PAD_L }}
+      {/* 块 1：左侧功能按钮（旋转 / 移动 / 缩放 / 倾斜）—— 复用 Toolbutton：active 蓝、hover 亮 */}
+      <div
+        style={{
+          flex: 'none',
+          // 整行紧贴：左侧按钮靠右不要圆角，与中间输入框衔接成一条直线
+          borderRadius: `${T.ROW_RADIUS}px 0 0 ${T.ROW_RADIUS}px`,
+          overflow: 'hidden',
+        }}
       >
-        <span style={{ width: T.LABEL_ICON_SIZE, height: T.LABEL_ICON_SIZE, display: 'flex' }}>{icon}</span>
-        <span>{label}</span>
-      </span>
+        <Toolbutton
+          active={active}
+          hover={hoverable && hoverLeft}
+          onHoverChange={hoverable ? setHoverLeft : () => {}}
+          onClick={() => {
+            // 工具栏点击 = 切换 activeTool；点击激活中的那个则取消激活（再点一下恢复 Pose 自由拖动）
+            const k = transformType ?? activeTool;
+            setActiveTool(activeTool === k ? null : k);
+          }}
+          height={T.ROW_HEIGHT}
+          minWidth={T.LABEL_BOX_WIDTH}
+          padding={`0 0 0 ${T.LABEL_BOX_PAD_L}px`}
+        >
+          <span style={{ width: T.LABEL_ICON_SIZE, height: T.LABEL_ICON_SIZE, display: 'flex' }}>{icon}</span>
+          <span>{label}</span>
+        </Toolbutton>
+      </div>
+
+      {/* 块 2：中间输入框（接受用户输入数字来改 transform 值） */}
+      <div
+        onMouseEnter={hoverable ? () => setHoverMid(true) : undefined}
+        onMouseLeave={hoverable ? () => setHoverMid(false) : undefined}
+        className="flex items-center transition-colors"
+        style={{
+          height: T.ROW_HEIGHT,
+          background: hoverable && hoverMid ? T.ROW_BG_HOVER : T.ROW_BG,
+          borderRadius: T.ROW_RADIUS,
+          // 输入框自己撑满，不需要左右内边距（之前留的 4px 让边框和 input 之间出现灰带）
+          paddingLeft: 0,
+          paddingRight: 0,
+          cursor: hoverable ? 'text' : 'default',
+          flex: 'none',
+        }}
+      >
       {columns === 'two' && yValue !== undefined ? (
         <>
           <input
-            readOnly
             value={xValue}
+            readOnly={!hoverable}
             className="px-2 text-center"
             style={{
               background: 'var(--spine-bg-panel-dark)',
@@ -457,8 +555,8 @@ function TransformRow({
             }}
           />
           <input
-            readOnly
             value={yValue}
+            readOnly={!hoverable}
             className="px-2 text-center"
             style={{
               background: 'var(--spine-bg-panel-dark)',
@@ -476,8 +574,8 @@ function TransformRow({
         </>
       ) : (
         <input
-          readOnly
           value={xValue}
+          readOnly={!hoverable}
           className="px-2 text-center"
           style={{
             background: 'var(--spine-bg-panel-dark)',
@@ -493,13 +591,35 @@ function TransformRow({
           }}
         />
       )}
-      <span
-        className="flex items-center justify-center shrink-0"
-        style={{ width: T.KEYFRAME_BTN_W, height: T.KEYFRAME_BTN_H, color: 'var(--spine-text-dim)' }}
-        title="link"
+      </div>
+
+      {/* 块 3：右侧关键帧按钮
+            - 设置 tab：锁死（深灰、不可点、无 hover）
+            - 动画 tab：激活（亮绿、hover 提亮、可点；写入关键帧时再变红） */}
+      <button
+        type="button"
+        disabled={keyframeLocked}
+        onClick={keyframeLocked ? undefined : () => { /* TODO: 写关键帧 */ }}
+        onMouseEnter={() => !keyframeLocked && setHoverKey(true)}
+        onMouseLeave={() => setHoverKey(false)}
+        className="flex items-center justify-center shrink-0 transition-colors"
+        style={{
+          width: T.KEYFRAME_BTN_W,
+          height: T.KEYFRAME_BTN_H,
+          padding: 0,
+          lineHeight: 1,
+          // 设置 tab 用淡灰，动画 tab 用浅绿图标
+          color: keyframeLocked ? 'rgba(187, 187, 187, 0.35)' : '#A8F0B8',
+          background: keyframeLocked ? T.ROW_BG : keyframeBg,
+          border: 'none',
+          // 整行紧贴：右侧关键帧按钮靠左不要圆角，与中间输入框衔接成一条直线
+          borderRadius: `0 ${T.ROW_RADIUS}px ${T.ROW_RADIUS}px 0`,
+          cursor: keyframeLocked ? 'not-allowed' : 'pointer',
+        }}
+        title={keyframeLocked ? '关键帧（设置模式下不可用）' : '添加关键帧'}
       >
         <IconLink />
-      </span>
+      </button>
     </div>
   );
 }
@@ -512,25 +632,20 @@ function RadioButton({
   active: boolean;
   onClick: () => void;
 }) {
+  const [hover, setHover] = useState(false);
   return (
-    <button
+    <Toolbutton
+      active={active}
+      hover={hover}
+      onHoverChange={setHover}
       onClick={onClick}
-      className="flex items-center gap-2 px-3"
-      style={{
-        height: 26,
-        minWidth: 80,
-        padding: '0 10px',
-        // 暂时不做 active 高亮（功能未实现，避免误导用户）
-        background: 'rgba(255, 255, 255, 0.06)',
-        color: 'var(--spine-text)',
-        fontWeight: 400,
-        fontSize: 12,
-        borderRadius: 4,
-      }}
+      height={26}
+      minWidth={80}
+      padding="0 10px"
     >
       <span style={{ width: 16, height: 16, display: 'flex' }}>{icon}</span>
       <span style={{ whiteSpace: 'nowrap' }}>{label}</span>
-    </button>
+    </Toolbutton>
   );
 }
 
@@ -722,7 +837,6 @@ function IconUnlockArrows() {
 // ============================================================
 //  helper
 // ============================================================
-type TransformKey = 'rotate' | 'move' | 'scale' | 'shear';
 type SpaceKey = 'local' | 'parent' | 'world';
 type RefKey = 'bone' | 'image' | 'pixel';
 
