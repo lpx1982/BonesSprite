@@ -3443,11 +3443,18 @@ export function BoneEditor() {
                   vertices.push(p.x, p.y);
                   uvs.push(p.x / layer.width, p.y / layer.height);
                 }
-                const st0 = usePixiBonesStore.getState();
-                st0.setMeshNewPolygon(null);          // 正在手绘的话先取消
-                st0.pushHistory();
-                st0.setMeshData(aid, { vertices, uvs, indices });
-                st0.setMeshSelectedVertices([]);
+                // ★ 必须异步写 store：在 subscribe 回调里直接 setState 会重新触发本回调，
+                //   而此时 prev 还是旧值（traceRequestId 仍"变化过"）→ 无限递归把页面卡死。
+                //   与上面 fitRequestId 的处理同理。
+                queueMicrotask(() => {
+                  if (destroyed) return;
+                  const st0 = usePixiBonesStore.getState();
+                  if (st0.meshEditSlotId !== slotId) return;   // 期间已退出编辑 → 放弃
+                  st0.setMeshNewPolygon(null);                 // 正在手绘的话先取消
+                  st0.pushHistory();
+                  st0.setMeshData(aid, { vertices, uvs, indices });
+                  st0.setMeshSelectedVertices([]);
+                });
               }
             }
           }
