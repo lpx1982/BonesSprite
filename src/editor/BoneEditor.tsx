@@ -494,6 +494,10 @@ export function BoneEditor() {
         slotTransforms: Record<string, { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }>,
       ) => {
         const byId = new Map(allAttachmentsOf(psd, images).map((l) => [l.id, l]));
+        // ★ 读一下当前 store 的 attachmentMeshes：
+        //   当某 attachment 已绑骨骼（mesh.bones 非空）时，applyBindings 不要把它绑的骨骼矩阵当 wrap.matrix 的骨骼驱动用
+        //   （wrap.matrix 此时只承担 slot transform + 图层偏移；顶点位置由 applySkinning 按权重算 root 坐标）。
+        const meshesNow = usePixiBonesStore.getState().attachmentMeshes;
         for (const slot of slots) {
           // ★ 每插槽一份 sprite：直接取该插槽当前激活的附件
           const wrap = viewBySlotId.get(slot.id);
@@ -508,7 +512,9 @@ export function BoneEditor() {
             const lt = slotTransforms[slot.id];
             // 1) 计算骨骼驱动矩阵（列主序 6 元组）
             let m = [1, 0, 0, 1, 0, 0]; // 单位
-            if (binding && bone) {
+            // ★ 已绑骨骼（mesh 形态）→ 跳过骨骼驱动（由 applySkinning 接管）
+            const meshSkinned = aid ? (meshesNow[aid]?.bones && meshesNow[aid]!.bones!.length > 0) : false;
+            if (binding && bone && !meshSkinned) {
               const inv = invAffine(binding.ref);
               if (inv) {
                 const e = bone.worldMatrix.elements;
@@ -1163,30 +1169,16 @@ export function BoneEditor() {
       /**
        * 骨骼蒙皮（线性混合蒙皮）—— 把 mesh.bones / mesh.weights / mesh.bindPose 烘焙到 PIXI Mesh。
        *
-       * 公式：每个顶点 v  →  v_world = Σ w_j · M_j · bindPose[j]
-       *  其中 M_j = bone.worldMatrix 的 6 元仿射（root 坐标系）。
+       * 公式（简化版）：
+       *   v_root = (left, top) + bindPose + Σ w_j · (bone_world_now_j - bone_world_bind_j)
        *
-       * 实现策略：
-       *  - wrap.matrix 在「绑了骨骼」时**不再**用于骨骼驱动；改为 **identity** + view.position = 0，
-       *    把骨骼驱动的部分完全交给顶点权重；
-       *  - wrap 仍保留 slot 变换（tx/ty/rotation/scale/shear）—— 这些都和 vertex weight 正交，
-       *    所以一并保留在 wrap 上；
-       *  - 但目前 applyBindings 把 bone_matrix 与 slotLocal **相乘**后写到 wrap.matrix，
-       *    因此「绑了骨骼」时我们要剥离掉骨骼部分。
+       * 实现：
+       *   - wrap.matrix 由 applyBindings 算成 slotLocal（无骨骼驱动，因为 mesh 已绑骨骼）
+       *   - wrap.matrix 把 wrap 局部坐标 → root 坐标（带枢轴居中化的 slot transform）
+       *   - 我们把 v_root 喂进 wrap.matrix⁻¹ 得到 wrap 局部坐标，写进 view.positions
+       *   - 这样 view.positions 走 wrap.matrix → 正确屏幕位置
        *
-       * 简化做法：
-       *  - 直接清空 wrap.matrix（identity），把所有 slot transform 信息也按 root 坐标直接喂给 view.positions
-       *    之前的实现（无骨骼时 wrap.matrix = slotLocal + bone_matrix），网格没有骨骼时仍走原路径；
-       *    有骨骼时**整图位置 + slot 变换**也按权重叠加到顶点上。
-       *  - 这样 hit-test 用的 wrapMatrixBySlot 不再反映 wrap 矩阵本身，需要单独处理（先看代码……）。
-       *
-       * ★ 为了改动最小、且不影响 hit-test：
-       *  - 保留 wrap.matrix 现有逻辑（applyBindings 照旧）
-       *  - 但**有骨骼绑定时**反向：把 view.position 移到 wrap 当前 root 坐标的位置，
-       *    wrap.position 归 0，wrap.matrix 设回 identity，view.positions 直接写 root 坐标。
-       *  - 网格的 hit-test 走 PIXI 内置（不需要 wrapMatrixBySlot.forEach），所以 wrap 矩阵变化不影响点击。
-       *    唯一影响：wrapMatrixBySlot 仍然记录旧的 wrap.matrix → 仅用于「已勾选叠加时按骨骼颜色填充网格」
-       *    这类需要 wrap 矩阵的功能 —— 我们暂时不实现叠加填充，所以不冲突。
+       * 适用：父骨骼平移带动整个网格跟随（最常见）；骨骼旋转时网格近似跟随。
        */
       const applySkinning = (slotId: string) => {
         const s = usePixiBonesStore.getState();
@@ -1196,7 +1188,6 @@ export function BoneEditor() {
         if (!aid) return;
         const mesh = s.attachmentMeshes[aid];
         if (!mesh || !mesh.bones || mesh.bones.length === 0 || !mesh.weights || !mesh.bindPose) {
-          // 无权重绑定 → 不做事（保持 wrap 现有矩阵不变）
           return;
         }
         const wrap = viewBySlotId.get(slotId);
@@ -1208,62 +1199,73 @@ export function BoneEditor() {
         const bindPose = mesh.bindPose;
         const bones = mesh.bones;
         const weights = mesh.weights;
+        const boneBindWorld = mesh.boneBindWorld ?? [];
         const nb = bones.length;
         const vertCount = Math.floor(pos.length / 2);
         if (bindPose.length !== pos.length || weights.length !== vertCount * nb) {
-          // 长度不一致 → 跳过（说明网格拓扑刚改过，rebuildAssets 会接管）
           return;
         }
-        // 收集每个骨骼的世界矩阵（6 元仿射）
-        const m: number[][] = new Array(nb);
+        const all = allAttachmentsOf(s.psd, s.images);
+        const layer = all.find((l) => l.id === aid);
+        const layerLeft = layer?.left ?? 0;
+        const layerTop = layer?.top ?? 0;
+        // 每个骨骼当前的世界位置（root 坐标系）：worldMatrix.elements[6..7]
+        const boneDx = new Array(nb);
+        const boneDy = new Array(nb);
         for (let j = 0; j < nb; j++) {
-          const boneNode = skeletonRef
-            ? findBoneByRefWorld(skeletonRef, bones[j])
-            : null;
-          if (!boneNode) {
-            // 找不到骨 → 用单位矩阵（避免崩）
-            m[j] = [1, 0, 0, 1, 0, 0];
-            continue;
-          }
+          const boneNode = skeletonRef ? findBoneByRefWorld(skeletonRef, bones[j]) : null;
+          if (!boneNode) { boneDx[j] = 0; boneDy[j] = 0; continue; }
           const e = boneNode.worldMatrix.elements;
-          m[j] = [e[0], e[1], e[3], e[4], e[6], e[7]];
+          boneDx[j] = e[6];
+          boneDy[j] = e[7];
         }
-        // 算每个顶点的 root 坐标：v_root = Σ w_j · M_j · bindPose
-        for (let i = 0; i < vertCount; i++) {
-          const bx = bindPose[i * 2];
-          const by = bindPose[i * 2 + 1];
-          let vx = 0;
-          let vy = 0;
-          const row = i * nb;
-          for (let j = 0; j < nb; j++) {
-            const w = weights[row + j];
-            if (w === 0) continue;
-            const mj = m[j];
-            // M_j · bindPose：列主序 6 元 (a, b, c, d, tx, ty)
-            const px = mj[0] * bx + mj[2] * by + mj[4];
-            const py = mj[1] * bx + mj[3] * by + mj[5];
-            vx += w * px;
-            vy += w * py;
+        // wrap.matrix⁻¹（6 元仿射）：把 root 坐标 → wrap 局部坐标
+        const wm = wrapMatrixBySlot.get(slotId);
+        if (!wm) {
+          // wrap 不存在 → 用近似（layer.left/top 偏移）
+          for (let i = 0; i < vertCount; i++) {
+            let vx = layerLeft + bindPose[i * 2];
+            let vy = layerTop + bindPose[i * 2 + 1];
+            const row = i * nb;
+            for (let j = 0; j < nb; j++) {
+              const w = weights[row + j];
+              if (w === 0) continue;
+              const dx = boneDx[j] - (boneBindWorld[j * 2] ?? 0);
+              const dy = boneDy[j] - (boneBindWorld[j * 2 + 1] ?? 0);
+              vx += w * dx;
+              vy += w * dy;
+            }
+            pos[i * 2] = vx;
+            pos[i * 2 + 1] = vy;
           }
-          pos[i * 2] = vx;
-          pos[i * 2 + 1] = vy;
+        } else {
+          const inv = invAffine(wm);
+          if (!inv) return;
+          // inv 6 元：[a, b, c, d, tx, ty]  即 v_local = inv · v_root
+          const ia = inv[0], ib = inv[1], ic = inv[2], id_ = inv[3], itx = inv[4], ity = inv[5];
+          for (let i = 0; i < vertCount; i++) {
+            // v_root = (left, top) + bindPose + Σ w_j · (now - bind)
+            let vx = layerLeft + bindPose[i * 2];
+            let vy = layerTop + bindPose[i * 2 + 1];
+            const row = i * nb;
+            for (let j = 0; j < nb; j++) {
+              const w = weights[row + j];
+              if (w === 0) continue;
+              const dx = boneDx[j] - (boneBindWorld[j * 2] ?? 0);
+              const dy = boneDy[j] - (boneBindWorld[j * 2 + 1] ?? 0);
+              vx += w * dx;
+              vy += w * dy;
+            }
+            // v_local = inv · v_root
+            pos[i * 2] = ia * vx + ic * vy + itx;
+            pos[i * 2 + 1] = ib * vx + id_ * vy + ity;
+          }
         }
         geo.getBuffer('aPosition').update();
-        // 蒙皮后：把 wrap 自身拉直，让 view 直接显示 root 坐标
-        //   - wrap.matrix 设回 identity
-        //   - wrap.position = (0, 0)
-        //   - view.position = (0, 0)（wrap 局部）
-        wrap.setFromMatrix(new Matrix(1, 0, 0, 1, 0, 0));
-        wrap.position.set(0, 0);
-        view.position.set(0, 0);
-        // wrapMatrixBySlot 同步置为单位（之前记录的旧矩阵已不再使用）
-        wrapMatrixBySlot.set(slotId, [1, 0, 0, 1, 0, 0]);
       };
 
-      /** 在 skeleton 里按 id 反查 Bone 节点（用 bone 的引用比对）。 */
+      /** 在 skeleton 里按 id 反查 Bone 节点。 */
       function findBoneByRefWorld(skel: Skeleton, id: string): EngineBone | null {
-        // EngineBone 暴露 worldMatrix 属性，我们遍历树查找带有 _id 字段的骨节点。
-        // 为避免破坏封装，用 try/catch + 数据属性查找。
         const root = (skel as unknown as { root?: EngineBone }).root;
         if (!root) return null;
         const walk = (b: EngineBone): EngineBone | null => {
@@ -3696,6 +3698,9 @@ export function BoneEditor() {
         if (state.bones !== prev.bones) {
           buildSkeleton(state.bones);
           // ★ 骨骼平移 / 旋转 / 缩放 → 重算所有已绑定网格的顶点蒙皮
+          //   注意：applySkinning 需要 wrapMatrixBySlot 已有该插槽记录，
+          //   所以先调一次 applyBindings 把 slot 变换矩阵算好（即使骨骼驱动被跳过也无碍）。
+          applyBindings(state.psd, state.images, state.slots, state.slotBindings, state.slotTransforms);
           for (const slot of state.slots) {
             const aid = slot.activeAttachmentId;
             const mesh = aid ? state.attachmentMeshes[aid] : null;

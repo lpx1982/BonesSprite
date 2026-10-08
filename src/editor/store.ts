@@ -469,6 +469,24 @@ function findLayer(psd: PixiBonesPsd | null, id: string): PixiBonesLayer | null 
 
 export { findLayer };
 
+/**
+ * 把 MeshData 的可选字段从 undefined 兜底为 []，保证 JSON.stringify / 解析后字段不丢。
+ *   bones     → []
+ *   weights   → []
+ *   bindPose  → []
+ * 否则 JSON.stringify 会丢 undefined，undo/redo 后 mesh.bones 变 undefined，
+ * applySkinning 误判"无权重" → 网格被覆盖成 0 → 画面消失。
+ */
+function fillMeshDefaults(m: MeshData): MeshData {
+  return {
+    ...m,
+    bones: m.bones ?? [],
+    weights: m.weights ?? [],
+    bindPose: m.bindPose ?? [],
+    boneBindWorld: m.boneBindWorld ?? [],
+  };
+}
+
 // =================================================================================
 //  插槽（slot）工具
 // =================================================================================
@@ -736,6 +754,15 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       }
     }
     const bindPose = bindPoseVertices ? bindPoseVertices.slice() : mesh.vertices.slice();
+    // ★ 记下绑定时每个骨骼的"近似 root 坐标位置"（用 bones[].x/y 作近似）。
+    //   渲染端（applySkinning）若能拿到 skeletonRef，会用 worldMatrix 替换更准确的值；
+    //   这里存的是 fallback（store 没有它）。
+    const boneBindWorld: number[] = new Array(bones.length * 2);
+    for (let i = 0; i < bones.length; i++) {
+      const b = st.bones.find((x) => x.id === bones[i]);
+      boneBindWorld[i * 2] = b ? b.x : 0;
+      boneBindWorld[i * 2 + 1] = b ? b.y : 0;
+    }
     st.pushHistory();
     set((s) => {
       const m = s.attachmentMeshes[attachmentId];
@@ -743,7 +770,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       return {
         attachmentMeshes: {
           ...s.attachmentMeshes,
-          [attachmentId]: { ...m, bones, weights, bindPose },
+          [attachmentId]: { ...m, bones, weights, bindPose, boneBindWorld },
         },
       };
     });
@@ -763,10 +790,16 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       const newBones = m.bones.filter((_, i) => i !== idx);
       if (newBones.length === 0) {
         // 全部解绑 → 回到无权重状态
-        const { bones: _b, weights: _w, bindPose: _bp, ...rest } = m;
+        const { bones: _b, weights: _w, bindPose: _bp, boneBindWorld: _bbw, ...rest } = m;
         return { attachmentMeshes: { ...s.attachmentMeshes, [attachmentId]: rest } };
       }
       const newWeights = new Array(vertCount * newBones.length).fill(0);
+      const newBoneBindWorld: number[] = [];
+      for (let i = 0; i < nb; i++) {
+        if (i === idx) continue;
+        newBoneBindWorld.push(m.boneBindWorld?.[i * 2] ?? 0);
+        newBoneBindWorld.push(m.boneBindWorld?.[i * 2 + 1] ?? 0);
+      }
       for (let v = 0; v < vertCount; v++) {
         const oldRow = v * nb;
         const newRow = v * newBones.length;
@@ -788,7 +821,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       return {
         attachmentMeshes: {
           ...s.attachmentMeshes,
-          [attachmentId]: { ...m, bones: newBones, weights: newWeights },
+          [attachmentId]: { ...m, bones: newBones, weights: newWeights, boneBindWorld: newBoneBindWorld },
         },
       };
     });
@@ -1045,11 +1078,16 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   historyFuture: [],
   pushHistory: () => {
     const s = get();
-    // 深拷贝当前 bones 快照 + slotTransforms（解构后是 plain object，可直接 JSON 化）
+    // 深拷贝当前 bones 快照 + slotTransforms + attachmentMeshes（解构后是 plain object，可直接 JSON 化）
+    // ★ 必须保证可选字段（mesh.bones/weights/bindPose）也被保留：
+    //   JSON.stringify 会丢掉 undefined 字段 → 用 fillMeshDefaults 先把 undefined 填成 []，
+    //   解析回来仍然是 []，applySkinning 会按"无权重"路径处理（不会崩）。
     const snap = {
       bones: JSON.parse(JSON.stringify(s.bones)),
       slotTransforms: JSON.parse(JSON.stringify(s.slotTransforms)),
-      attachmentMeshes: JSON.parse(JSON.stringify(s.attachmentMeshes)),
+      attachmentMeshes: JSON.parse(JSON.stringify(
+        Object.fromEntries(Object.entries(s.attachmentMeshes).map(([k, m]) => [k, fillMeshDefaults(m)])),
+      )),
       selectedBoneId: s.selectedBoneId,
     };
     const past = [...s.historyPast, snap].slice(-50);  // 最多 50 步
@@ -1064,7 +1102,9 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     const currentSnap = {
       bones: JSON.parse(JSON.stringify(s.bones)),
       slotTransforms: JSON.parse(JSON.stringify(s.slotTransforms)),
-      attachmentMeshes: JSON.parse(JSON.stringify(s.attachmentMeshes)),
+      attachmentMeshes: JSON.parse(JSON.stringify(
+        Object.fromEntries(Object.entries(s.attachmentMeshes).map(([k, m]) => [k, fillMeshDefaults(m)])),
+      )),
       selectedBoneId: s.selectedBoneId,
     };
     const future = [currentSnap, ...s.historyFuture];
@@ -1085,7 +1125,9 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     const currentSnap = {
       bones: JSON.parse(JSON.stringify(s.bones)),
       slotTransforms: JSON.parse(JSON.stringify(s.slotTransforms)),
-      attachmentMeshes: JSON.parse(JSON.stringify(s.attachmentMeshes)),
+      attachmentMeshes: JSON.parse(JSON.stringify(
+        Object.fromEntries(Object.entries(s.attachmentMeshes).map(([k, m]) => [k, fillMeshDefaults(m)])),
+      )),
       selectedBoneId: s.selectedBoneId,
     };
     const past = [...s.historyPast, currentSnap];

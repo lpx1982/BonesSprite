@@ -70,16 +70,22 @@ export interface MeshData {
   uvs: number[];
   indices: number[];
   /**
-   * 权重绑定数据（仿 Spine Mesh Attachment.weights）。
+   * 权重绑定数据（仿 Spine Mesh Attachment.weights，简化版）。
    *  - `bones`：参与绑定的骨骼 id 列表（去重，顺序稳定 = 自动权重写入顺序）
    *  - `weights`：每顶点一组，长度 = bones.length；w_i = 该顶点对 bones[i] 的权重（0..1）
-   *    数组长度 = vertices.length / 2 * bones.length；字段名命名为 flatWeights 避免误解。
-   *  - `bindPose`：绑定姿态下的顶点坐标（**附件局部坐标**）。
-   *    渲染时：v = Σ w_i · M_i · bindPose   （M_i = 骨骼 i 的世界矩阵）
+   *    数组长度 = vertices.length / 2 * bones.length。
+   *  - `bindPose`：绑定姿态下的顶点坐标（**附件局部坐标**，相对图层 left/top）。
+   *  - `boneBindWorld`：每个骨骼在**绑定时**的 root 坐标位置 (x, y, ...)，长度 = bones.length * 2。
+   *    渲染时（线性蒙皮）：
+   *      v_root = (left, top) + bindPose + Σ w_j · (bone_world_now_j - boneBindWorld_j)
+   *    适合"骨头一动，整个网格跟着平移"这种场景；骨骼旋转 / 缩放时顶点会近似跟随
+   *    （不做仿射变换，足够日常使用）。
+   *
    *  未绑定（bones.length === 0）时退化为「整图跟随插槽骨骼」，
    *  此时 vertices 直接被当作显示位置（无变形叠加）。
    */
   bones?: string[];
   weights?: number[];
   bindPose?: number[];
+  boneBindWorld?: number[];
 }
