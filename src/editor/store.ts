@@ -8,6 +8,12 @@ import type { Locale } from './i18n';
 export type ViewMode = 'editor' | 'demo';
 export type EditorTab = 'setup' | 'animate';
 
+/** 描绘弹窗打开前的网格快照（用于「取消」时还原） */
+export interface TraceSnapshot {
+  layerId: string;
+  mesh: MeshData | null;
+}
+
 // =================================================================================
 //  右侧停靠区尺寸常量
 //    DOCK_PANEL_DEFAULT_WIDTH：各面板的默认宽度（新增面板记得在这里加默认值）
@@ -212,8 +218,20 @@ export interface PixiBonesState {
   setTraceAlphaThreshold: (v: number) => void;
   setTracePadding: (v: number) => void;
   setTraceVertexCount: (v: number) => void;
-  /** 提交：把对话框里的当前参数应用到网格（一次性 setMeshData + 入历史） */
+  /** 描绘弹窗「实时预览」开关 */
+  traceLivePreview: boolean;
+  /** 打开弹窗前的网格快照（仅 mesh 字段，null = 该图层原无网格） */
+  traceSnapshot: { layerId: string; mesh: MeshData | null } | null;
+  /** 打开弹窗：标记预览模式 + 存快照 + 设对话框 open */
+  openTraceDialog: (layerId: string, currentMesh: MeshData | null) => void;
+  /** 「确定」：最后一次结果入历史 + 关闭预览 + 关弹窗 */
   applyTraceWithDialogSettings: () => void;
+  /** 「取消」：从快照恢复网格 + 关闭预览 + 关弹窗 */
+  cancelTraceWithDialogSettings: () => void;
+  /** 取消恢复请求：BoneEditor 订阅到变化后用 traceSnapshot 把网格还原 */
+  traceRestoreRequestId: number;
+  /** 订阅者完成 snapshot 恢复后清掉快照 */
+  clearTraceSnapshot: () => void;
   /** 绘制顺序（slotId 列表，索引 0 = 最先绘制 = 最底层）。
    *  空数组 = 用自然顺序。 */
   slotOrder: string[];
@@ -746,6 +764,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   traceAlphaThreshold: 8,
   tracePadding: 0,
   traceVertexCount: 0,
+  traceRestoreRequestId: 0,
   setTraceDialogOpen: (v) => set({ traceDialogOpen: v }),
   setTraceDetail: (v) => set({ traceDetail: v }),
   setTraceConcavity: (v) => set({ traceConcavity: v }),
@@ -754,11 +773,31 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   setTraceAlphaThreshold: (v) => set({ traceAlphaThreshold: v }),
   setTracePadding: (v) => set({ tracePadding: v }),
   setTraceVertexCount: (v) => set({ traceVertexCount: v }),
-  applyTraceWithDialogSettings: () => {
-    // 实际算法在 BoneEditor 端执行（它有 attachmentMeshes / pushHistory / setMeshData），
-    // 这里只发一个提交请求位，由订阅者执行。
-    set((s) => ({ traceRequestId: s.traceRequestId + 1, traceDialogOpen: false }));
-  },
+  // 描绘弹窗「实时预览」：on 时每次 trace* 变化都自动把描绘结果写进网格；
+  //   点「确定」时最后一次结果入历史；点「取消」时从快照恢复并关预览。
+  traceLivePreview: false,
+  traceSnapshot: null,
+  openTraceDialog: (layerId, currentMesh) => set((s) => ({
+    traceDialogOpen: true,
+    traceLivePreview: true,
+    traceSnapshot: { layerId, mesh: currentMesh },
+  })),
+  /** 「确定」：用最近一次参数再跑一次（这次入历史） + 关闭预览 + 关弹窗 */
+  applyTraceWithDialogSettings: () => set((s) => ({
+    traceDialogOpen: false,
+    traceLivePreview: false,
+    traceSnapshot: null,
+    traceRequestId: s.traceRequestId + 1,
+  })),
+  /** 「取消」：触发 snapshot 恢复（BoneEditor 订阅 traceRestoreRequestId 后用 traceSnapshot 把网格还原）。
+   *  注意：traceSnapshot 留给订阅者读，订阅者恢复完自己清；这里只关弹窗 + 关预览 + 推恢复请求。 */
+  cancelTraceWithDialogSettings: () => set((s) => ({
+    traceDialogOpen: false,
+    traceLivePreview: false,
+    traceRestoreRequestId: s.traceRestoreRequestId + 1,
+  })),
+  /** 订阅者完成 snapshot 恢复后调用，清掉快照（避免后续误用） */
+  clearTraceSnapshot: () => set({ traceSnapshot: null }),
   editorMode: 'idle',
     transformSpace: 'local',
     activeTool: 'rotate',

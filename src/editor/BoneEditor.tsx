@@ -3424,7 +3424,9 @@ export function BoneEditor() {
         if (state.editorMode !== prev.editorMode && state.editorMode !== 'create') {
           attachmentHover.clear();
         }
-        // 描绘（Trace）：面板点「描绘」或对话框「确定」→ 按图片 alpha 自动提取轮廓，用该多边形重建网格
+        // 描绘（Trace）：弹窗打开时进入「实时预览」模式，每次 trace* 参数变化都重算，
+        //   把结果直接写进网格（不入历史，由「确定」统一入一次）。
+        //   apply 时也再触发一次 requestTrace 写最终结果（一次性入历史）。
         if (state.traceRequestId !== prev.traceRequestId) {
           const slotId = state.meshEditSlotId;
           const slot = slotId ? state.slots.find((x) => x.id === slotId) ?? null : null;
@@ -3433,7 +3435,6 @@ export function BoneEditor() {
             ? allAttachmentsOf(state.psd, state.images).find((l) => l.id === aid) ?? null
             : null;
           if (aid && layer?.canvas && layer.width > 0 && layer.height > 0) {
-            // 现在面板的「描绘」按钮也是弹对话框、走这条路径；订阅里始终用 store 里的参数
             const params = {
               detail: state.traceDetail,
               concavity: state.traceConcavity,
@@ -3449,11 +3450,6 @@ export function BoneEditor() {
               const st0 = usePixiBonesStore.getState();
               if (st0.meshEditSlotId !== slotId) return;   // 期间已退出编辑 → 放弃
               st0.setTraceVertexCount(count);
-              // 弹窗模式下：拖动滑块时只更新"顶点数"预览，**不写网格**；
-              //   真正写入要等用户点「确定」（applyTraceWithDialogSettings → 走 requestTrace 的特殊路径）
-              //   用本次请求的 requestId 跟弹窗"开/关"对齐判断。
-              if (st0.traceDialogOpen) return;
-              // 「确定」后真正写入
               if (count < 3) return;
               const indices = triangulatePolygon(poly);
               if (indices.length < 3) return;
@@ -3463,12 +3459,37 @@ export function BoneEditor() {
                 vertices.push(p.x, p.y);
                 uvs.push(p.x / layer.width, p.y / layer.height);
               }
+              const isLivePreview = st0.traceLivePreview;
               st0.setMeshNewPolygon(null);
-              st0.pushHistory();
+              // 实时预览中：写网格但**不入历史**（不污染撤销栈，用户可能继续调）
+              // apply 触发的最后一次写：要入历史
+              if (!isLivePreview) st0.pushHistory();
               st0.setMeshData(aid, { vertices, uvs, indices });
               st0.setMeshSelectedVertices([]);
             });
           }
+        }
+        // 取消描绘：从快照还原网格（取消 = 不入历史）
+        if (state.traceRestoreRequestId !== prev.traceRestoreRequestId) {
+          queueMicrotask(() => {
+            if (destroyed) return;
+            const st0 = usePixiBonesStore.getState();
+            const snap = st0.traceSnapshot;
+            if (!snap) {
+              // 没有快照（例如从未打开就被外部触发）→ 忽略
+              return;
+            }
+            const meshes = { ...st0.attachmentMeshes };
+            if (snap.mesh) {
+              meshes[snap.layerId] = snap.mesh;
+            } else {
+              delete meshes[snap.layerId];
+            }
+            // 还原：直接 setState（不走 setMeshData，那只覆盖 mesh；这里要一次性写 + 清快照）
+            usePixiBonesStore.setState({ attachmentMeshes: meshes });
+            st0.clearTraceSnapshot();
+            st0.setMeshSelectedVertices([]);
+          });
         }
         // fit-to-content 请求：通过 setViewport 写入 vp.zoom/panX/panY，让 center() 自动重算 root
         if (state.fitRequestId !== prev.fitRequestId) {

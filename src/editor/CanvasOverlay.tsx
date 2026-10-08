@@ -607,7 +607,8 @@ function MeshEditPanel() {
   const isolate = usePixiBonesStore((s) => s.meshIsolate);
   const setIsolate = usePixiBonesStore((s) => s.setMeshIsolate);
   const resetMesh = usePixiBonesStore((s) => s.resetMesh);
-  const setTraceDialogOpen = usePixiBonesStore((s) => s.setTraceDialogOpen);
+  /** 打开描绘弹窗（同时拍快照，用于取消时还原） */
+  const openTraceDialog = usePixiBonesStore((s) => s.openTraceDialog);
   /** 描绘弹窗是否打开 → 本面板向下渐隐让位 */
   const traceOpen = usePixiBonesStore((s) => s.traceDialogOpen);
   const newPolygon = usePixiBonesStore((s) => s.meshNewPolygon);
@@ -736,8 +737,12 @@ function MeshEditPanel() {
           ><MeshIconGenerate />生成</button>
           <button
             style={meshBtnStyle(false, false)}
-            title="描绘：弹出参数对话框（细节/凹度/精致度/统一/Alpha 阈值）"
-            onClick={() => setTraceDialogOpen(true)}
+            title="描绘：弹出参数对话框（细节/凹度/精致度/统一/Alpha 阈值），并按当前默认参数自动描绘预览"
+            onClick={() => {
+              // ★ 拍快照：当前网格（null = 之前没网格）→ 关弹窗按「取消」时可还原。
+              const currentMesh = attachmentId ? meshes[attachmentId] ?? null : null;
+              openTraceDialog(attachmentId, currentMesh);
+            }}
           ><MeshIconTrace />描绘</button>
         </div>
 
@@ -891,7 +896,6 @@ function TraceIconConfirm() {
 
 function TraceDialog() {
   const open = usePixiBonesStore((s) => s.traceDialogOpen);
-  const setOpen = usePixiBonesStore((s) => s.setTraceDialogOpen);
   const detail        = usePixiBonesStore((s) => s.traceDetail);
   const concavity     = usePixiBonesStore((s) => s.traceConcavity);
   const refinement    = usePixiBonesStore((s) => s.traceRefinement);
@@ -908,7 +912,18 @@ function TraceDialog() {
   const setPadding    = usePixiBonesStore((s) => s.setTracePadding);
   const requestTrace  = usePixiBonesStore((s) => s.requestTrace);
   const apply         = usePixiBonesStore((s) => s.applyTraceWithDialogSettings);
+  const cancel        = usePixiBonesStore((s) => s.cancelTraceWithDialogSettings);
   const setVertexCount= usePixiBonesStore((s) => s.setTraceVertexCount);
+
+  // ★ 打开弹窗那一刻自动按当前默认参数描绘一次 → 用户立刻看到结果
+  //   （弹窗里拖滑条时由 slider 的 onMouseUp 再触发 requestTrace 自动更新）
+  const prevOpenRef = useRef(false);
+  useEffect(() => {
+    if (open && !prevOpenRef.current) {
+      requestTrace();
+    }
+    prevOpenRef.current = open;
+  }, [open, requestTrace]);
 
   if (!open) return null;
 
@@ -977,7 +992,7 @@ function TraceDialog() {
         <span style={{ fontSize: 13.5, fontWeight: 500 }}>编辑网格: 描绘</span>
         <button
           type="button" title="关闭（取消）"
-          onClick={() => { setVertexCount(0); setOpen(false); }}
+          onClick={() => { setVertexCount(0); cancel(); }}
           style={{
             marginLeft: 'auto', background: 'transparent', border: 'none',
             color: '#b9b9b9', cursor: 'pointer', fontSize: 17, lineHeight: 1, padding: 0,
@@ -1030,12 +1045,12 @@ function TraceDialog() {
         ><TraceIconAdjust />调整</button>
         <span style={{ marginLeft: 18, fontSize: 13, color: TDIALOG.TEXT }}>顶点: {vertexCount}</span>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-          <button type="button" title="取消（不写入网格）"
-            onClick={() => { setVertexCount(0); setOpen(false); }}
+          <button type="button" title="取消（恢复打开前的网格）"
+            onClick={() => { setVertexCount(0); cancel(); }}
             style={traceBtnStyle}
           ><TraceIconCancel />取消</button>
-          <button type="button" title="应用当前参数到网格"
-            onClick={() => { if (meshEditSlot) apply(); }}
+          <button type="button" title="应用当前参数到网格（最后一次描绘入历史）"
+            onClick={() => { setVertexCount(0); if (meshEditSlot) apply(); }}
             style={traceBtnStyle}
           ><TraceIconConfirm />确定</button>
         </div>
