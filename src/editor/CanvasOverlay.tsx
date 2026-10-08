@@ -608,6 +608,8 @@ function MeshEditPanel() {
   const setIsolate = usePixiBonesStore((s) => s.setMeshIsolate);
   const resetMesh = usePixiBonesStore((s) => s.resetMesh);
   const setTraceDialogOpen = usePixiBonesStore((s) => s.setTraceDialogOpen);
+  /** 描绘弹窗是否打开 → 本面板向下渐隐让位 */
+  const traceOpen = usePixiBonesStore((s) => s.traceDialogOpen);
   const newPolygon = usePixiBonesStore((s) => s.meshNewPolygon);
   const setNewPolygon = usePixiBonesStore((s) => s.setMeshNewPolygon);
   const slots = usePixiBonesStore((s) => s.slots);
@@ -655,7 +657,14 @@ function MeshEditPanel() {
       className="absolute pointer-events-auto"
       style={{
         left: '50%',
-        transform: 'translateX(-50%)',
+        // 描绘弹窗打开时：本面板向下渐隐 + 缩小，让位给底部的描绘面板（仿 Spine）
+        transform: traceOpen
+          ? 'translateX(-50%) translateY(110px) scale(0.86)'
+          : 'translateX(-50%)',
+        transformOrigin: 'bottom center',
+        opacity: traceOpen ? 0 : 1,
+        pointerEvents: traceOpen ? 'none' : 'auto',
+        transition: 'transform 0.24s ease, opacity 0.24s ease',
         bottom: 12,
         background: 'var(--spine-bg-panel)',
         border: '1px solid var(--spine-border)',
@@ -809,9 +818,9 @@ const TDIALOG = {
   PAD_H: 14,
   PAD_V: 10,
   FIELD_W: 150,        // 常规「名称 + 数值」框宽
-  FIELD_W_LONG: 186,   // Alpha阈值（名字长）
-  FIELD_W_SHORT: 108,  // 填充
-  SLIDER_S: 108,       // 填充那根短滑条
+  FIELD_W_LONG: 170,   // Alpha阈值（名字长）
+  FIELD_W_SHORT: 96,   // 填充
+  SLIDER_S: 92,        // 填充那根短滑条
   BG: '#303032',
   TITLE_BG: '#3f3f3f',
   FIELD_BG: '#363638',
@@ -827,6 +836,8 @@ const TDIALOG = {
       height: TDIALOG.ROW_H,
       borderRadius: 3,
       border: `1px solid ${TDIALOG.BORDER}`,
+      // flex 子项默认 min-width:auto（等于 input 的固有最小宽度），会撑破容器 → 必须归零
+      minWidth: 0,
       background: `linear-gradient(to right, ${TDIALOG.FILL} 0 ${pct}%, ${TDIALOG.REST} ${pct}% 100%)`,
     };
   },
@@ -931,20 +942,29 @@ function TraceDialog() {
 
   // ★ 必须 portal 到 body：本组件挂在 MeshEditPanel 里，而它的祖先有 transform，
   //   会让 position:fixed 相对该祖先定位（对话框跑到面板里、底栏被挤出视口）。
-  //   portal 到 body 后 fixed 才真正相对视口居中。
+  //   portal 到 body 后 fixed 才真正相对视口定位。
+  // ★ 停靠在**屏幕下方居中**（和「编辑网格」面板同一位置），并「从中间往两侧生长」。
   return createPortal((
     <div
-      role="dialog" aria-label="编辑网格：描绘"
-      onClick={(e) => e.stopPropagation()}
+      // 外层负责定位：铺满视口底部、flex 居中（不用 translate，方便内层做 scaleX 生长动画）
       style={{
-        position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-        width: TDIALOG.W, zIndex: 200,
-        background: TDIALOG.BG,
-        border: '1px solid #1b1b1b', borderRadius: 5,
-        boxShadow: '0 12px 32px rgba(0,0,0,0.62)',
-        padding: 0, color: TDIALOG.TEXT, userSelect: 'none',
+        position: 'fixed', left: 0, right: 0, bottom: 12,
+        display: 'flex', justifyContent: 'center', alignItems: 'flex-end',
+        zIndex: 200, pointerEvents: 'none',
       }}
     >
+      <div
+        role="dialog" aria-label="编辑网格：描绘"
+        className="trace-dialog"
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: TDIALOG.W, pointerEvents: 'auto',
+          background: TDIALOG.BG,
+          border: '1px solid #1b1b1b', borderRadius: 5,
+          boxShadow: '0 12px 32px rgba(0,0,0,0.62)',
+          padding: 0, color: TDIALOG.TEXT, userSelect: 'none',
+        }}
+      >
       {/* 标题栏 */}
       <div
         className="flex items-center"
@@ -1019,6 +1039,7 @@ function TraceDialog() {
             style={traceBtnStyle}
           ><TraceIconConfirm />确定</button>
         </div>
+      </div>
       </div>
     </div>
   ), document.body);

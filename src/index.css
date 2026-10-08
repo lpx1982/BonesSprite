@@ -244,6 +244,18 @@ html, body, #root {
   border-radius: 0;
 }
 
+/* ============ 描绘弹窗：从中间往两侧「生长」出现（仿 Spine） ============ */
+/* 以底边中点为原点做 scaleX：0 → 略过冲 → 1，视觉上像从中间向两边展开 */
+@keyframes trace-grow {
+  0%   { transform: scaleX(0.02); opacity: 0; }
+  55%  { transform: scaleX(1.015); opacity: 1; }
+  100% { transform: scaleX(1); opacity: 1; }
+}
+.trace-dialog {
+  transform-origin: center bottom;
+  animation: trace-grow 200ms cubic-bezier(0.22, 0.8, 0.3, 1) both;
+}
+
 /* ============ 右侧停靠面板左边缘的拖动分隔条（横向缩放手柄） ============ */
 .dock-resizer {
   background: transparent;
