@@ -192,6 +192,28 @@ export interface PixiBonesState {
    *  （和 fitRequestId 同一套路：面板不直接改网格数据，只发请求） */
   traceRequestId: number;
   requestTrace: () => void;
+
+  // ---- 描绘对话框（仿 Spine 的 Trace 弹窗） ----
+  traceDialogOpen: boolean;
+  /** 弹窗内参数（默认值参考 Spine 的 Trace Settings 截图） */
+  traceDetail: number;          // 细节 1..100，越大越精细
+  traceConcavity: number;       // 凹度 1..100，越大越愿意把顶点塞进凹处
+  traceRefinement: number;      // 精致度（控制迭代/再拟合次数）
+  traceMerge: number;           // 统一 0..1，相邻顶点距离小于该比例时合并
+  traceAlphaThreshold: number;  // Alpha 阈值 0..255
+  tracePadding: number;         // 填充 0..32
+  /** 对话框里「实时」追踪的顶点数（不加历史） */
+  traceVertexCount: number;
+  setTraceDialogOpen: (v: boolean) => void;
+  setTraceDetail: (v: number) => void;
+  setTraceConcavity: (v: number) => void;
+  setTraceRefinement: (v: number) => void;
+  setTraceMerge: (v: number) => void;
+  setTraceAlphaThreshold: (v: number) => void;
+  setTracePadding: (v: number) => void;
+  setTraceVertexCount: (v: number) => void;
+  /** 提交：把对话框里的当前参数应用到网格（一次性 setMeshData + 入历史） */
+  applyTraceWithDialogSettings: () => void;
   /** 绘制顺序（slotId 列表，索引 0 = 最先绘制 = 最底层）。
    *  空数组 = 用自然顺序。 */
   slotOrder: string[];
@@ -714,6 +736,29 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   fitRequestId: 0,
   traceRequestId: 0,
   requestTrace: () => set((s) => ({ traceRequestId: s.traceRequestId + 1 })),
+  // 描绘对话框（默认参数对齐 Spine Trace 截图：细节 20 / 凹度 50 / 精致度 50 /
+  //   统一 0.3 / Alpha 阈值 8 / 填充 0）
+  traceDialogOpen: false,
+  traceDetail: 20,
+  traceConcavity: 50,
+  traceRefinement: 50,
+  traceMerge: 0.3,
+  traceAlphaThreshold: 8,
+  tracePadding: 0,
+  traceVertexCount: 0,
+  setTraceDialogOpen: (v) => set({ traceDialogOpen: v }),
+  setTraceDetail: (v) => set({ traceDetail: v }),
+  setTraceConcavity: (v) => set({ traceConcavity: v }),
+  setTraceRefinement: (v) => set({ traceRefinement: v }),
+  setTraceMerge: (v) => set({ traceMerge: v }),
+  setTraceAlphaThreshold: (v) => set({ traceAlphaThreshold: v }),
+  setTracePadding: (v) => set({ tracePadding: v }),
+  setTraceVertexCount: (v) => set({ traceVertexCount: v }),
+  applyTraceWithDialogSettings: () => {
+    // 实际算法在 BoneEditor 端执行（它有 attachmentMeshes / pushHistory / setMeshData），
+    // 这里只发一个提交请求位，由订阅者执行。
+    set((s) => ({ traceRequestId: s.traceRequestId + 1, traceDialogOpen: false }));
+  },
   editorMode: 'idle',
     transformSpace: 'local',
     activeTool: 'rotate',

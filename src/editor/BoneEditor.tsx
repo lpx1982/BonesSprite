@@ -3424,7 +3424,7 @@ export function BoneEditor() {
         if (state.editorMode !== prev.editorMode && state.editorMode !== 'create') {
           attachmentHover.clear();
         }
-        // 描绘（Trace）：面板点「描绘」→ 按图片 alpha 自动提取轮廓，用该多边形重建网格
+        // 描绘（Trace）：面板点「描绘」或对话框「确定」→ 按图片 alpha 自动提取轮廓，用该多边形重建网格
         if (state.traceRequestId !== prev.traceRequestId) {
           const slotId = state.meshEditSlotId;
           const slot = slotId ? state.slots.find((x) => x.id === slotId) ?? null : null;
@@ -3433,30 +3433,41 @@ export function BoneEditor() {
             ? allAttachmentsOf(state.psd, state.images).find((l) => l.id === aid) ?? null
             : null;
           if (aid && layer?.canvas && layer.width > 0 && layer.height > 0) {
-            const poly = traceAlphaHull(layer.canvas, TRACE_ALPHA_THRESHOLD, TRACE_DETAIL);
-            if (poly.length >= 3) {
+            // 现在面板的「描绘」按钮也是弹对话框、走这条路径；订阅里始终用 store 里的参数
+            const params = {
+              detail: state.traceDetail,
+              concavity: state.traceConcavity,
+              refinement: state.traceRefinement,
+              merge: state.traceMerge,
+              alphaThreshold: state.traceAlphaThreshold,
+              padding: state.tracePadding,
+            };
+            const poly = traceAlphaHull(layer.canvas, params.alphaThreshold, params.detail, params);
+            const count = poly.length;
+            queueMicrotask(() => {
+              if (destroyed) return;
+              const st0 = usePixiBonesStore.getState();
+              if (st0.meshEditSlotId !== slotId) return;   // 期间已退出编辑 → 放弃
+              st0.setTraceVertexCount(count);
+              // 弹窗模式下：拖动滑块时只更新"顶点数"预览，**不写网格**；
+              //   真正写入要等用户点「确定」（applyTraceWithDialogSettings → 走 requestTrace 的特殊路径）
+              //   用本次请求的 requestId 跟弹窗"开/关"对齐判断。
+              if (st0.traceDialogOpen) return;
+              // 「确定」后真正写入
+              if (count < 3) return;
               const indices = triangulatePolygon(poly);
-              if (indices.length >= 3) {
-                const vertices: number[] = [];
-                const uvs: number[] = [];
-                for (const p of poly) {
-                  vertices.push(p.x, p.y);
-                  uvs.push(p.x / layer.width, p.y / layer.height);
-                }
-                // ★ 必须异步写 store：在 subscribe 回调里直接 setState 会重新触发本回调，
-                //   而此时 prev 还是旧值（traceRequestId 仍"变化过"）→ 无限递归把页面卡死。
-                //   与上面 fitRequestId 的处理同理。
-                queueMicrotask(() => {
-                  if (destroyed) return;
-                  const st0 = usePixiBonesStore.getState();
-                  if (st0.meshEditSlotId !== slotId) return;   // 期间已退出编辑 → 放弃
-                  st0.setMeshNewPolygon(null);                 // 正在手绘的话先取消
-                  st0.pushHistory();
-                  st0.setMeshData(aid, { vertices, uvs, indices });
-                  st0.setMeshSelectedVertices([]);
-                });
+              if (indices.length < 3) return;
+              const vertices: number[] = [];
+              const uvs: number[] = [];
+              for (const p of poly) {
+                vertices.push(p.x, p.y);
+                uvs.push(p.x / layer.width, p.y / layer.height);
               }
-            }
+              st0.setMeshNewPolygon(null);
+              st0.pushHistory();
+              st0.setMeshData(aid, { vertices, uvs, indices });
+              st0.setMeshSelectedVertices([]);
+            });
           }
         }
         // fit-to-content 请求：通过 setViewport 写入 vp.zoom/panX/panY，让 center() 自动重算 root
@@ -4013,8 +4024,16 @@ function simplifyClosedPolygon(
  */
 function traceAlphaHull(
   canvas: HTMLCanvasElement,
-  alphaThreshold: number,
-  detail: number,
+  alphaThreshold: number | undefined,
+  detail: number | undefined,
+  params?: null | {
+    detail: number;
+    concavity: number;
+    refinement: number;
+    merge: number;
+    alphaThreshold: number;
+    padding: number;
+  },
 ): Array<{ x: number; y: number }> {
   const W = canvas.width;
   const H = canvas.height;
@@ -4023,7 +4042,10 @@ function traceAlphaHull(
   try { ctx = canvas.getContext('2d'); } catch { /* 跨域 canvas 会抛 */ }
   if (!ctx) return [];
   const img = ctx.getImageData(0, 0, W, H).data;
-  const thr = Math.max(0, Math.min(255, Math.round(alphaThreshold * 255)));
+  // 对话框模式 → alpha 是 0..255；否则按 0..1 当 fraction。
+  const thr01 = params ? Math.max(0, Math.min(255, params.alphaThreshold)) / 255
+    : (alphaThreshold ?? 0.1);
+  const thr = Math.max(0, Math.min(255, Math.round(thr01 * 255)));
   const solid = (x: number, y: number) =>
     x >= 0 && y >= 0 && x < W && y < H && img[(y * W + x) * 4 + 3] >= thr;
 
@@ -4088,8 +4110,58 @@ function traceAlphaHull(
   }
 
   const maxDim = Math.max(W, H);
-  const eps = Math.max(1, maxDim * (0.016 - 0.012 * Math.max(0, Math.min(1, detail))));
-  return simplifyClosedPolygon(pts, eps);
+  // 细节 (1..100) → ε 系数 0.030 .. 0.004；越精细 ε 越小、顶点越多
+  const dNum = params ? params.detail : (detail ?? 60);
+  const dNorm = Math.max(0, Math.min(1, (dNum - 1) / 99));
+  const eps = Math.max(1, maxDim * (0.030 - 0.026 * dNorm));
+
+  let out = simplifyClosedPolygon(pts, eps);
+
+  // 统一 (0..1)：合并过近的顶点对（与中位线长度比较）
+  if (params) {
+    const merge = Math.max(0, Math.min(1, params.merge));
+    if (merge > 0 && out.length > 4) {
+      const merge2 = merge * merge;
+      const perim = polygonLength(out);
+      const minDist2 = perim * perim * merge2 / out.length;
+      out = mergeCloseVertices(out, minDist2);
+    }
+  }
+  return out;
+}
+
+/** 多边形周长（像素）。 */
+function polygonLength(pts: Array<{ x: number; y: number }>): number {
+  let L = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i], q = pts[(i + 1) % pts.length];
+    L += Math.hypot(p.x - q.x, p.y - q.y);
+  }
+  return L;
+}
+
+/** 反复合并距离 < d 的相邻顶点对（用线段长度近似，O(n)）。 */
+function mergeCloseVertices(
+  pts: Array<{ x: number; y: number }>,
+  minDist2: number,
+): Array<{ x: number; y: number }> {
+  if (pts.length < 4) return pts;
+  for (let pass = 0; pass < 20; pass++) {
+    let changed = false;
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i], q = pts[(i + 1) % pts.length];
+      const dx = q.x - p.x, dy = q.y - p.y;
+      if (dx * dx + dy * dy < minDist2) {
+        // 合并到中点
+        const m = { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 };
+        pts = [...pts.slice(0, i), m, ...pts.slice(i + 2)];
+        changed = true;
+        break;
+      }
+    }
+    if (!changed) break;
+  }
+  return pts;
 }
 
 /** 描绘的默认参数（Spine 的 Trace 面板里有 Detail / Concavity / Alpha threshold / Padding 等；

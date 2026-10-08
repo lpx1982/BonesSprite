@@ -606,7 +606,7 @@ function MeshEditPanel() {
   const isolate = usePixiBonesStore((s) => s.meshIsolate);
   const setIsolate = usePixiBonesStore((s) => s.setMeshIsolate);
   const resetMesh = usePixiBonesStore((s) => s.resetMesh);
-  const requestTrace = usePixiBonesStore((s) => s.requestTrace);
+  const setTraceDialogOpen = usePixiBonesStore((s) => s.setTraceDialogOpen);
   const newPolygon = usePixiBonesStore((s) => s.meshNewPolygon);
   const setNewPolygon = usePixiBonesStore((s) => s.setMeshNewPolygon);
   const slots = usePixiBonesStore((s) => s.slots);
@@ -726,8 +726,8 @@ function MeshEditPanel() {
           ><MeshIconGenerate />生成</button>
           <button
             style={meshBtnStyle(false, false)}
-            title="描绘：按图片 alpha 通道自动提取轮廓，生成网格边界（会替换当前顶点）"
-            onClick={requestTrace}
+            title="描绘：弹出参数对话框（细节/凹度/精致度/统一/Alpha 阈值）"
+            onClick={() => setTraceDialogOpen(true)}
           ><MeshIconTrace />描绘</button>
         </div>
 
@@ -774,6 +774,180 @@ function MeshEditPanel() {
             />
             变形
           </label>
+        </div>
+      </div>
+
+      {/* 描绘参数对话框（仿 Spine 的 Trace Settings） */}
+      <TraceDialog />
+    </div>
+  );
+}
+
+// =================================================================================
+//  描绘参数对话框（仿 Spine 的 Trace Settings 弹窗）
+//    5 个滑块：细节 / 凹度 / 精致度 / 统一 / Alpha 阈值 + 填充
+//    「实时」调整 → 调 store 即可，BoneEditor 订阅后会实时算出顶点数显示
+//    「确定」→ 写入网格 + 入历史；「取消」→ 仅关闭弹窗
+// =================================================================================
+const traceBtnStyle = (cancel: boolean): React.CSSProperties => ({
+  display: 'flex', alignItems: 'center', gap: 4,
+  height: 24, padding: '0 10px', borderRadius: 3,
+  border: '1px solid ' + (cancel ? '#7a3030' : '#444'),
+  background: cancel ? '#3b1c1c' : '#3a3a3a',
+  color: 'var(--spine-text)', fontSize: 12, cursor: 'pointer',
+});
+
+/** 描绘按钮里的小画笔图标（红色斜线） */
+function TraceIconBrush() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden>
+      <path d="M2 11.5 C4 6, 7 4, 12 3.5" stroke="#5BBE5D" strokeWidth="1.4" strokeLinecap="round" fill="none" />
+      <path d="M3 12.4 L4 9.6 L2.2 9.6 L2.6 11 L1.6 11.6 L3 12.4 Z" fill="#5BBE5D" />
+    </svg>
+  );
+}
+/** 调整按钮里的小循环箭头 */
+function TraceIconAdjust() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden>
+      <path d="M12 7 A5 5 0 1 1 10.2 3.2" stroke="#5BBE5D" strokeWidth="1.4" strokeLinecap="round" fill="none" />
+      <path d="M10.6 1.2 L11.4 4.2 L8.4 4.4" stroke="#5BBE5D" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    </svg>
+  );
+}
+
+function TraceDialog() {
+  const open = usePixiBonesStore((s) => s.traceDialogOpen);
+  const setOpen = usePixiBonesStore((s) => s.setTraceDialogOpen);
+  const detail        = usePixiBonesStore((s) => s.traceDetail);
+  const concavity     = usePixiBonesStore((s) => s.traceConcavity);
+  const refinement    = usePixiBonesStore((s) => s.traceRefinement);
+  const merge         = usePixiBonesStore((s) => s.traceMerge);
+  const alphaThr      = usePixiBonesStore((s) => s.traceAlphaThreshold);
+  const padding       = usePixiBonesStore((s) => s.tracePadding);
+  const vertexCount   = usePixiBonesStore((s) => s.traceVertexCount);
+  const meshEditSlot  = usePixiBonesStore((s) => s.meshEditSlotId);
+  const setDetail     = usePixiBonesStore((s) => s.setTraceDetail);
+  const setConcavity  = usePixiBonesStore((s) => s.setTraceConcavity);
+  const setRefinement = usePixiBonesStore((s) => s.setTraceRefinement);
+  const setMerge      = usePixiBonesStore((s) => s.setTraceMerge);
+  const setAlpha      = usePixiBonesStore((s) => s.setTraceAlphaThreshold);
+  const setPadding    = usePixiBonesStore((s) => s.setTracePadding);
+  const requestTrace  = usePixiBonesStore((s) => s.requestTrace);
+  const apply         = usePixiBonesStore((s) => s.applyTraceWithDialogSettings);
+  const setVertexCount= usePixiBonesStore((s) => s.setTraceVertexCount);
+
+  if (!open) return null;
+
+  const labelStyle: React.CSSProperties = {
+    width: 64, textAlign: 'left', color: 'var(--spine-text)', fontSize: 12, flex: 'none',
+  };
+  const valueBox: React.CSSProperties = {
+    width: 44, height: 18, marginLeft: 8, marginRight: 4,
+    background: 'transparent', border: '1px solid transparent',
+    color: 'var(--spine-text)', fontSize: 12, textAlign: 'left',
+    display: 'flex', alignItems: 'center', flex: 'none',
+  };
+  const trackBg = (v: number, min: number, max: number) => {
+    const pct = Math.max(0, Math.min(1, (v - min) / (max - min))) * 100;
+    return `linear-gradient(to right, #5b5b5b 0 ${pct}%, #2b2b2b ${pct}% 100%)`;
+  };
+  const ParamRow = (lbl: string, v: number, setV: (n: number) => void, min: number, max: number, step: number) => (
+    <div className="flex items-center" style={{ height: 24, margin: '2px 0' }}>
+      <span style={labelStyle}>{lbl}</span>
+      <span style={valueBox}>{v}</span>
+      <input
+        type="range" className="trace-slider"
+        min={min} max={max} step={step} value={v}
+        onChange={(e) => setV(parseFloat(e.target.value))}
+        onMouseUp={() => requestTrace()}  // 拖动结束后实时重算
+        style={{ flex: 1, background: trackBg(v, min, max) }}
+      />
+    </div>
+  );
+
+  return (
+    <div
+      role="dialog" aria-label="编辑网格：描绘"
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+        width: 460, zIndex: 50,
+        background: 'var(--spine-bg-panel)',
+        border: '1px solid #2a2a2a', borderRadius: 4,
+        boxShadow: '0 10px 28px rgba(0,0,0,0.6)',
+        padding: 0, color: 'var(--spine-text)',
+      }}
+    >
+      {/* 标题栏 */}
+      <div
+        className="flex items-center"
+        style={{
+          height: 28, background: 'var(--spine-bg-toolbar)',
+          padding: '0 10px', borderBottom: '1px solid #1f1f1f',
+          borderTopLeftRadius: 4, borderTopRightRadius: 4,
+        }}
+      >
+        <span style={{ fontSize: 13, fontWeight: 500 }}>编辑网格: 描绘</span>
+        <button
+          type="button" title="关闭（取消）"
+          onClick={() => { setVertexCount(0); setOpen(false); }}
+          style={{
+            marginLeft: 'auto', background: 'transparent', border: 'none',
+            color: 'var(--spine-text-dim)', cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: 0,
+          }}
+        >✕</button>
+      </div>
+
+      {/* 5 行参数 */}
+      <div style={{ padding: '10px 12px 4px' }}>
+        {ParamRow('细节', detail, setDetail, 1, 100, 1)}
+        {ParamRow('凹度', concavity, setConcavity, 1, 100, 1)}
+        {ParamRow('精致度', refinement, setRefinement, 1, 100, 1)}
+        {ParamRow('统一', merge, setMerge, 0, 1, 0.01)}
+        <div className="flex items-center" style={{ height: 24, margin: '2px 0' }}>
+          <span style={labelStyle}>Alpha阈值</span>
+          <span style={valueBox}>{alphaThr}</span>
+          <input
+            type="range" className="trace-slider"
+            min={0} max={255} step={1} value={alphaThr}
+            onChange={(e) => setAlpha(parseFloat(e.target.value))}
+            onMouseUp={() => requestTrace()}
+            style={{ flex: 1, background: trackBg(alphaThr, 0, 255) }}
+          />
+          <span style={{ ...valueBox, marginLeft: 12 }}>填充</span>
+          <span style={valueBox}>{padding}</span>
+          <input
+            type="range" className="trace-slider"
+            min={0} max={32} step={1} value={padding}
+            onChange={(e) => setPadding(parseFloat(e.target.value))}
+            onMouseUp={() => requestTrace()}
+            style={{ width: 100, background: trackBg(padding, 0, 32) }}
+          />
+        </div>
+      </div>
+
+      {/* 底部：左侧「描绘 / 调整」按钮 + 顶点数 + 右侧「取消 / 确定」 */}
+      <div
+        className="flex items-center"
+        style={{ height: 36, padding: '4px 8px 8px', borderTop: '1px solid #1f1f1f', marginTop: 4 }}
+      >
+        <button type="button"
+          title="按当前参数重新描绘（实时刷新）"
+          onClick={() => { if (meshEditSlot) requestTrace(); }}
+          style={traceBtnStyle(false)}
+        ><TraceIconBrush />描绘</button>
+        <button type="button" title="调整（占位）" disabled style={traceBtnStyle(false)}><TraceIconAdjust />调整</button>
+        <span style={{ marginLeft: 16, fontSize: 12, color: 'var(--spine-text)' }}>顶点: {vertexCount}</span>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+          <button type="button" title="取消（不写入网格）"
+            onClick={() => { setVertexCount(0); setOpen(false); }}
+            style={traceBtnStyle(true)}
+          >取消</button>
+          <button type="button" title="应用当前参数到网格"
+            onClick={() => { if (meshEditSlot) apply(); }}
+            style={{ ...traceBtnStyle(false), background: 'var(--spine-accent)', color: '#fff' }}
+          >确定</button>
         </div>
       </div>
     </div>
