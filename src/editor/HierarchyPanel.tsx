@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect, useRef } from 'react';
-import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, type BoneNode, type LayerBinding } from './store';
+import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, type BoneNode, type SlotBinding } from './store';
 import { type PixiBonesLayer, type PixiBonesSlot } from '@psd/index';
 import { importAssetFile } from './importAsset';
 
@@ -76,7 +76,7 @@ function slotIdOfSlot(slots: PixiBonesSlot[], attachmentId: string): string | nu
 
 /** 素材缩略图 dataURL 缓存（toDataURL 较贵，按素材 id 缓存一次）。 */
 const thumbCache = new Map<string, string>();
-function layerThumb(layer: PixiBonesLayer): string | null {
+function attachmentThumb(layer: PixiBonesLayer): string | null {
   if (!layer.canvas || layer.canvas.width === 0) return null;
   let url = thumbCache.get(layer.id);
   if (!url) {
@@ -112,18 +112,18 @@ export function HierarchyPanel() {
   const setActiveAttachment = usePixiBonesStore((s) => s.setActiveAttachment);
   const addAttachmentToSlot = usePixiBonesStore((s) => s.addAttachmentToSlot);
   const detachAttachment = usePixiBonesStore((s) => s.detachAttachment);
-  const layerVisibility = usePixiBonesStore((s) => s.layerVisibility);
-  const layerOrder = usePixiBonesStore((s) => s.layerOrder);
-  const setLayerOrder = usePixiBonesStore((s) => s.setLayerOrder);
-  const selectedLayerId = usePixiBonesStore((s) => s.selectedLayerId);
-  const selectedLayerIds = usePixiBonesStore((s) => s.selectedLayerIds);
-  const selectLayer = usePixiBonesStore((s) => s.selectLayer);
-  const toggleLayerVisibility = usePixiBonesStore((s) => s.toggleLayerVisibility);
-  const layerBindings = usePixiBonesStore((s) => s.layerBindings);
+  const slotVisibility = usePixiBonesStore((s) => s.slotVisibility);
+  const slotOrder = usePixiBonesStore((s) => s.slotOrder);
+  const setSlotOrder = usePixiBonesStore((s) => s.setSlotOrder);
+  const selectedSlotId = usePixiBonesStore((s) => s.selectedSlotId);
+  const selectedSlotIds = usePixiBonesStore((s) => s.selectedSlotIds);
+  const selectSlot = usePixiBonesStore((s) => s.selectSlot);
+  const toggleSlotVisibility = usePixiBonesStore((s) => s.toggleSlotVisibility);
+  const slotBindings = usePixiBonesStore((s) => s.slotBindings);
   const selectedSectionKey = usePixiBonesStore((s) => s.selectedSectionKey);
   const selectSection = usePixiBonesStore((s) => s.selectSection);
   const startAttach = usePixiBonesStore((s) => s.startAttach);
-  const unbindLayer = usePixiBonesStore((s) => s.unbindLayer);
+  const unbindSlot = usePixiBonesStore((s) => s.unbindSlot);
   const importInputRef = useRef<HTMLInputElement>(null);
   // 刷新（清缩略图缓存后强制重渲染）
   const [, setRefreshTick] = useState(0);
@@ -174,7 +174,7 @@ export function HierarchyPanel() {
     [attachments],
   );
   /** 当前选中的插槽 */
-  const selectedSlot = selectedLayerId ? slots.find((s) => s.id === selectedLayerId) ?? null : null;
+  const selectedSlot = selectedSlotId ? slots.find((s) => s.id === selectedSlotId) ?? null : null;
   /** 当前选中插槽的激活附件（用于底部面板标题等） */
   const selectedSlotActive = selectedSlot?.activeAttachmentId
     ? attachmentById.get(selectedSlot.activeAttachmentId) ?? null
@@ -182,8 +182,8 @@ export function HierarchyPanel() {
 
   /** 插槽按绘制顺序排列（层级树 & 「绘制顺序」拖拽排序共用） */
   const orderedSlots = useMemo<PixiBonesSlot[]>(
-    () => orderLayers(slots, layerOrder),
-    [slots, layerOrder],
+    () => orderLayers(slots, slotOrder),
+    [slots, slotOrder],
   );
 
   // ===== 「绘制顺序」分区的拖拽排序状态 =====
@@ -202,7 +202,7 @@ export function HierarchyPanel() {
     const lastId = ids[ids.length - 1];
     const at = targetId === lastId ? rest.length : Math.max(0, rest.indexOf(targetId));
     rest.splice(at, 0, from);
-    setLayerOrder(rest);
+    setSlotOrder(rest);
   };
 
   // 过滤后的根集合（搜索匹配或隐藏非选中模式）
@@ -290,7 +290,7 @@ export function HierarchyPanel() {
     const slotsByBone = new Map<string, PixiBonesSlot[]>();
     const unboundSlots: PixiBonesSlot[] = [];
     for (const s of orderedSlots) {
-      const b = layerBindings[s.id];
+      const b = slotBindings[s.id];
       if (b && boneIdSet.has(b.boneId)) {
         const arr = slotsByBone.get(b.boneId) ?? [];
         arr.push(s);
@@ -424,7 +424,7 @@ export function HierarchyPanel() {
       1,
     );
     return out;
-  }, [projectName, collapsed, childMap, filteredRoots, orderedSlots, attachments, attachmentById, bones, layerBindings]);
+  }, [projectName, collapsed, childMap, filteredRoots, orderedSlots, attachments, attachmentById, bones, slotBindings]);
 
   // ===== Spine 暗灰配色（直接读 CSS 变量，避免改 Tailwind 主题）=====
   const C = {
@@ -600,8 +600,8 @@ export function HierarchyPanel() {
               {rows.map((r) => {
                 // 插槽行：👁 显隐（key = slotId）
                 if (r.kind === 'slot' && r.slot) {
-                  const vis = layerVisibility[r.slot.id] ?? true;
-                  const sel = selectedLayerId === r.slot.id;
+                  const vis = slotVisibility[r.slot.id] ?? true;
+                  const sel = selectedSlotId === r.slot.id;
                   return (
                     <button
                       key={r.key}
@@ -611,7 +611,7 @@ export function HierarchyPanel() {
                         background: 'transparent', border: 'none', cursor: 'pointer',
                         color: sel ? C.accent : (vis ? C.dim : 'rgba(255,255,255,0.25)'),
                       }}
-                      onClick={() => toggleLayerVisibility(r.slot!.id)}
+                      onClick={() => toggleSlotVisibility(r.slot!.id)}
                     >
                       {vis ? '👁' : '🚫'}
                     </button>
@@ -666,12 +666,12 @@ export function HierarchyPanel() {
                       onToggleCollapse={toggleCollapsed}
                       search={search}
                       C={C}
-                      selectedLayerIds={selectedLayerIds}
-                      onSelectSlot={selectLayer}
+                      selectedSlotIds={selectedSlotIds}
+                      onSelectSlot={selectSlot}
                       onActivateAttachment={setActiveAttachment}
                       selectedSectionKey={selectedSectionKey}
                       onSelectSection={selectSection}
-                      layerBindings={layerBindings}
+                      slotBindings={slotBindings}
                       boneNameById={new Map(bones.map((b) => [b.id, b.name]))}
                       onImport={r.kind === 'section' && r.key === 'section:images'
                         ? () => importInputRef.current?.click()
@@ -716,23 +716,23 @@ export function HierarchyPanel() {
           isolated={hideNonSelected}
           C={C}
         />
-      ) : selectedLayerId ? (
+      ) : selectedSlotId ? (
         <SlotPropsBlock
           slot={selectedSlot}
           activeAttachment={selectedSlotActive}
           attachments={attachments}
           attachmentById={attachmentById}
           bindingBoneName={
-            layerBindings[selectedLayerId]
-              ? new Map(bones.map((b) => [b.id, b.name])).get(layerBindings[selectedLayerId].boneId) ?? null
+            slotBindings[selectedSlotId]
+              ? new Map(bones.map((b) => [b.id, b.name])).get(slotBindings[selectedSlotId].boneId) ?? null
               : null
           }
-          onSetActive={(aid) => setActiveAttachment(selectedLayerId, aid)}
-          onAddAttachment={(aid) => addAttachmentToSlot(selectedLayerId, aid)}
-          onDetach={(aid) => detachAttachment(selectedLayerId, aid)}
-          onParent={() => startAttach(selectedLayerId)}
-          onUnbind={() => unbindLayer(selectedLayerId)}
-          onOpen={() => toggleLayerVisibility(selectedLayerId)}
+          onSetActive={(aid) => setActiveAttachment(selectedSlotId, aid)}
+          onAddAttachment={(aid) => addAttachmentToSlot(selectedSlotId, aid)}
+          onDetach={(aid) => detachAttachment(selectedSlotId, aid)}
+          onParent={() => startAttach(selectedSlotId)}
+          onUnbind={() => unbindSlot(selectedSlotId)}
+          onOpen={() => toggleSlotVisibility(selectedSlotId)}
           C={C}
         />
       ) : selectedSectionKey === 'images' ? (
@@ -815,7 +815,7 @@ interface TreeRowViewProps {
   search: string;
   C: any;
   /** 插槽相关：多选插槽（画布框选 / Shift 加选） */
-  selectedLayerIds: string[];
+  selectedSlotIds: string[];
   /** 选中一个插槽（key = slotId） */
   onSelectSlot: (slotId: string) => void;
   /** 切换插槽当前显示的附件 */
@@ -823,7 +823,7 @@ interface TreeRowViewProps {
   /** 分区节点（约束 / 图片 / …）相关 */
   selectedSectionKey: string | null;
   onSelectSection: (key: string) => void;
-  layerBindings: Record<string, LayerBinding>;
+  slotBindings: Record<string, SlotBinding>;
   boneNameById: Map<string, string>;
   /** 「图片」节点上的 ＋ 导入按钮 */
   onImport?: () => void;
@@ -842,8 +842,8 @@ interface TreeRowViewProps {
 function TreeRowView(props: TreeRowViewProps) {
   const {
     row, selectedBoneId, onSelect, onAddChild, collapsed, onToggleCollapse, search, C,
-    selectedLayerIds, onSelectSlot, onActivateAttachment, selectedSectionKey, onSelectSection,
-    layerBindings, boneNameById, onImport, dnd,
+    selectedSlotIds, onSelectSlot, onActivateAttachment, selectedSectionKey, onSelectSection,
+    slotBindings, boneNameById, onImport, dnd,
   } = props;
   const isBone = row.kind === 'bone';
   /** 附件行（🖼） */
@@ -860,13 +860,13 @@ function TreeRowView(props: TreeRowViewProps) {
   const assetSlotId = row.slotId ?? null;
   const isSelected =
     (isBone && !!node && selectedBoneId === node.id) ||
-    (isSlot && !!slot && selectedLayerIds.includes(slot.id)) ||
+    (isSlot && !!slot && selectedSlotIds.includes(slot.id)) ||
     (isSection && sectionKey !== null && selectedSectionKey === sectionKey) ||
     // 附件行：所属插槽被选中时高亮
-    (isAsset && !!assetSlotId && selectedLayerIds.includes(assetSlotId));
+    (isAsset && !!assetSlotId && selectedSlotIds.includes(assetSlotId));
 
   // 绑定信息（按插槽查；附件行显示它所属插槽的绑定）
-  const binding = assetSlotId ? layerBindings[assetSlotId] : (slot ? layerBindings[slot.id] : undefined);
+  const binding = assetSlotId ? slotBindings[assetSlotId] : (slot ? slotBindings[slot.id] : undefined);
   const boundBoneName = binding ? boneNameById.get(binding.boneId) ?? null : null;
 
   // 搜索命中片段高亮（仅骨行）
@@ -876,7 +876,7 @@ function TreeRowView(props: TreeRowViewProps) {
       : row.label;
 
   const isCollapsed = collapsed.has(row.key);
-  const thumb = isAsset && asset ? layerThumb(asset) : null;
+  const thumb = isAsset && asset ? attachmentThumb(asset) : null;
   const clickable = isBone || isAsset || isSection || isSlot;
 
   /** 绑定/解绑「该行对应的插槽」 */
@@ -884,9 +884,9 @@ function TreeRowView(props: TreeRowViewProps) {
     const sid = assetSlotId ?? slot?.id ?? null;
     if (!sid) return;
     if (binding) {
-      window.dispatchEvent(new CustomEvent('spine:unbind-layer', { detail: { layerId: sid } }));
+      window.dispatchEvent(new CustomEvent('spine:unbind-slot', { detail: { slotId: sid } }));
     } else if (selectedBoneId) {
-      window.dispatchEvent(new CustomEvent('spine:bind-layer', { detail: { layerId: sid } }));
+      window.dispatchEvent(new CustomEvent('spine:bind-slot', { detail: { slotId: sid } }));
     }
   };
 

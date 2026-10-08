@@ -59,7 +59,7 @@ export function Editor() {
         // Esc：退出「附件：设置父级」拾取模式
         if (key === 'Escape') {
           const s = usePixiBonesStore.getState();
-          if (s.attachingLayerId) {
+          if (s.attachingSlotId) {
             e.preventDefault();
             s.cancelAttach();
           }

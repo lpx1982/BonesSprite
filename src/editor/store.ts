@@ -14,7 +14,7 @@ export type EditorTab = 'setup' | 'animate';
  * - id 是稳定的（解析时生成，整个生命周期内不变）
  * - parentId 引用同数组里其它节点的 id
  * - x/y/rotation/scaleX/scaleY/length 是 Bone 的 local 字段
- * - layerId 可选：未来用作"绑到哪个 PSD 图层"，Day 3 不强制
+ * - slotId 可选：该骨骼绑定的插槽 id（绑定时由 bindSlot 写入）
  */
 export interface BoneNode {
   id: string;
@@ -26,7 +26,7 @@ export interface BoneNode {
   scaleX: number;
   scaleY: number;
   length: number;
-  layerId: string | null;
+  slotId: string | null;
 }
 
 /**
@@ -36,7 +36,7 @@ export interface BoneNode {
  * 渲染时用增量变换 delta = 当前世界矩阵 × ref⁻¹ 去驱动图层，
  * 这样「绑定」这个动作本身不会让图层跳动，之后骨骼怎么动图层就怎么跟。
  */
-export interface LayerBinding {
+export interface SlotBinding {
   boneId: string;
   ref: number[];
 }
@@ -59,8 +59,8 @@ export interface PixiBonesState {
   /**
    * 插槽列表（仿 Spine）。导入时「1 图层 = 1 插槽，该图层作为第 1 个附件」。
    *
-   * ★ 下面所有 layer* 字段（layerOrder / layerVisibility / layerTransforms /
-   *   layerBindings / selectedLayerId）的 key 都是 **slotId**，不是 attachmentId：
+   * ★ 下面所有字段（slotOrder / slotVisibility / slotTransforms /
+   *   slotBindings / selectedSlotId）的 key 都是 **slotId**，不是 attachmentId：
    *   绘制顺序、显隐、变换、绑定骨骼都属于插槽（附件只是槽里的一张图）。
    */
   slots: PixiBonesSlot[];
@@ -71,46 +71,46 @@ export interface PixiBonesState {
   /** 把附件从插槽里移出，放回一个以它命名的独立插槽 */
   detachAttachment: (slotId: string, attachmentId: string) => void;
   /** 插槽可见性（key = slotId） */
-  layerVisibility: Record<string, boolean>;
+  slotVisibility: Record<string, boolean>;
   /** 仿 Spine SlotTransform：每个插槽自己的局部变换（key = slotId）。
    *  - rotation：弧度
    *  - scaleX/scaleY：缩放
    *  - skewX/skewY：倾斜（弧度）
    *  - tx/ty：相对原 (left, top) 锚点的额外平移
    *  未设置 = 单位变换。原始 left/top/width/height 不变。 */
-  layerTransforms: Record<string, { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }>;
-  setLayerTransform: (id: string, t: { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }) => void;
-  resetLayerTransform: (id: string) => void;
+  slotTransforms: Record<string, { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }>;
+  setSlotTransform: (id: string, t: { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }) => void;
+  resetSlotTransform: (id: string) => void;
   /** 绘制顺序（slotId 列表，索引 0 = 最先绘制 = 最底层）。
    *  空数组 = 用自然顺序。 */
-  layerOrder: string[];
+  slotOrder: string[];
   /** 设置整份绘制顺序（在「绘制顺序」分区里拖拽排序后写入） */
-  setLayerOrder: (ids: string[]) => void;
-  /** 单选兼容字段：= selectedLayerIds[0]。**key = slotId** */
-  selectedLayerId: string | null;
+  setSlotOrder: (ids: string[]) => void;
+  /** 单选兼容字段：= selectedSlotIds[0]。**key = slotId** */
+  selectedSlotId: string | null;
   /** 多选插槽（画布框选 / Shift 加选）。**key = slotId**
-   *  - 单选：selectedLayerIds = [id]，selectedLayerId = id
-   *  - 多选：selectedLayerIds = [a,b,c]，selectedLayerId = 第一个（兼容旧代码）
+   *  - 单选：selectedSlotIds = [id]，selectedSlotId = id
+   *  - 多选：selectedSlotIds = [a,b,c]，selectedSlotId = 第一个（兼容旧代码）
    */
-  selectedLayerIds: string[];
+  selectedSlotIds: string[];
   /** 按**附件 id** 反查它所属的插槽 id（找不到返回 null） */
   slotIdOfAttachment: (attachmentId: string | null) => string | null;
   /** 多选插槽。additive=true 增量追加，false 替换 */
-  selectLayers: (ids: string[], additive?: boolean) => void;
+  selectSlots: (ids: string[], additive?: boolean) => void;
   /** 只设置「目标素材」，**不改变骨骼选中**。
    *  创建模式下 ⌘ 点击素材用它 —— 这样父骨骼链不会断（新骨仍是当前骨骼的子骨）。 */
-  setTargetLayer: (id: string | null) => void;
+  setTargetSlot: (id: string | null) => void;
   /** 框选：一次性设置骨骼 + 素材两个选中集（两者互不清空）。 */
-  selectBox: (boneIds: string[], layerIds: string[]) => void;
+  selectBox: (boneIds: string[], slotIds: string[]) => void;
   /** 当前选中的分区节点 key（如 'images'）。null = 未选中分区。 */
   selectedSectionKey: string | null;
   /** 选中分区节点（如 'images'）。会清掉骨骼 / 素材选中态。 */
   selectSection: (key: string | null) => void;
   viewMode: ViewMode;
   /** 正在等待拾取父级骨骼的素材 id。非 null = 「附件：设置父级」拾取模式。 */
-  attachingLayerId: string | null;
+  attachingSlotId: string | null;
   /** 进入拾取父级模式（点击图片属性面板的「父级」按钮） */
-  startAttach: (layerId: string) => void;
+  startAttach: (slotId: string) => void;
   /** 退出拾取父级模式 */
   cancelAttach: () => void;
 
@@ -155,21 +155,21 @@ export interface PixiBonesState {
   /** 最近工程列表（按打开时间倒序，最多 8 个，localStorage 持久化） */
   recentProjects: Array<{ id: string; name: string; openedAt: number }>;
   pushRecentProject: (id: string, name: string) => void;
-  // ===== Undo/Redo 撤销重做（记录 bones + layerTransforms 的快照） =====
-  /** 历史快照栈（最多 50 步），每项是 bones + layerTransforms + selectedBoneId 的快照 */
-  historyPast:  Array<{ bones: BoneNode[]; layerTransforms: Record<string, { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }>; selectedBoneId: string | null }>;
-  historyFuture: Array<{ bones: BoneNode[]; layerTransforms: Record<string, { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }>; selectedBoneId: string | null }>;
+  // ===== Undo/Redo 撤销重做（记录 bones + slotTransforms 的快照） =====
+  /** 历史快照栈（最多 50 步），每项是 bones + slotTransforms + selectedBoneId 的快照 */
+  historyPast:  Array<{ bones: BoneNode[]; slotTransforms: Record<string, { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }>; selectedBoneId: string | null }>;
+  historyFuture: Array<{ bones: BoneNode[]; slotTransforms: Record<string, { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }>; selectedBoneId: string | null }>;
   /** 把当前快照推入 past（结构性变化前调用） */
   pushHistory: () => void;
   undo: () => void;
   redo: () => void;
   viewport: { panX: number; panY: number; zoom: number };
-  /** 图层 → 骨骼 的绑定表（key = layerId）。见初始值处注释。 */
-  layerBindings: Record<string, LayerBinding>;
+  /** 图层 → 骨骼 的绑定表（key = slotId）。见初始值处注释。 */
+  slotBindings: Record<string, SlotBinding>;
   /** 把一个图层绑定到骨骼（ref = 绑定那一刻骨骼的世界矩阵，做参考基准） */
-  bindLayer: (layerId: string, binding: LayerBinding) => void;
+  bindSlot: (slotId: string, binding: SlotBinding) => void;
   /** 解除某个图层的绑定 */
-  unbindLayer: (layerId: string) => void;
+  unbindSlot: (slotId: string) => void;
   /** BoneEditor 的实际渲染原点/缩放，用于标尺换算（世界 0,0 在屏幕的哪里） */
   render: { x: number; y: number; scale: number };
   /** 编辑器顶部 tab：setup（装配/骨骼）/ animate（动画） */
@@ -197,8 +197,8 @@ export interface PixiBonesState {
   setSelectedBoneName: (n: string | null) => void;
 
   setPsd: (p: PixiBonesPsd | null) => void;
-  toggleLayerVisibility: (id: string) => void;
-  selectLayer: (id: string | null) => void;
+  toggleSlotVisibility: (id: string) => void;
+  selectSlot: (id: string | null) => void;
   setViewMode: (m: ViewMode) => void;
 
   toggleLeftPanel: () => void;
@@ -383,25 +383,25 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     return { slots };
   }),
   slotIdOfAttachment: (attachmentId) => slotIdOf(get().slots, attachmentId),
-  layerVisibility: {},
-  layerTransforms: {},
-  setLayerTransform: (id, t) => set((state) => ({
-    layerTransforms: { ...state.layerTransforms, [id]: t },
+  slotVisibility: {},
+  slotTransforms: {},
+  setSlotTransform: (id, t) => set((state) => ({
+    slotTransforms: { ...state.slotTransforms, [id]: t },
   })),
-  resetLayerTransform: (id) => set((state) => {
-    const next = { ...state.layerTransforms };
+  resetSlotTransform: (id) => set((state) => {
+    const next = { ...state.slotTransforms };
     delete next[id];
-    return { layerTransforms: next };
+    return { slotTransforms: next };
   }),
-  layerOrder: [],
-  setLayerOrder: (ids) => set({ layerOrder: ids }),
-  selectedLayerId: null,
-  selectedLayerIds: [],
+  slotOrder: [],
+  setSlotOrder: (ids) => set({ slotOrder: ids }),
+  selectedSlotId: null,
+  selectedSlotIds: [],
   selectedSectionKey: null,
   viewMode: 'editor',
-  attachingLayerId: null,
-  startAttach: (layerId) => set({ attachingLayerId: layerId }),
-  cancelAttach: () => set({ attachingLayerId: null }),
+  attachingSlotId: null,
+  startAttach: (slotId) => set({ attachingSlotId: slotId }),
+  cancelAttach: () => set({ attachingSlotId: null }),
 
   bones: [],
   selectedBoneId: null,
@@ -429,8 +429,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     activeTool: 'rotate',
   viewport: { panX: 0, panY: 0, zoom: 1 },
   render: { x: 0, y: 0, scale: 1 },
-  /** 图层 → 骨骼 的绑定表：key = layerId。语义见 LayerBinding 注释。 */
-  layerBindings: {},
+  /** 图层 → 骨骼 的绑定表：key = slotId。语义见 SlotBinding 注释。 */
+  slotBindings: {},
 
   locale: 'zh',
   setLocale: (l) => set({ locale: l }),
@@ -457,7 +457,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
           rotation: 0,
           scaleX: 1, scaleY: 1,
           length: 0,
-          layerId: null,
+          slotId: null,
         }],
         selectedBoneId: rootId,
         selectedBoneIds: [rootId],
@@ -480,15 +480,15 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     try { localStorage.setItem('pixibones.recent', JSON.stringify(trimmed)); } catch {}
   },
 
-  // ===== Undo / Redo（快照 bones + layerTransforms + selectedBoneId）=====
+  // ===== Undo / Redo（快照 bones + slotTransforms + selectedBoneId）=====
   historyPast:  [],
   historyFuture: [],
   pushHistory: () => {
     const s = get();
-    // 深拷贝当前 bones 快照 + layerTransforms（解构后是 plain object，可直接 JSON 化）
+    // 深拷贝当前 bones 快照 + slotTransforms（解构后是 plain object，可直接 JSON 化）
     const snap = {
       bones: JSON.parse(JSON.stringify(s.bones)),
-      layerTransforms: JSON.parse(JSON.stringify(s.layerTransforms)),
+      slotTransforms: JSON.parse(JSON.stringify(s.slotTransforms)),
       selectedBoneId: s.selectedBoneId,
     };
     const past = [...s.historyPast, snap].slice(-50);  // 最多 50 步
@@ -502,7 +502,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     // 当前状态推到 future
     const currentSnap = {
       bones: JSON.parse(JSON.stringify(s.bones)),
-      layerTransforms: JSON.parse(JSON.stringify(s.layerTransforms)),
+      slotTransforms: JSON.parse(JSON.stringify(s.slotTransforms)),
       selectedBoneId: s.selectedBoneId,
     };
     const future = [currentSnap, ...s.historyFuture];
@@ -510,7 +510,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       historyPast: past,
       historyFuture: future,
       bones: prev.bones,
-      layerTransforms: prev.layerTransforms,
+      slotTransforms: prev.slotTransforms,
       selectedBoneId: prev.selectedBoneId,
     });
   },
@@ -521,7 +521,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     // 当前状态推到 past
     const currentSnap = {
       bones: JSON.parse(JSON.stringify(s.bones)),
-      layerTransforms: JSON.parse(JSON.stringify(s.layerTransforms)),
+      slotTransforms: JSON.parse(JSON.stringify(s.slotTransforms)),
       selectedBoneId: s.selectedBoneId,
     };
     const past = [...s.historyPast, currentSnap];
@@ -529,7 +529,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       historyPast: past,
       historyFuture: rest,
       bones: next.bones,
-      layerTransforms: next.layerTransforms,
+      slotTransforms: next.slotTransforms,
       selectedBoneId: next.selectedBoneId,
     });
   },
@@ -564,11 +564,11 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     set({
       psd: p,
       slots,
-      layerVisibility: {},
-      layerTransforms: {},
-      layerOrder: [],
-      selectedLayerId: null,
-      selectedLayerIds: [],
+      slotVisibility: {},
+      slotTransforms: {},
+      slotOrder: [],
+      selectedSlotId: null,
+      selectedSlotIds: [],
       bones: rootId
         ? [{
             id: rootId,
@@ -578,17 +578,17 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
             rotation: 0,
             scaleX: 1, scaleY: 1,
             length: 0,
-            layerId: null,
+            slotId: null,
           }]
         : [],
       selectedBoneId: rootId,
       selectedBoneIds: rootId ? [rootId] : [],
       selectedSectionKey: null,
-      attachingLayerId: null,
-      layerBindings: {},   // 新 PSD：清空所有绑定
+      attachingSlotId: null,
+      slotBindings: {},   // 新 PSD：清空所有绑定
     });
   },
-  bindLayer: (slotId, binding) =>
+  bindSlot: (slotId, binding) =>
     set((state) => {
       // 仿 Spine：绑定后该骨骼成为「插槽的父级」，并以插槽名重命名
       const slot = state.slots.find((s) => s.id === slotId) ?? null;
@@ -599,15 +599,15 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
         : state.bones;
       return {
         bones,
-        layerBindings: { ...state.layerBindings, [slotId]: binding },
-        attachingLayerId: null,   // 绑定完成即退出拾取模式
+        slotBindings: { ...state.slotBindings, [slotId]: binding },
+        attachingSlotId: null,   // 绑定完成即退出拾取模式
       };
     }),
-  unbindLayer: (layerId) =>
+  unbindSlot: (slotId) =>
     set((state) => {
-      const next = { ...state.layerBindings };
-      delete next[layerId];
-      return { layerBindings: next };
+      const next = { ...state.slotBindings };
+      delete next[slotId];
+      return { slotBindings: next };
     }),
   // 单独导入的图片素材（PNG/JPG）：追加到 images，并建一个同名插槽
   addImage: (layer) =>
@@ -621,13 +621,13 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       return {
         images: [...state.images, layer],
         slots: [...state.slots, slot],
-        layerVisibility: { ...state.layerVisibility, [slot.id]: true },
+        slotVisibility: { ...state.slotVisibility, [slot.id]: true },
         // 选中新建的插槽
-        selectedLayerId: slot.id,
-        selectedLayerIds: [slot.id],
+        selectedSlotId: slot.id,
+        selectedSlotIds: [slot.id],
         selectedBoneId: null,
         selectedSectionKey: null,
-        attachingLayerId: null,
+        attachingSlotId: null,
       };
     }),
   removeImage: (id) =>
@@ -649,71 +649,71 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       );
       const dropKeys = <T,>(rec: Record<string, T>) =>
         Object.fromEntries(Object.entries(rec).filter(([k]) => !deadSlots.has(k)));
-      const selDead = state.selectedLayerId !== null && deadSlots.has(state.selectedLayerId);
+      const selDead = state.selectedSlotId !== null && deadSlots.has(state.selectedSlotId);
       return {
         images: state.images.filter((l) => l.id !== id),
         slots,
-        selectedLayerId: selDead ? null : state.selectedLayerId,
-        selectedLayerIds: selDead ? [] : state.selectedLayerIds.filter((sid) => !deadSlots.has(sid)),
-        layerBindings: dropKeys(state.layerBindings),
-        layerTransforms: dropKeys(state.layerTransforms),
-        layerVisibility: dropKeys(state.layerVisibility),
-        layerOrder: state.layerOrder.filter((sid) => !deadSlots.has(sid)),
+        selectedSlotId: selDead ? null : state.selectedSlotId,
+        selectedSlotIds: selDead ? [] : state.selectedSlotIds.filter((sid) => !deadSlots.has(sid)),
+        slotBindings: dropKeys(state.slotBindings),
+        slotTransforms: dropKeys(state.slotTransforms),
+        slotVisibility: dropKeys(state.slotVisibility),
+        slotOrder: state.slotOrder.filter((sid) => !deadSlots.has(sid)),
       };
     }),
   // 插槽显隐（key = slotId）
-  toggleLayerVisibility: (slotId) =>
+  toggleSlotVisibility: (slotId) =>
     set((state) => ({
-      layerVisibility: { ...state.layerVisibility, [slotId]: !(state.layerVisibility[slotId] ?? true) },
+      slotVisibility: { ...state.slotVisibility, [slotId]: !(state.slotVisibility[slotId] ?? true) },
     })),
-  selectLayer: (id) => set({
-    selectedLayerId: id,
-    selectedLayerIds: id ? [id] : [],
+  selectSlot: (id) => set({
+    selectedSlotId: id,
+    selectedSlotIds: id ? [id] : [],
     selectedBoneId: null,
     selectedBoneIds: [],
     selectedSectionKey: null,
-    attachingLayerId: null,
+    attachingSlotId: null,
   }),
   // 多选素材：additive=true 增量追加，false 替换
-  selectLayers: (ids, additive = false) => set((s) => {
-    const next = additive ? Array.from(new Set([...s.selectedLayerIds, ...ids])) : ids;
+  selectSlots: (ids, additive = false) => set((s) => {
+    const next = additive ? Array.from(new Set([...s.selectedSlotIds, ...ids])) : ids;
     return {
-      selectedLayerIds: next,
-      selectedLayerId: next[0] ?? null,
+      selectedSlotIds: next,
+      selectedSlotId: next[0] ?? null,
       selectedBoneId: null,
       selectedBoneIds: [],
       selectedSectionKey: null,
-      attachingLayerId: null,
+      attachingSlotId: null,
     };
   }),
   // 只设置目标素材，保留骨骼选中（创建模式 ⌘ 点击素材用）
-  setTargetLayer: (id) => set({
-    selectedLayerId: id,
-    selectedLayerIds: id ? [id] : [],
+  setTargetSlot: (id) => set({
+    selectedSlotId: id,
+    selectedSlotIds: id ? [id] : [],
     selectedSectionKey: null,
-    attachingLayerId: null,
+    attachingSlotId: null,
   }),
   // 框选：同时设置骨骼 + 素材（互不清空）
-  selectBox: (boneIds, layerIds) => set((s) => {
+  selectBox: (boneIds, slotIds) => set((s) => {
     // ★ 变换工具（旋转/移动/缩放/倾斜）激活时，图层与骨骼不能同时选中 —— 以骨骼为主：
     //   只要框中有骨骼，就丢弃图层选中。
-    const layers = (s.activeTool !== null && boneIds.length > 0) ? [] : layerIds;
+    const layers = (s.activeTool !== null && boneIds.length > 0) ? [] : slotIds;
     return {
       selectedBoneIds: boneIds,
       selectedBoneId: boneIds[0] ?? null,
-      selectedLayerIds: layers,
-      selectedLayerId: layers[0] ?? null,
+      selectedSlotIds: layers,
+      selectedSlotId: layers[0] ?? null,
       selectedSectionKey: null,
-      attachingLayerId: null,
+      attachingSlotId: null,
     };
   }),
   selectSection: (key) => set({
     selectedSectionKey: key,
     selectedBoneId: null,
     selectedBoneIds: [],
-    selectedLayerId: null,
-    selectedLayerIds: [],
-    attachingLayerId: null,
+    selectedSlotId: null,
+    selectedSlotIds: [],
+    attachingSlotId: null,
   }),
   setViewMode: (m) => set({ viewMode: m }),
 
@@ -729,17 +729,17 @@ setEditorMode: (m) => set({
   editorMode: m,
   activeTool: null,
   // ★ 姿势模式下画布上的图层不可选：进入 pose 时清空图层选中（避免高亮残留）
-  ...(m === 'pose' ? { selectedLayerId: null, selectedLayerIds: [] } : {}),
+  ...(m === 'pose' ? { selectedSlotId: null, selectedSlotIds: [] } : {}),
 }),
 setActiveTool: (t) => set((s) => ({
   activeTool: t,
   // 选 transform tool 时退出 pose/weights/create；其他情况保持现状
   editorMode: t !== null ? 'idle' as const : 'pose' as const,
   // 关闭 transform tool ⇒ 回到 pose ⇒ 同样清空图层选中
-  ...(t === null ? { selectedLayerId: null, selectedLayerIds: [] } : {}),
+  ...(t === null ? { selectedSlotId: null, selectedSlotIds: [] } : {}),
   // ★ 激活变换工具时：若骨骼与图层同时被选中，以骨骼为主（清掉图层）
   ...(t !== null && s.selectedBoneIds.length > 0
-    ? { selectedLayerId: null, selectedLayerIds: [] }
+    ? { selectedSlotId: null, selectedSlotIds: [] }
     : {}),
 })),
   setTransformSpace: (s) => set({ transformSpace: s }),
@@ -760,7 +760,7 @@ setActiveTool: (t) => set((s) => ({
         scaleX: partial.scaleX ?? 1,
         scaleY: partial.scaleY ?? 1,
         length: partial.length ?? 100,
-        layerId: partial.layerId ?? null,
+        slotId: partial.slotId ?? null,
       };
       return {
         bones: [...state.bones, newBone],
@@ -779,15 +779,15 @@ setActiveTool: (t) => set((s) => ({
       const toRemove = collectDescendants(state.bones, id);
       const removedSel = state.selectedBoneId && toRemove.has(state.selectedBoneId);
       // 被删骨骼上的图层绑定也一并清掉
-      const nextBindings = { ...state.layerBindings };
-      for (const [layerId, b] of Object.entries(nextBindings)) {
-        if (toRemove.has(b.boneId)) delete nextBindings[layerId];
+      const nextBindings = { ...state.slotBindings };
+      for (const [slotId, b] of Object.entries(nextBindings)) {
+        if (toRemove.has(b.boneId)) delete nextBindings[slotId];
       }
       return {
         bones: state.bones.filter((n) => !toRemove.has(n.id)),
         selectedBoneId: removedSel ? null : state.selectedBoneId,
         selectedBoneIds: removedSel ? [] : state.selectedBoneIds.filter((bid) => !toRemove.has(bid)),
-        layerBindings: nextBindings,
+        slotBindings: nextBindings,
       };
     });
   },
@@ -824,8 +824,8 @@ setActiveTool: (t) => set((s) => ({
   selectBone: (id) => set({
     selectedBoneId: id,
     selectedBoneIds: id ? [id] : [],
-    selectedLayerId: null,
-    selectedLayerIds: [],
+    selectedSlotId: null,
+    selectedSlotIds: [],
     selectedSectionKey: null,
   }),
   // 多选：additive=true 增量追加，false 替换
@@ -835,16 +835,16 @@ setActiveTool: (t) => set((s) => ({
       return {
         selectedBoneIds: next,
         selectedBoneId: next[0] ?? null,
-        selectedLayerId: null,
-        selectedLayerIds: [],
+        selectedSlotId: null,
+        selectedSlotIds: [],
         selectedSectionKey: null,
       };
     }
     return {
       selectedBoneIds: ids,
       selectedBoneId: ids[0] ?? null,
-      selectedLayerId: null,
-      selectedLayerIds: [],
+      selectedSlotId: null,
+      selectedSlotIds: [],
       selectedSectionKey: null,
     };
   }),
