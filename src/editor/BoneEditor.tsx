@@ -850,6 +850,9 @@ export function BoneEditor() {
           const slot = slots.find((s) => s.id === sid) ?? null;
           const layer = slot?.activeAttachmentId ? byId.get(slot.activeAttachmentId) ?? null : null;
           if (!layer || layer.width === 0 || layer.height === 0) continue;
+          // ★ 附件一旦有网格：可见范围已被裁到网格轮廓内，整图外框（原图边界）会误导
+          //   → 不再画蓝框（选中提示改由 drawMeshHandles 的网格边界承担）
+          if (usePixiBonesStore.getState().attachmentMeshes[layer.id]) continue;
 
           const stageX = root.x + layer.left * root.scale.x;
           const stageY = root.y + layer.top * root.scale.y;
@@ -1085,16 +1088,26 @@ export function BoneEditor() {
         s.setMeshSelectedVertices([nv]);
       };
 
-      /** 在边的中点插入顶点（细分边）：把共享该边的每个三角形一分为二。 */
+      /** 在边上插入顶点（细分边）：新顶点落在「点击处在边上最近的点」，
+       *  而不是边的中点 —— 否则点下去顶点会跳到远处。UV 按同样的比例插值。 */
       const splitEdgeAt = (id: string, va: number, vb: number, px: number, py: number) => {
         const s = usePixiBonesStore.getState();
         const mesh = s.attachmentMeshes[id];
         if (!mesh) return;
         const nv = Math.floor(mesh.vertices.length / 2);
-        // 新顶点 UV = 两端 UV 的中点
-        const u = (mesh.uvs[va * 2] + mesh.uvs[vb * 2]) / 2;
-        const vv = (mesh.uvs[va * 2 + 1] + mesh.uvs[vb * 2 + 1]) / 2;
-        const vertices = [...mesh.vertices, px, py];
+        // 把点击点投影到边 AB 上求参数 t，再取边上的落点
+        const ax = mesh.vertices[va * 2], ay = mesh.vertices[va * 2 + 1];
+        const bx = mesh.vertices[vb * 2], by = mesh.vertices[vb * 2 + 1];
+        const dx = bx - ax, dy = by - ay;
+        const len2 = dx * dx + dy * dy;
+        let tt = len2 > 1e-9 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0.5;
+        tt = Math.max(0, Math.min(1, tt));
+        const nx = ax + dx * tt;
+        const ny = ay + dy * tt;
+        // 新顶点 UV = 两端 UV 按同样的 t 插值（保证纹理不畸变）
+        const u = mesh.uvs[va * 2] + (mesh.uvs[vb * 2] - mesh.uvs[va * 2]) * tt;
+        const vv = mesh.uvs[va * 2 + 1] + (mesh.uvs[vb * 2 + 1] - mesh.uvs[va * 2 + 1]) * tt;
+        const vertices = [...mesh.vertices, nx, ny];
         const uvs = [...mesh.uvs, u, vv];
         const idx = mesh.indices;
         const indices: number[] = [];
@@ -2960,17 +2973,13 @@ export function BoneEditor() {
 
               if (tool === 'create') {
                 ev.stopPropagation();
-                // 靠近某条边（容差按屏幕换算到局部）→ 在该边中点细分；
-                // 否则落在三角形内部 → 三角形一分为三。
+                // 靠近某条边（容差按屏幕换算到局部）→ 在该边上离点击最近的落点插入；
+                // 否则落在三角形内部 → 在该点把三角形一分为三。
                 const sx = Math.abs(root.scale.x) || 1;
                 const localTol = 8 / sx;
                 const near = edgeNear(ctx.mesh, p.x, p.y, localTol);
                 if (near) {
-                  const mid = {
-                    x: (ctx.mesh.vertices[near[0] * 2] + ctx.mesh.vertices[near[1] * 2]) / 2,
-                    y: (ctx.mesh.vertices[near[0] * 2 + 1] + ctx.mesh.vertices[near[1] * 2 + 1]) / 2,
-                  };
-                  splitEdgeAt(ctx.attachmentId, near[0], near[1], mid.x, mid.y);
+                  splitEdgeAt(ctx.attachmentId, near[0], near[1], p.x, p.y);
                 } else {
                   const tri = triangleAt(ctx.mesh, p.x, p.y);
                   if (tri >= 0) splitTriangle(ctx.attachmentId, tri, p.x, p.y);
