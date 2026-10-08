@@ -3569,9 +3569,90 @@ function polygonSignedArea(poly: Array<{ x: number; y: number }>): number {
   return a / 2;
 }
 
+/** 二维定向：>0 表示 (o→a→b) 为正向（与 ear clipping 的 cross 约定一致）。 */
+function orient2d(ox: number, oy: number, ax: number, ay: number, bx: number, by: number): number {
+  return (ax - ox) * (by - oy) - (ay - oy) * (bx - ox);
+}
+
+/** d 是否落在 (a,b,c) 的外接圆内（要求 orient2d(a,b,c) > 0）；>0 = 在内。 */
+function inCircleDet(
+  ax: number, ay: number, bx: number, by: number,
+  cx: number, cy: number, dx: number, dy: number,
+): number {
+  const adx = ax - dx, ady = ay - dy;
+  const bdx = bx - dx, bdy = by - dy;
+  const cdx = cx - dx, cdy = cy - dy;
+  return (adx * adx + ady * ady) * (bdx * cdy - bdy * cdx)
+       - (bdx * bdx + bdy * bdy) * (adx * cdy - ady * cdx)
+       + (cdx * cdx + cdy * cdy) * (adx * bdy - ady * bdx);
+}
+
 /**
- * 简单多边形三角化（ear clipping）—— 网格「新建」描绘轮廓后用它生成三角形。
+ * Delaunay 边翻转（Lawson）：把 ear clipping 的结果「摊平」。
+ *
+ * 为什么需要：ear clipping 每次都从 0 号耳朵开始剪，在凸 / 近凸轮廓上必然退化成
+ * **扇形** —— 所有三角形都挤在同一个顶点上（描绘完人脸轮廓后一眼可见的放射长条）。
+ * 反复翻转不满足「空外接圆」条件的**内部边**，收敛到近似 Delaunay 剖分，三角形更
+ * 均匀，与 Spine 勾勒后的观感一致。只翻转被两个三角形共享的边；边界边（只属于一个
+ * 三角形）固定不动，保证轮廓不被破坏。
+ */
+function delaunayRefine(poly: Array<{ x: number; y: number }>, indices: number[]): number[] {
+  const tris: number[][] = [];
+  for (let i = 0; i + 2 < indices.length; i += 3) {
+    tris.push([indices[i], indices[i + 1], indices[i + 2]]);
+  }
+  const EPS = 1e-7;
+  const ekey = (a: number, b: number) => (a < b ? a * 100000 + b : b * 100000 + a);
+  for (let pass = 0; pass < 500; pass++) {
+    const edgeMap = new Map<number, number[]>();
+    for (let t = 0; t < tris.length; t++) {
+      const [a, b, c] = tris[t];
+      const pairs: Array<[number, number]> = [[a, b], [b, c], [c, a]];
+      for (const [u, v] of pairs) {
+        const k = ekey(u, v);
+        const arr = edgeMap.get(k);
+        if (arr) arr.push(t);
+        else edgeMap.set(k, [t]);
+      }
+    }
+    let flipped = false;
+    const used = new Set<number>();
+    for (const ts of edgeMap.values()) {
+      if (ts.length !== 2) continue;                 // 边界边：固定不动
+      const [t1, t2] = ts;
+      if (used.has(t1) || used.has(t2)) continue;    // 本轮已改过 → 下一轮再评估
+      const T1 = tris[t1], T2 = tris[t2];
+      // 在 T1 里找共享边的有序对 (p1 → p2) 与对角点 p3（T1 为正向）
+      let p1 = -1, p2 = -1, p3 = -1;
+      for (let k = 0; k < 3; k++) {
+        const u = T1[k], v = T1[(k + 1) % 3];
+        if (T2.includes(u) && T2.includes(v)) { p1 = u; p2 = v; p3 = T1[(k + 2) % 3]; break; }
+      }
+      if (p1 < 0) continue;
+      const p4 = T2.find((x) => x !== p1 && x !== p2);
+      if (p4 === undefined) continue;
+      const A = poly[p1], B = poly[p2], C = poly[p3], D = poly[p4];
+      // 已满足空外接圆 → 保持
+      if (inCircleDet(A.x, A.y, B.x, B.y, C.x, C.y, D.x, D.y) <= EPS) continue;
+      // 翻转有效性：新三角形 (p1,p4,p3) / (p4,p2,p3) 必须都正向且非退化
+      if (orient2d(A.x, A.y, D.x, D.y, C.x, C.y) <= EPS) continue;
+      if (orient2d(D.x, D.y, B.x, B.y, C.x, C.y) <= EPS) continue;
+      tris[t1] = [p1, p4, p3];
+      tris[t2] = [p4, p2, p3];
+      used.add(t1); used.add(t2);
+      flipped = true;
+    }
+    if (!flipped) break;
+  }
+  const out: number[] = [];
+  for (const t of tris) out.push(t[0], t[1], t[2]);
+  return out;
+}
+
+/**
+ * 简单多边形三角化 —— 网格「新建」描绘轮廓后用它生成三角形。
  * 顶点顺序任意（内部统一成逆时针）；对凹多边形（人脸轮廓的耳朵 / 下巴）也正确。
+ * ear clipping 先得到合法剖分，再做 Delaunay 边翻转把「扇形」摊匀。
  */
 function triangulatePolygon(poly: Array<{ x: number; y: number }>): number[] {
   const n = poly.length;
@@ -3611,7 +3692,8 @@ function triangulatePolygon(poly: Array<{ x: number; y: number }>): number[] {
     if (!found) break;   // 退化（自交等）：停止
   }
   if (idx.length === 3) out.push(idx[0], idx[1], idx[2]);
-  return out;
+  // 把 ear clipping 的「扇形」剖分摊匀成近似 Delaunay（三角形更均匀，贴近 Spine）
+  return delaunayRefine(poly, out);
 }
 
 /** CSS hex（'#rrggbb' / 'rrggbb'）→ RGB 分量；非法 / 空则 null。 */
