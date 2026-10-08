@@ -849,8 +849,12 @@ function TraceDialog() {
     display: 'flex', alignItems: 'center', flex: 'none',
   };
   const trackBg = (v: number, min: number, max: number) => {
+    // Spine 风格两段式：值之前深色（"剩余"）→ 值之后深色（"已选"）。
+    // 但截图里实际是：值=0 时整条深色；值 = max 时整条浅色（蓝/亮）；
+    // 中间过渡：左半段亮、右半段暗 → 反过来才对。
+    // 调整：左 = 已选（亮），右 = 剩余（暗）。
     const pct = Math.max(0, Math.min(1, (v - min) / (max - min))) * 100;
-    return `linear-gradient(to right, #5b5b5b 0 ${pct}%, #2b2b2b ${pct}% 100%)`;
+    return `linear-gradient(to right, #4A90C8 0 ${pct}%, #3a3a3a ${pct}% 100%)`;
   };
   const ParamRow = (lbl: string, v: number, setV: (n: number) => void, min: number, max: number, step: number) => (
     <div className="flex items-center" style={{ height: 24, margin: '2px 0' }}>
