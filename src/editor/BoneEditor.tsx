@@ -79,6 +79,28 @@ export function BoneEditor() {
         }
       | { kind: 'scale'; boneId: string; startScaleX: number; startScaleY: number; startScreen: { x: number; y: number }; originScreen: { x: number; y: number }; angle: number; zone: 'green' | 'red' | 'center' }
       | { kind: 'shear'; boneId: string; startSkew: number; startScreen: { x: number; y: number }; originScreen: { x: number; y: number } }
+      /** 在图层上做 4 个变换（旋转/移动/缩放/倾斜）。 */
+      | {
+          kind: 'layer-transform';
+          tool: 'rotate' | 'move' | 'scale' | 'shear';
+          layerId: string;
+          start: { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number };
+          startScreen: { x: number; y: number };
+          /** 图层锚点屏幕坐标（left+tx, top+ty 映射到画布） */
+          anchorScreen: { x: number; y: number };
+          /** 'red' / 'green' / 'center' —— move/scale/shear 区分区（决定约束轴） */
+          zone: 'red' | 'green' | 'center';
+          /**
+           * 约束轴的屏幕角度（弧度）：
+           *   - move:   red=沿图层 X 轴，green=垂直（绕图层旋转后的 +90°）
+           *   - scale:  red=沿 X 轴缩放，green=沿 Y 轴缩放
+           *   - shear:  red=沿 X 倾斜，green=沿 Y 倾斜
+           *   - rotate: 总是绕锚点，axisAngle 未使用
+           */
+          axisAngle: number;
+          /** 手柄在屏幕上的当前旋转角（move/scale/shear 手柄的 rotation，用于轴换算） */
+          handleRotation: number;
+        }
       | null;
     /** 0 长度骨骼上的悬停分区（黑圈内=移动，圈外=旋转） */
     type HoverZone = { boneId: string; kind: 'move' | 'rotate' };
@@ -158,6 +180,11 @@ export function BoneEditor() {
       // 创建模式 + 按住 Command 时，鼠标悬停素材显示的白色虚线框（拾取提示）
       const layerHover = new Gfx();
       a.stage.addChild(layerHover);
+
+      // 选中图层 + 4 个变换工具（move / rotate / scale / shear）时画在图层上的手柄。
+      // 画在 sprite 旁边（不是它的子节点），便于接收 pointerdown 触发 layer-transform 拖动。
+      const layerHandles = new Gfx();
+      a.stage.addChild(layerHandles);
 
       // 旋转拖动时跟随鼠标的绿色旋转光标（Spine 风格：按下出现，松开消失）
       const rotateCursor = new Gfx();
@@ -327,18 +354,25 @@ export function BoneEditor() {
       };
 
       /**
-       * 应用「图层 → 骨骼」绑定：被绑定的图层跟随骨骼的世界变换。
+       * 应用「图层 → 骨骼」绑定 + 用户的 slot 局部变换。
        *
        * 绑定表里存的是「绑定那一刻骨骼的世界矩阵 ref」。
        *   渲染时用增量 delta = 当前世界矩阵 × ref⁻¹ 驱动 wrap：
        *     sprite 世界位置 = delta × 原始位置
        *   所以绑定动作本身不会让图层跳动（delta = I），之后骨骼怎么动图层就怎么跟。
        *   未绑定的图层：wrap 复位为单位矩阵，sprite 回到原始 (left, top)。
+       *
+       * 用户在 slot 上做的旋转/缩放/倾斜/平移（layerTransforms）会**叠加在**骨骼矩阵之后：
+       *   视觉上 = (骨骼世界 × ref⁻¹) × slotLocal
+       *   即移动/旋转图层时不影响骨骼本身；绑骨后再调这些值也不会让图跳到奇怪位置。
+       *
+       * 锚点：sprite 的 (left, top) + slot.tx, slot.ty，旋转/缩放/倾斜绕该锚点。
        */
       const applyBindings = (
         psd: PixiBonesPsd | null,
         images: PixiBonesLayer[],
         bindings: Record<string, LayerBinding>,
+        layerTransforms: Record<string, { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }>,
       ) => {
         for (const layer of allLayersOf(psd, images)) {
           const wrap = spriteByLayerId.get(layer.id);
@@ -346,23 +380,156 @@ export function BoneEditor() {
           const sprite = wrap.children[0] as Sprite | undefined;
           const binding = bindings[layer.id];
           const bone = binding ? boneById.get(binding.boneId) : null;
-          let applied = false;
+          const lt = layerTransforms[layer.id];
+          // 1) 计算骨骼驱动矩阵（列主序 6 元组）
+          let m = [1, 0, 0, 1, 0, 0]; // 单位
           if (binding && bone) {
             const inv = invAffine(binding.ref);
             if (inv) {
               const e = bone.worldMatrix.elements;
               const cur = [e[0], e[1], e[3], e[4], e[6], e[7]];
-              const delta = mulAffine(cur, inv);
-              // Matrix(a, b, c, d, tx, ty)
-              wrap.setFromMatrix(new Matrix(delta[0], delta[1], delta[2], delta[3], delta[4], delta[5]));
-              if (sprite) sprite.position.set(layer.left, layer.top);
-              applied = true;
+              m = mulAffine(cur, inv);
             }
           }
-          if (!applied) {
-            // 未绑定（或骨骼不存在）：复位
-            wrap.setFromMatrix(Matrix.IDENTITY);
-            if (sprite) sprite.position.set(layer.left, layer.top);
+          // 2) 叠加用户的 slot 局部变换。
+          //    wrap 的世界 = m × slotLocal
+          //    ★ slotLocal 的枢轴 = 图层中心（不是左上角！）：
+          //      slotLocal = T(C) × L × T(-C) × B
+          //        B = T(left+tx, top+ty)      基础摆放（把 sprite 左上角放到图层位置）
+          //        C = (left+tx+w/2, top+ty+h/2)  图层中心
+          //        L = R × Sk × S（线性部分）
+          //      ⇒ 线性仍为 L，平移 = C - L×(w/2, h/2)
+          const txL = lt?.tx ?? 0;
+          const tyL = lt?.ty ?? 0;
+          const rot = lt?.rotation ?? 0;
+          const sx = lt?.scaleX ?? 1;
+          const sy = lt?.scaleY ?? 1;
+          const skx = lt?.skewX ?? 0;
+          const sky = lt?.skewY ?? 0;
+          const tanKx = Math.tan(skx);
+          const tanKy = Math.tan(sky);
+          // aM = shear(skx, sky) ∘ scale(sx, sy)
+          // 列主序：[a, b, c, d] 对应 X=(a,b), Y=(c,d)
+          const aMx = sx;
+          const aMy = 0;
+          const aCx = tanKx * sx;
+          const aCy = sy;
+          const aBx = tanKy * sy;
+          const aBy = 0;
+          // 再叠加旋转：R ∘ M（对 M 的两列分别左乘 R）
+          //   引擎 Transform.toMatrix 约定：X=(cos·sx, sin·sx)、Y=(-sin·sy, cos·sy)
+          //   R·X = (cosR·Xx − sinR·Xy, sinR·Xx + cosR·Xy)
+          //   R·Y = (cosR·Yx − sinR·Yy, sinR·Yx + cosR·Yy)
+          const cosR = Math.cos(rot);
+          const sinR = Math.sin(rot);
+          const Xx = aMx, Xy = aMy;
+          const Yx = aCx + aBx, Yy = aCy + aBy;
+          const m_a = cosR * Xx - sinR * Xy;
+          const m_b = sinR * Xx + cosR * Xy;
+          const m_c = cosR * Yx - sinR * Yy;
+          const m_d = sinR * Yx + cosR * Yy;
+          // ★ 枢轴居中化：枢轴 C = 图层中心；平移 = C − L×(w/2, h/2)
+          const halfW = layer.width / 2;
+          const halfH = layer.height / 2;
+          const Cx = layer.left + txL + halfW;
+          const Cy = layer.top + tyL + halfH;
+          const lx = Cx - (m_a * halfW + m_c * halfH);
+          const ly = Cy - (m_b * halfW + m_d * halfH);
+          const slotLocal = [m_a, m_b, m_c, m_d, lx, ly];
+          // 骨骼矩阵 m（左乘）：wrap = m × slotLocal
+          const out = mulAffine(m, slotLocal);
+          wrap.setFromMatrix(new Matrix(out[0], out[1], out[2], out[3], out[4], out[5]));
+          if (sprite) sprite.position.set(0, 0);
+        }
+      };
+
+      /** 鼠标悬停在手柄上时的高亮分区（与 zone 同义，但供绘图使用）。 */
+      let layerHandleHover: 'red' | 'green' | 'center' | null = null;
+
+      /**
+       * 图层「手柄锚点」= 图层中心（含 tx/ty）在画布上的屏幕坐标。
+       * ★ 手柄的绘制 / hover 判定 / pointerdown 分区 / 旋转，全部必须用这一个锚点，
+       *   否则会像之前那样「画在中心、命中在左上角」而完全错位。
+       */
+      const layerAnchorScreen = (
+        layer: { left: number; top: number; width: number; height: number },
+        lt: { tx: number; ty: number },
+      ) => {
+        const sx = root.scale.x;
+        const sy = root.scale.y;
+        return {
+          x: root.x + (layer.left + layer.width / 2 + lt.tx) * sx,
+          y: root.y + (layer.top + layer.height / 2 + lt.ty) * sy,
+        };
+      };
+
+      /**
+       * 选中图层 + 4 个变换工具激活时，绘制对应手柄。
+       * 直接复用骨骼的零长度手柄图标（drawRootMoveHandle / drawRotateIcon / drawScaleHandle* / drawInclineHandle），
+       * 画在 layerHandles 中心（通过 Gfx 的 x/y 移动位置，draw 函数都按原点居中画）。
+       *
+       * 复用 drawScaleHandle* / drawRootMoveHandle 时不能直接传 hover 颜色（它们写死颜色），
+       * 因此 hover 时先正常画，然后**叠一层白色**在命中区上做高亮。
+       */
+      const drawLayerHandles = (
+        psd: PixiBonesPsd | null,
+        images: PixiBonesLayer[],
+        selectedLayerId: string | null,
+        tool: 'rotate' | 'move' | 'scale' | 'shear' | null,
+        _transforms: Record<string, { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }>,
+      ) => {
+        layerHandles.clear();
+        // ★ 不要在这里改 eventMode！init 里已经设为 'static' 且只设一次；
+        //   若每次 clear 后重设会把 init 的 'static' 覆盖成 'none' → 手柄永远收不到事件。
+        //   没有几何图形时（clear 后未画）PIXI 命中测试自然失败，不会误吞事件。
+        if (!selectedLayerId || !tool) return;
+        const all = allLayersOf(psd, images);
+        const layer = all.find((l) => l.id === selectedLayerId);
+        if (!layer || layer.width === 0 || layer.height === 0) return;
+        const lt = _transforms[selectedLayerId] ?? { tx: 0, ty: 0, rotation: 0, scaleX: 1, scaleY: 1, skewX: 0, skewY: 0 };
+        // ★ 选中图层的 sprite 光标：有工具时改成"可操作"光标，避免 PIXI 一直显示 pointer
+        {
+          const selSprite = spriteByLayerId.get(selectedLayerId)?.children[0] as Sprite | undefined;
+          if (selSprite) {
+            selSprite.cursor = tool === 'move' ? 'move'
+              : tool === 'scale' ? 'nwse-resize'
+              : tool === 'shear' ? 'move'
+              : 'crosshair';
+          }
+        }
+        // 把手柄放在图层中心（统一锚点）
+        const { x: cx, y: cy } = layerAnchorScreen(layer, lt);
+        layerHandles.x = cx;
+        layerHandles.y = cy;
+        // ★ 手柄跟着图层自身旋转（红轴 = 图层 X 方向、绿轴 = 图层 Y 方向），
+        //   这样 axisAngle / 分区判定（都按 -lt.rotation 反旋转）和视觉轴完全一致。
+        layerHandles.rotation = lt.rotation ?? 0;
+        if (tool === 'move') {
+          drawRootMoveHandle(layerHandles, layerHandleHover === 'green' ? 'green' : layerHandleHover === 'red' ? 'red' : null);
+        } else if (tool === 'rotate') {
+          drawRotateIcon(layerHandles, 1.4);
+        } else if (tool === 'scale') {
+          // 复画一次：默认色；再按 hover 叠对应轴为白
+          drawScaleHandleGreen(layerHandles);
+          drawScaleHandleRed(layerHandles);
+          if (layerHandleHover === 'green') {
+            refillPolys(layerHandles, SCALE_GREEN_POLYS, 0.15, SCALE_HANDLE_ANCHOR.x, SCALE_HANDLE_ANCHOR.y, 0xFFFFFF);
+          } else if (layerHandleHover === 'red') {
+            refillPolys(layerHandles, SCALE_RED_POLYS, 0.15, SCALE_HANDLE_ANCHOR.x, SCALE_HANDLE_ANCHOR.y, 0xFFFFFF);
+          }
+        } else if (tool === 'shear') {
+          drawInclineHandle(layerHandles);
+          // 倾斜 hover：左半(red)=X 倾斜 / 右半(green)=Y 倾斜；用 white 覆盖整块作为简版
+          if (layerHandleHover === 'red' || layerHandleHover === 'green') {
+            // 找到屏外手柄的 x 范围（粗略）：手柄外接半径约 ±25px
+            // 用白色十字作为 hover 提示（中心点 + 横线 / 竖线）
+            if (layerHandleHover === 'red') {
+              // X 倾斜高亮：横向条
+              layerHandles.rect(-22, -3, 44, 6).fill({ color: 0xFFFFFF, alpha: 0.5 });
+            } else {
+              // Y 倾斜高亮：纵向条
+              layerHandles.rect(-3, -22, 6, 44).fill({ color: 0xFFFFFF, alpha: 0.5 });
+            }
           }
         }
       };
@@ -1686,6 +1853,72 @@ export function BoneEditor() {
           drawGrid(s.psd);
           drawHighlight(s.psd, s.images, s.selectedLayerIds);
           drawBones(s.bones, s.selectedBoneId, s.selectedBoneIds);
+        } else if (dragState.kind === 'layer-transform') {
+          // 仿 Spine SlotTransform：移动/旋转/缩放/倾斜当前选中的图层。
+          const { tool, start, startScreen, anchorScreen, layerId, zone, axisAngle, handleRotation } = dragState;
+          const dxScreen = ev.global.x - startScreen.x;
+          const dyScreen = ev.global.y - startScreen.y;
+          const sxr = root.scale.x;
+          const syr = root.scale.y;
+          const next = { ...start };
+          if (tool === 'move') {
+            // 平移：根据 zone 约束到 axisAngle 一根轴上
+            if (zone === 'center' || axisAngle === undefined) {
+              next.tx = start.tx + (sxr !== 0 ? dxScreen / sxr : 0);
+              next.ty = start.ty + (syr !== 0 ? dyScreen / syr : 0);
+            } else {
+              const ax = Math.cos(axisAngle);
+              const ay = Math.sin(axisAngle);
+              // 投影到约束轴上
+              const proj = (dxScreen * ax + dyScreen * ay);
+              const wLen = sxr !== 0 ? proj / sxr : 0;
+              next.tx = start.tx + ax * wLen;
+              next.ty = start.ty + ay * wLen;
+            }
+          } else if (tool === 'rotate') {
+            // 旋转：以锚点为中心，绕中心角度变化（不受 zone 影响）
+            const a0 = Math.atan2(startScreen.y - anchorScreen.y, startScreen.x - anchorScreen.x);
+            const a1 = Math.atan2(ev.global.y - anchorScreen.y, ev.global.x - anchorScreen.x);
+            next.rotation = start.rotation + (a1 - a0);
+          } else if (tool === 'scale') {
+            // 缩放：center = 等比，red/green = 单轴
+            if (zone === 'center' || axisAngle === undefined) {
+              const d0 = Math.hypot(startScreen.x - anchorScreen.x, startScreen.y - anchorScreen.y);
+              const d1 = Math.hypot(ev.global.x - anchorScreen.x, ev.global.y - anchorScreen.y);
+              const k = d0 > 1e-3 ? d1 / d0 : 1;
+              next.scaleX = start.scaleX * k;
+              next.scaleY = start.scaleY * k;
+            } else {
+              // 单轴缩放 k = (startLen + proj) / startLen
+              //   startLen = 该方向在屏幕上的初始长度（按图层旋转后轴向）
+              //   proj     = 屏幕 delta 投影到 axisAngle
+              const ax = Math.cos(axisAngle);
+              const ay = Math.sin(axisAngle);
+              const proj = (dxScreen * ax + dyScreen * ay);
+              // 把 startLen 算成"按下时该方向的屏幕长度"
+              // red=沿图层 X（局部 width 经 rotation 旋转到屏幕），green=沿图层 Y（height）
+              const st = usePixiBonesStore.getState();
+              const all = allLayersOf(st.psd, st.images);
+              const layer = all.find((l) => l.id === layerId);
+              const startLen = layer
+                ? (zone === 'red' ? layer.width * Math.abs(sxr) : layer.height * Math.abs(syr))
+                : 0;
+              if (startLen > 0.5) {
+                const k = (startLen + proj) / startLen;
+                if (zone === 'red') next.scaleX = start.scaleX * k;
+                else next.scaleY = start.scaleY * k;
+              }
+            }
+          } else if (tool === 'shear') {
+            // 倾斜：center = 同时改 X/Y；red = 仅 skewX（X 倾斜）；green = 仅 skewY（Y 倾斜）
+            if (zone === 'red' || zone === 'center') {
+              next.skewX = start.skewX + (zone === 'center' ? dxScreen * 0.5 : dxScreen);
+            }
+            if (zone === 'green' || zone === 'center') {
+              next.skewY = start.skewY + (zone === 'center' ? dyScreen * 0.5 : dyScreen);
+            }
+          }
+          usePixiBonesStore.getState().setLayerTransform(layerId, next);
         } else if (dragState.kind === 'marquee') {
           // 框选：实时画蓝色矩形 + 命中检测
           dragState.nowScreen = { x: ev.global.x, y: ev.global.y };
@@ -1815,10 +2048,12 @@ export function BoneEditor() {
         } else if (dragState.kind === 'marquee') {
           const { startScreen, nowScreen, rect, additive, prevSelIds, prevLayerIds, hitLayerId } = dragState;
           const store = usePixiBonesStore.getState();
+          // ★ 姿势模式下（editorMode === 'pose'）：画布上的图层不允许被选中（只能选骨骼）
+          const layerSelectable = store.editorMode !== 'pose';
           const moved = Math.hypot(nowScreen.x - startScreen.x, nowScreen.y - startScreen.y) > 3;
           if (!moved) {
             // 单击：若点在素材上 → 选中该素材（Shift = 加选，跟骨骼一致）
-            if (hitLayerId) {
+            if (hitLayerId && layerSelectable) {
               if (additive) store.selectLayers([...prevLayerIds, hitLayerId], false);
               else store.selectLayers([hitLayerId], false);
             }
@@ -1851,9 +2086,9 @@ export function BoneEditor() {
                 }
               }
             }
-            // 2) 框内素材：矩形与框相交（且可见）
+            // 2) 框内素材：矩形与框相交（且可见）；姿势模式下不参与
             const hitLayers: string[] = [];
-            {
+            if (layerSelectable) {
               const sxr = root.scale.x;
               const syr = root.scale.y;
               for (const l of allLayersOf(store.psd, store.images)) {
@@ -1874,7 +2109,10 @@ export function BoneEditor() {
             //   - 素材被框中的判定：矩形与框相交
             // 增量（Shift）时各自与「按下时已有的选中」合并。
             const mergedBones = additive ? Array.from(new Set([...prevSelIds, ...hitBones])) : hitBones;
-            const mergedLayers = additive ? Array.from(new Set([...prevLayerIds, ...hitLayers])) : hitLayers;
+            // 姿势模式：素材选中集保持为空（不选图层）
+            const mergedLayers = layerSelectable
+              ? (additive ? Array.from(new Set([...prevLayerIds, ...hitLayers])) : hitLayers)
+              : [];
             store.selectBox(mergedBones, mergedLayers);
           }
           // 清理框选矩形
@@ -1901,6 +2139,97 @@ export function BoneEditor() {
       a.stage.on('pointermove', onPointerMove);
       a.stage.on('pointerup', onPointerUp);
       a.stage.on('pointerupoutside', onPointerUp);
+
+      // ★ 选中图层 + 变换工具时：layerHandles 接收 pointerdown 启动 layer-transform 拖动。
+      //   一次绑定即可（drawLayerHandles 每帧清空但不 destroy Gfx，事件正常发到 layerHandles.target）。
+      layerHandles.eventMode = 'static';
+      // ★ hover 高亮：pointermove 时把屏幕坐标转到手柄局部，按工具调对应 zone 检测
+      //   → 把对应轴画白；同时设置光标样式以提示操作类型
+      const updateLayerHandleHover = (gx: number, gy: number) => {
+        const st = usePixiBonesStore.getState();
+        if (!st.selectedLayerId || !st.activeTool || st.editorMode === 'create' || st.attachingLayerId) {
+          if (layerHandleHover !== null) {
+            layerHandleHover = null;
+            a.canvas.style.cursor = 'default';
+          }
+          return;
+        }
+        const tool = st.activeTool;
+        const lt = st.layerTransforms[st.selectedLayerId] ?? { tx: 0, ty: 0, rotation: 0, scaleX: 1, scaleY: 1, skewX: 0, skewY: 0 };
+        const all = allLayersOf(st.psd, st.images);
+        const layer = all.find((l) => l.id === st.selectedLayerId);
+        if (!layer) return;
+        // ★ 锚点 = 图层中心（与绘制手柄一致）
+        const { x: ax, y: ay } = layerAnchorScreen(layer, lt);
+        const c = Math.cos(-lt.rotation);
+        const s = Math.sin(-lt.rotation);
+        const dx = gx - ax;
+        const dy = gy - ay;
+        const lx = dx * c - dy * s;
+        const ly = dx * s + dy * c;
+        let zone: 'red' | 'green' | 'center' | null = null;
+        if (tool === 'move') zone = detectMoveZone(lx, ly);
+        else if (tool === 'scale') zone = detectScaleZone(lx, ly);
+        else if (tool === 'shear') zone = Math.abs(lx) < 4 ? 'center' : (lx < 0 ? 'red' : 'green');
+        // rotate 永远整个手柄 = 一个区，不单独高亮
+        if (tool === 'rotate') {
+          // 整个圆环都是有效区，高亮不强分区
+          const R = 30;
+          if (lx * lx + ly * ly <= R * R) zone = 'center';
+          else zone = null;
+        }
+        if (layerHandleHover !== zone) {
+          layerHandleHover = zone;
+          // ★ 光标必须设到 layerHandles.cursor —— PIXI 每次 pointermove 会用「命中对象的 cursor」
+          //   覆写 canvas.style.cursor，直接写 canvas.style 会被立刻覆盖掉。
+          if (zone === 'red') layerHandles.cursor = tool === 'scale' ? 'ew-resize' : 'move';
+          else if (zone === 'green') layerHandles.cursor = tool === 'scale' ? 'ns-resize' : 'move';
+          else if (zone === 'center') layerHandles.cursor = tool === 'scale' ? 'nwse-resize' : tool === 'rotate' ? 'crosshair' : 'move';
+          else layerHandles.cursor = 'default';
+          // ★ hover 变化后立刻重画手柄（否则白色高亮不会出现）
+          drawLayerHandles(st.psd, st.images, st.selectedLayerId, tool, st.layerTransforms);
+        }
+      };
+      layerHandles.on('pointermove', (ev: FederatedPointerEvent) => {
+        updateLayerHandleHover(ev.global.x, ev.global.y);
+      });
+      layerHandles.on('pointerleave', () => {
+        if (layerHandleHover !== null) {
+          layerHandleHover = null;
+          layerHandles.cursor = 'default';
+          const st = usePixiBonesStore.getState();
+          drawLayerHandles(st.psd, st.images, st.selectedLayerId, st.activeTool, st.layerTransforms);
+        }
+      });
+      layerHandles.on('pointerdown', (ev: FederatedPointerEvent) => {
+        if (ev.button !== 0) return;
+        const st = usePixiBonesStore.getState();
+        const layerId = st.selectedLayerId;
+        if (!layerId || !st.activeTool) return;
+        // 创建模式、或在拾取父级模式、或层级在选骨骼时：不响应
+        if (st.editorMode === 'create' || st.attachingLayerId) return;
+        ev.stopPropagation();
+        const lt = st.layerTransforms[layerId] ?? { tx: 0, ty: 0, rotation: 0, scaleX: 1, scaleY: 1, skewX: 0, skewY: 0 };
+        const all = allLayersOf(st.psd, st.images);
+        const layer = all.find((l) => l.id === layerId);
+        if (!layer) return;
+        // 锚点 = 图层中心（与绘制 / hover 一致）
+        const { x: ax, y: ay } = layerAnchorScreen(layer, lt);
+        // ★ 推一次历史快照
+        st.pushHistory();
+        const { zone, axisAngle, handleRotation } = layerZoneAndAxis(st.activeTool, ev.global.x, ev.global.y, ax, ay, lt);
+        dragState = {
+          kind: 'layer-transform',
+          tool: st.activeTool,
+          layerId,
+          start: lt,
+          startScreen: { x: ev.global.x, y: ev.global.y },
+          anchorScreen: { x: ax, y: ay },
+          zone,
+          axisAngle,
+          handleRotation,
+        };
+      });
 
       // ★ hover 兜底：鼠标离开整个 stage 时清空 hover 状态。
       // 因为 drawBones 会 destroy 旧 jointHit（不触发 leave），新的也不会自动 enter，
@@ -1979,6 +2308,40 @@ export function BoneEditor() {
             preview,
           } as typeof dragState & { parentWorld: { x: number; y: number } };
         } else if (ev.target === a.stage || isLayerSprite(ev.target)) {
+          const st0p = usePixiBonesStore.getState();
+          // ★ 选中图层 + 4 个变换工具激活时：走 layer-transform，不进框选
+          if (
+            isLayerSprite(ev.target)
+            && st0p.selectedLayerId
+            && st0p.activeTool
+            && st0p.editorMode !== 'create'
+            && !st0p.attachingLayerId
+          ) {
+            ev.stopPropagation();
+            const layerId = st0p.selectedLayerId;
+            const lt = st0p.layerTransforms[layerId] ?? { tx: 0, ty: 0, rotation: 0, scaleX: 1, scaleY: 1, skewX: 0, skewY: 0 };
+            const all = allLayersOf(st0p.psd, st0p.images);
+            const layer = all.find((l) => l.id === layerId);
+            if (layer) {
+              // 锚点 = 图层中心（与绘制 / hover 一致）
+              const { x: ax, y: ay } = layerAnchorScreen(layer, lt);
+              // ★ 推一次历史快照（拖动期间不再入栈，结束才能回退到拖动前状态）
+              st0p.pushHistory();
+              const { zone, axisAngle, handleRotation } = layerZoneAndAxis(st0p.activeTool, ev.global.x, ev.global.y, ax, ay, lt);
+              dragState = {
+                kind: 'layer-transform',
+                tool: st0p.activeTool,
+                layerId,
+                start: lt,
+                startScreen: { x: ev.global.x, y: ev.global.y },
+                anchorScreen: { x: ax, y: ay },
+                zone,
+                axisAngle,
+                handleRotation,
+              };
+              return;
+            }
+          }
           // Pose 模式：在空白或素材上按下 = 启动框选
           //   - 单击素材 = 选中；Shift+单击 = 加选（pointerup 时判定「是否拖动」）
           //   - 拖动 = 框选；按住 Shift = 增量框选
@@ -2071,7 +2434,7 @@ export function BoneEditor() {
       applyVisibility(initial.psd, initial.images, initial.layerVisibility);
       drawHighlight(initial.psd, initial.images, initial.selectedLayerIds);
       buildSkeleton(initial.bones);
-      applyBindings(initial.psd, initial.images, initial.layerBindings);
+      applyBindings(initial.psd, initial.images, initial.layerBindings, initial.layerTransforms);
       drawBones(initial.bones, initial.selectedBoneId);
 
       let prev = usePixiBonesStore.getState();
@@ -2139,9 +2502,10 @@ export function BoneEditor() {
           }
         }
         applyVisibility(state.psd, state.images, state.layerVisibility);
-        applyBindings(state.psd, state.images, state.layerBindings);
+        applyBindings(state.psd, state.images, state.layerBindings, state.layerTransforms);
         drawHighlight(state.psd, state.images, state.selectedLayerIds);
         drawBones(state.bones, state.selectedBoneId, state.selectedBoneIds);
+        drawLayerHandles(state.psd, state.images, state.selectedLayerId, state.activeTool, state.layerTransforms);
         center(state.psd);
         drawGrid(state.psd);
         drawCrosshair(state.psd);
@@ -2633,6 +2997,56 @@ function pointInPolygon(x: number, y: number, poly: Array<{ x: number; y: number
     }
   }
   return inside;
+}
+
+/**
+ * 图层变换手柄的「分区」与「约束轴」判定。
+ *   - move  : red=沿图层 X 轴，green=垂直（+90°），center=自由
+ *   - scale : red=沿 X 轴缩放，green=沿 Y 轴缩放，center=等比
+ *   - shear : red=X 倾斜，green=Y 倾斜，center=自由倾斜
+ *   - rotate: 总是绕锚点旋转，zone/axisAngle 占位（zone=‘center'，axisAngle=0）
+ *
+ * 实现：把屏幕坐标转到「手柄局部坐标系」（以手柄位置为原点，旋转 = -handleRotation）。
+ * 然后复用骨骼的 detectMoveZone / detectScaleZone；shear 自行按 lx 符号切 red/green。
+ */
+function layerZoneAndAxis(
+  tool: 'rotate' | 'move' | 'scale' | 'shear',
+  gx: number, gy: number,
+  anchorX: number, anchorY: number,
+  lt: { rotation: number },
+): { zone: 'red' | 'green' | 'center'; axisAngle: number; handleRotation: number } {
+  const handleRotation = lt.rotation || 0;
+  if (tool === 'rotate') {
+    return { zone: 'center', axisAngle: 0, handleRotation };
+  }
+  // 把全局坐标转到手柄局部（逆旋转 -handleRotation）
+  const c = Math.cos(-handleRotation);
+  const s = Math.sin(-handleRotation);
+  const dx = gx - anchorX;
+  const dy = gy - anchorY;
+  const lx = dx * c - dy * s;
+  const ly = dx * s + dy * c;
+  if (tool === 'move') {
+    const zone = detectMoveZone(lx, ly);
+    const axisAngle = zone === 'green' ? handleRotation + Math.PI / 2 : handleRotation;
+    return { zone, axisAngle, handleRotation };
+  }
+  if (tool === 'scale') {
+    const zone = detectScaleZone(lx, ly);
+    const axisAngle = zone === 'green' ? handleRotation + Math.PI / 2 : handleRotation;
+    return { zone, axisAngle, handleRotation };
+  }
+  if (tool === 'shear') {
+    // 手柄视图：左/红=水平条、右/绿=水平条、上/绿=垂直条、下/绿=垂直条；
+    // 简化：lx<0 → red (X 倾斜)，lx>0 → green (Y 倾斜)，|lx| 小 → center
+    let zone: 'red' | 'green' | 'center';
+    if (Math.abs(lx) < 4) zone = 'center';
+    else if (lx < 0) zone = 'red';
+    else zone = 'green';
+    const axisAngle = zone === 'green' ? handleRotation + Math.PI / 2 : handleRotation;
+    return { zone, axisAngle, handleRotation };
+  }
+  return { zone: 'center', axisAngle: 0, handleRotation };
 }
 
 /**

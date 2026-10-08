@@ -56,6 +56,15 @@ export interface PixiBonesState {
   addImage: (layer: PixiBonesLayer) => void;
   removeImage: (id: string) => void;
   layerVisibility: Record<string, boolean>;
+  /** 仿 Spine SlotTransform：每个图层（slot）自己的局部变换。
+   *  - rotation：弧度
+   *  - scaleX/scaleY：缩放
+   *  - skewX/skewY：倾斜（弧度）
+   *  - tx/ty：相对原 (left, top) 锚点的额外平移
+   *  未设置 = 单位变换。原始 left/top/width/height 不变。 */
+  layerTransforms: Record<string, { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }>;
+  setLayerTransform: (id: string, t: { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }) => void;
+  resetLayerTransform: (id: string) => void;
   /** 绘制顺序（layerId 列表，索引 0 = 最先绘制 = 最底层）。
    *  空数组 = 用自然顺序（PSD 图层 + 单独导入图片的原始顺序）。 */
   layerOrder: string[];
@@ -128,11 +137,11 @@ export interface PixiBonesState {
   /** 最近工程列表（按打开时间倒序，最多 8 个，localStorage 持久化） */
   recentProjects: Array<{ id: string; name: string; openedAt: number }>;
   pushRecentProject: (id: string, name: string) => void;
-  // ===== Undo/Redo 撤销重做（仅记录 bones 的快照） =====
-  /** 历史快照栈（最多 50 步），每项是 bones + selectedBoneId 的快照 */
-  historyPast:  Array<{ bones: BoneNode[]; selectedBoneId: string | null }>;
-  historyFuture: Array<{ bones: BoneNode[]; selectedBoneId: string | null }>;
-  /** 把当前 bones 快照推入 past（结构性变化前调用） */
+  // ===== Undo/Redo 撤销重做（记录 bones + layerTransforms 的快照） =====
+  /** 历史快照栈（最多 50 步），每项是 bones + layerTransforms + selectedBoneId 的快照 */
+  historyPast:  Array<{ bones: BoneNode[]; layerTransforms: Record<string, { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }>; selectedBoneId: string | null }>;
+  historyFuture: Array<{ bones: BoneNode[]; layerTransforms: Record<string, { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }>; selectedBoneId: string | null }>;
+  /** 把当前快照推入 past（结构性变化前调用） */
   pushHistory: () => void;
   undo: () => void;
   redo: () => void;
@@ -262,6 +271,15 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   psd: null,
   images: [],
   layerVisibility: {},
+  layerTransforms: {},
+  setLayerTransform: (id, t) => set((state) => ({
+    layerTransforms: { ...state.layerTransforms, [id]: t },
+  })),
+  resetLayerTransform: (id) => set((state) => {
+    const next = { ...state.layerTransforms };
+    delete next[id];
+    return { layerTransforms: next };
+  }),
   layerOrder: [],
   setLayerOrder: (ids) => set({ layerOrder: ids }),
   selectedLayerId: null,
@@ -349,13 +367,17 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     try { localStorage.setItem('pixibones.recent', JSON.stringify(trimmed)); } catch {}
   },
 
-  // ===== Undo / Redo（快照 bones + selectedBoneId）=====
+  // ===== Undo / Redo（快照 bones + layerTransforms + selectedBoneId）=====
   historyPast:  [],
   historyFuture: [],
   pushHistory: () => {
     const s = get();
-    // 深拷贝当前 bones 快照
-    const snap = { bones: JSON.parse(JSON.stringify(s.bones)), selectedBoneId: s.selectedBoneId };
+    // 深拷贝当前 bones 快照 + layerTransforms（解构后是 plain object，可直接 JSON 化）
+    const snap = {
+      bones: JSON.parse(JSON.stringify(s.bones)),
+      layerTransforms: JSON.parse(JSON.stringify(s.layerTransforms)),
+      selectedBoneId: s.selectedBoneId,
+    };
     const past = [...s.historyPast, snap].slice(-50);  // 最多 50 步
     set({ historyPast: past, historyFuture: [] });
   },
@@ -365,12 +387,17 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     const past = [...s.historyPast];
     const prev = past.pop()!;
     // 当前状态推到 future
-    const currentSnap = { bones: JSON.parse(JSON.stringify(s.bones)), selectedBoneId: s.selectedBoneId };
+    const currentSnap = {
+      bones: JSON.parse(JSON.stringify(s.bones)),
+      layerTransforms: JSON.parse(JSON.stringify(s.layerTransforms)),
+      selectedBoneId: s.selectedBoneId,
+    };
     const future = [currentSnap, ...s.historyFuture];
     set({
       historyPast: past,
       historyFuture: future,
       bones: prev.bones,
+      layerTransforms: prev.layerTransforms,
       selectedBoneId: prev.selectedBoneId,
     });
   },
@@ -379,12 +406,17 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     if (s.historyFuture.length === 0) return;
     const [next, ...rest] = s.historyFuture;
     // 当前状态推到 past
-    const currentSnap = { bones: JSON.parse(JSON.stringify(s.bones)), selectedBoneId: s.selectedBoneId };
+    const currentSnap = {
+      bones: JSON.parse(JSON.stringify(s.bones)),
+      layerTransforms: JSON.parse(JSON.stringify(s.layerTransforms)),
+      selectedBoneId: s.selectedBoneId,
+    };
     const past = [...s.historyPast, currentSnap];
     set({
       historyPast: past,
       historyFuture: rest,
       bones: next.bones,
+      layerTransforms: next.layerTransforms,
       selectedBoneId: next.selectedBoneId,
     });
   },
@@ -417,6 +449,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     set({
       psd: p,
       layerVisibility: {},
+      layerTransforms: {},
       layerOrder: [],
       selectedLayerId: null,
       selectedLayerIds: [],
@@ -472,14 +505,19 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       attachingLayerId: null,
     })),
   removeImage: (id) =>
-    set((state) => ({
-      images: state.images.filter((l) => l.id !== id),
-      selectedLayerId: state.selectedLayerId === id ? null : state.selectedLayerId,
-      selectedLayerIds: state.selectedLayerIds.filter((lid) => lid !== id),
-      layerBindings: Object.fromEntries(
-        Object.entries(state.layerBindings).filter(([k]) => k !== id),
-      ),
-    })),
+    set((state) => {
+      const nextTransforms = { ...state.layerTransforms };
+      delete nextTransforms[id];
+      return {
+        images: state.images.filter((l) => l.id !== id),
+        selectedLayerId: state.selectedLayerId === id ? null : state.selectedLayerId,
+        selectedLayerIds: state.selectedLayerIds.filter((lid) => lid !== id),
+        layerBindings: Object.fromEntries(
+          Object.entries(state.layerBindings).filter(([k]) => k !== id),
+        ),
+        layerTransforms: nextTransforms,
+      };
+    }),
   toggleLayerVisibility: (id) =>
     set((state) => {
       const cur = state.layerVisibility[id];
@@ -516,13 +554,18 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     attachingLayerId: null,
   }),
   // 框选：同时设置骨骼 + 素材（互不清空）
-  selectBox: (boneIds, layerIds) => set({
-    selectedBoneIds: boneIds,
-    selectedBoneId: boneIds[0] ?? null,
-    selectedLayerIds: layerIds,
-    selectedLayerId: layerIds[0] ?? null,
-    selectedSectionKey: null,
-    attachingLayerId: null,
+  selectBox: (boneIds, layerIds) => set((s) => {
+    // ★ 变换工具（旋转/移动/缩放/倾斜）激活时，图层与骨骼不能同时选中 —— 以骨骼为主：
+    //   只要框中有骨骼，就丢弃图层选中。
+    const layers = (s.activeTool !== null && boneIds.length > 0) ? [] : layerIds;
+    return {
+      selectedBoneIds: boneIds,
+      selectedBoneId: boneIds[0] ?? null,
+      selectedLayerIds: layers,
+      selectedLayerId: layers[0] ?? null,
+      selectedSectionKey: null,
+      attachingLayerId: null,
+    };
   }),
   selectSection: (key) => set({
     selectedSectionKey: key,
@@ -542,12 +585,23 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
 //   - 选 mode ⇒ editorMode = m，activeTool = null
 //   - 选 transform tool ⇒ activeTool = t，editorMode = 'idle'
 // 调用方不需要关心互斥，store 自动保证两者只有一个高亮。
-setEditorMode: (m) => set({ editorMode: m, activeTool: null }),
-setActiveTool: (t) => set({
+setEditorMode: (m) => set({
+  editorMode: m,
+  activeTool: null,
+  // ★ 姿势模式下画布上的图层不可选：进入 pose 时清空图层选中（避免高亮残留）
+  ...(m === 'pose' ? { selectedLayerId: null, selectedLayerIds: [] } : {}),
+}),
+setActiveTool: (t) => set((s) => ({
   activeTool: t,
   // 选 transform tool 时退出 pose/weights/create；其他情况保持现状
   editorMode: t !== null ? 'idle' as const : 'pose' as const,
-}),
+  // 关闭 transform tool ⇒ 回到 pose ⇒ 同样清空图层选中
+  ...(t === null ? { selectedLayerId: null, selectedLayerIds: [] } : {}),
+  // ★ 激活变换工具时：若骨骼与图层同时被选中，以骨骼为主（清掉图层）
+  ...(t !== null && s.selectedBoneIds.length > 0
+    ? { selectedLayerId: null, selectedLayerIds: [] }
+    : {}),
+})),
   setTransformSpace: (s) => set({ transformSpace: s }),
   setViewport: (v) => set({ viewport: v }),
   setRender: (r) => set({ render: r }),
