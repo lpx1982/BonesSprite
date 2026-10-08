@@ -95,6 +95,9 @@ export function BottomToolbar() {
   const toolbarOffsetX = usePixiBonesStore((s) => s.toolbarOffsetX);
   const setToolbarOffsetX = usePixiBonesStore((s) => s.setToolbarOffsetX);
   const showRightPanel = usePixiBonesStore((s) => s.showRightPanel);
+  /** 网格编辑模式：底部卡片组向下渐隐让位给「编辑网格」浮动面板 */
+  const meshEditSlotId = usePixiBonesStore((s) => s.meshEditSlotId);
+  const toolbarHidden = !!meshEditSlotId;
   const { t } = useT();
 
   // 卡片组横向拖动：pointer events + setPointerCapture（在卡片下方同一目标下）
@@ -174,6 +177,10 @@ export function BottomToolbar() {
         bottom: editorTab === 'animate' ? timelineHeight + 12 : 12,
         // 右侧层级树面板打开时，把 right 也让出来，卡片组就不会跟右面板重叠
         right: showRightPanel ? 288 /* 18rem = w-72 = 288px */ + 12 : 0,
+        // 网格编辑时向下渐隐（让位给底部中央的「编辑网格」浮动面板）
+        transform: toolbarHidden ? 'translateY(110px)' : 'translateY(0)',
+        opacity: toolbarHidden ? 0 : 1,
+        transition: 'transform 0.24s ease, opacity 0.24s ease',
       }}
     >
       {/* 锁按钮：作为 wrapper 的第一个子元素，跟随 wrapper translateX 自动跟随
@@ -187,6 +194,8 @@ export function BottomToolbar() {
           transform: `translateX(${toolbarOffsetX}px)`,
           transition: 'transform 0.15s',
           cursor: toolbarLocked ? 'default' : 'ew-resize',
+          // 渐隐后不再接收鼠标事件
+          pointerEvents: toolbarHidden ? 'none' : 'auto',
         }}
       >
         <button
