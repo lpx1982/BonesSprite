@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { usePixiBonesStore } from './store';
 import { useT } from './i18n';
 
@@ -789,29 +790,90 @@ function MeshEditPanel() {
 //    「实时」调整 → 调 store 即可，BoneEditor 订阅后会实时算出顶点数显示
 //    「确定」→ 写入网格 + 入历史；「取消」→ 仅关闭弹窗
 // =================================================================================
-const traceBtnStyle = (cancel: boolean): React.CSSProperties => ({
-  display: 'flex', alignItems: 'center', gap: 4,
-  height: 24, padding: '0 10px', borderRadius: 3,
-  border: '1px solid ' + (cancel ? '#7a3030' : '#444'),
-  background: cancel ? '#3b1c1c' : '#3a3a3a',
-  color: 'var(--spine-text)', fontSize: 12, cursor: 'pointer',
-});
+const traceBtnStyle: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 5,
+  height: 26, padding: '0 12px', borderRadius: 3,
+  border: '1px solid #5a5a5a',
+  background: '#3a3a3a',
+  color: '#e6e6e6', fontSize: 13, cursor: 'pointer',
+};
 
-/** 描绘按钮里的小画笔图标（红色斜线） */
+/**
+ * 描绘弹窗的尺寸与配色（集中在这里改，方便对齐 Spine 截图）。
+ */
+const TDIALOG = {
+  W: 560,
+  TITLE_H: 30,
+  ROW_H: 26,
+  FOOTER_H: 46,
+  PAD_H: 14,
+  PAD_V: 10,
+  FIELD_W: 150,        // 常规「名称 + 数值」框宽
+  FIELD_W_LONG: 186,   // Alpha阈值（名字长）
+  FIELD_W_SHORT: 108,  // 填充
+  SLIDER_S: 108,       // 填充那根短滑条
+  BG: '#303032',
+  TITLE_BG: '#3f3f3f',
+  FIELD_BG: '#363638',
+  BORDER: '#4d4d4d',
+  TEXT: '#dcdcdc',
+  VALUE: '#f0f0f0',
+  /** 滑条两段式配色：左 = 已选（灰蓝），右 = 剩余（近黑） */
+  FILL: '#93a6ae',
+  REST: '#0f0f0f',
+  track: (v: number, min: number, max: number): React.CSSProperties => {
+    const pct = Math.max(0, Math.min(1, (v - min) / (max - min))) * 100;
+    return {
+      height: TDIALOG.ROW_H,
+      borderRadius: 3,
+      border: `1px solid ${TDIALOG.BORDER}`,
+      background: `linear-gradient(to right, ${TDIALOG.FILL} 0 ${pct}%, ${TDIALOG.REST} ${pct}% 100%)`,
+    };
+  },
+};
+
+/** 弹窗里的一行参数（水平排列：方框 + 滑条，可多组） */
+function TDRow({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex items-center" style={{ height: TDIALOG.ROW_H, margin: '5px 0', gap: 10 }}>
+      {children}
+    </div>
+  );
+}
+
+/** 描绘按钮里的小画笔图标 */
 function TraceIconBrush() {
   return (
-    <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden>
-      <path d="M2 11.5 C4 6, 7 4, 12 3.5" stroke="#5BBE5D" strokeWidth="1.4" strokeLinecap="round" fill="none" />
-      <path d="M3 12.4 L4 9.6 L2.2 9.6 L2.6 11 L1.6 11.6 L3 12.4 Z" fill="#5BBE5D" />
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+      <path d="M2 11.5 C4 6, 7 4, 12 3.5" stroke="#8FC7E8" strokeWidth="1.4" strokeLinecap="round" fill="none" />
+      <path d="M3 12.4 L4 9.6 L2.2 9.6 L2.6 11 L1.6 11.6 L3 12.4 Z" fill="#8FC7E8" />
     </svg>
   );
 }
 /** 调整按钮里的小循环箭头 */
 function TraceIconAdjust() {
   return (
-    <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden>
-      <path d="M12 7 A5 5 0 1 1 10.2 3.2" stroke="#5BBE5D" strokeWidth="1.4" strokeLinecap="round" fill="none" />
-      <path d="M10.6 1.2 L11.4 4.2 L8.4 4.4" stroke="#5BBE5D" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+      <path d="M12 7 A5 5 0 1 1 10.2 3.2" stroke="#5BBE5D" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+      <path d="M10.6 1.2 L11.4 4.2 L8.4 4.4" stroke="#5BBE5D" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    </svg>
+  );
+}
+/** 取消按钮：红圈 + 白斜杠 */
+function TraceIconCancel() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 15 15" aria-hidden>
+      <circle cx="7.5" cy="7.5" r="6.4" fill="#C0392B" />
+      <path d="M4.6 4.6 L10.4 10.4" stroke="#fff" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  );
+}
+/** 确定按钮：绿圈 + 白勾 */
+function TraceIconConfirm() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 15 15" aria-hidden>
+      <circle cx="7.5" cy="7.5" r="6.4" fill="#4CAF50" />
+      <path d="M4.3 7.7 L6.6 10 L10.7 5.4" stroke="#fff" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" fill="none" />
     </svg>
   );
 }
@@ -839,123 +901,127 @@ function TraceDialog() {
 
   if (!open) return null;
 
-  const labelStyle: React.CSSProperties = {
-    width: 64, textAlign: 'left', color: 'var(--spine-text)', fontSize: 12, flex: 'none',
-  };
-  const valueBox: React.CSSProperties = {
-    width: 44, height: 18, marginLeft: 8, marginRight: 4,
-    background: 'transparent', border: '1px solid transparent',
-    color: 'var(--spine-text)', fontSize: 12, textAlign: 'left',
-    display: 'flex', alignItems: 'center', flex: 'none',
-  };
-  const trackBg = (v: number, min: number, max: number) => {
-    // Spine 风格两段式：值之前深色（"剩余"）→ 值之后深色（"已选"）。
-    // 但截图里实际是：值=0 时整条深色；值 = max 时整条浅色（蓝/亮）；
-    // 中间过渡：左半段亮、右半段暗 → 反过来才对。
-    // 调整：左 = 已选（亮），右 = 剩余（暗）。
-    const pct = Math.max(0, Math.min(1, (v - min) / (max - min))) * 100;
-    return `linear-gradient(to right, #4A90C8 0 ${pct}%, #3a3a3a ${pct}% 100%)`;
-  };
-  const ParamRow = (lbl: string, v: number, setV: (n: number) => void, min: number, max: number, step: number) => (
-    <div className="flex items-center" style={{ height: 24, margin: '2px 0' }}>
-      <span style={labelStyle}>{lbl}</span>
-      <span style={valueBox}>{v}</span>
-      <input
-        type="range" className="trace-slider"
-        min={min} max={max} step={step} value={v}
-        onChange={(e) => setV(parseFloat(e.target.value))}
-        onMouseUp={() => requestTrace()}  // 拖动结束后实时重算
-        style={{ flex: 1, background: trackBg(v, min, max) }}
-      />
+  /** 参数行左侧的「名称 + 数值」方框（仿 Spine：和滑条同高、同款描边） */
+  const field = (lbl: string, v: string | number, w: number) => (
+    <div
+      className="flex items-center"
+      style={{
+        width: w, height: TDIALOG.ROW_H, flex: 'none',
+        border: `1px solid ${TDIALOG.BORDER}`, borderRadius: 3,
+        background: TDIALOG.FIELD_BG, padding: '0 8px',
+      }}
+    >
+      <span style={{ fontSize: 13, color: TDIALOG.TEXT }}>{lbl}</span>
+      <span style={{ marginLeft: 'auto', fontSize: 13, color: TDIALOG.VALUE }}>{v}</span>
     </div>
   );
 
-  return (
+  const slider = (
+    v: number, setV: (n: number) => void, min: number, max: number, step: number,
+    extra?: React.CSSProperties,
+  ) => (
+    <input
+      type="range" className="trace-slider"
+      min={min} max={max} step={step} value={v}
+      onChange={(e) => setV(parseFloat(e.target.value))}
+      onMouseUp={() => requestTrace()}   // 松开后按当前参数实时重算
+      style={{ ...TDIALOG.track(v, min, max), ...extra }}
+    />
+  );
+
+  // ★ 必须 portal 到 body：本组件挂在 MeshEditPanel 里，而它的祖先有 transform，
+  //   会让 position:fixed 相对该祖先定位（对话框跑到面板里、底栏被挤出视口）。
+  //   portal 到 body 后 fixed 才真正相对视口居中。
+  return createPortal((
     <div
       role="dialog" aria-label="编辑网格：描绘"
       onClick={(e) => e.stopPropagation()}
       style={{
         position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-        width: 460, zIndex: 50,
-        background: 'var(--spine-bg-panel)',
-        border: '1px solid #2a2a2a', borderRadius: 4,
-        boxShadow: '0 10px 28px rgba(0,0,0,0.6)',
-        padding: 0, color: 'var(--spine-text)',
+        width: TDIALOG.W, zIndex: 200,
+        background: TDIALOG.BG,
+        border: '1px solid #1b1b1b', borderRadius: 5,
+        boxShadow: '0 12px 32px rgba(0,0,0,0.62)',
+        padding: 0, color: TDIALOG.TEXT, userSelect: 'none',
       }}
     >
       {/* 标题栏 */}
       <div
         className="flex items-center"
         style={{
-          height: 28, background: 'var(--spine-bg-toolbar)',
-          padding: '0 10px', borderBottom: '1px solid #1f1f1f',
-          borderTopLeftRadius: 4, borderTopRightRadius: 4,
+          height: TDIALOG.TITLE_H, background: TDIALOG.TITLE_BG,
+          padding: '0 10px 0 14px', borderBottom: '1px solid #262626',
+          borderTopLeftRadius: 5, borderTopRightRadius: 5,
         }}
       >
-        <span style={{ fontSize: 13, fontWeight: 500 }}>编辑网格: 描绘</span>
+        <span style={{ fontSize: 13.5, fontWeight: 500 }}>编辑网格: 描绘</span>
         <button
           type="button" title="关闭（取消）"
           onClick={() => { setVertexCount(0); setOpen(false); }}
           style={{
             marginLeft: 'auto', background: 'transparent', border: 'none',
-            color: 'var(--spine-text-dim)', cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: 0,
+            color: '#b9b9b9', cursor: 'pointer', fontSize: 17, lineHeight: 1, padding: 0,
           }}
         >✕</button>
       </div>
 
-      {/* 5 行参数 */}
-      <div style={{ padding: '10px 12px 4px' }}>
-        {ParamRow('细节', detail, setDetail, 1, 100, 1)}
-        {ParamRow('凹度', concavity, setConcavity, 1, 100, 1)}
-        {ParamRow('精致度', refinement, setRefinement, 1, 100, 1)}
-        {ParamRow('统一', merge, setMerge, 0, 1, 0.01)}
-        <div className="flex items-center" style={{ height: 24, margin: '2px 0' }}>
-          <span style={labelStyle}>Alpha阈值</span>
-          <span style={valueBox}>{alphaThr}</span>
-          <input
-            type="range" className="trace-slider"
-            min={0} max={255} step={1} value={alphaThr}
-            onChange={(e) => setAlpha(parseFloat(e.target.value))}
-            onMouseUp={() => requestTrace()}
-            style={{ flex: 1, background: trackBg(alphaThr, 0, 255) }}
-          />
-          <span style={{ ...valueBox, marginLeft: 12 }}>填充</span>
-          <span style={valueBox}>{padding}</span>
-          <input
-            type="range" className="trace-slider"
-            min={0} max={32} step={1} value={padding}
-            onChange={(e) => setPadding(parseFloat(e.target.value))}
-            onMouseUp={() => requestTrace()}
-            style={{ width: 100, background: trackBg(padding, 0, 32) }}
-          />
-        </div>
+      {/* 参数行 */}
+      <div style={{ padding: `${TDIALOG.PAD_V}px ${TDIALOG.PAD_H}px 2px` }}>
+        <TDRow>
+          {field('细节', detail, TDIALOG.FIELD_W)}
+          {slider(detail, setDetail, 1, 100, 1, { flex: 1 })}
+        </TDRow>
+        <TDRow>
+          {field('凹度', concavity, TDIALOG.FIELD_W)}
+          {slider(concavity, setConcavity, 1, 100, 1, { flex: 1 })}
+        </TDRow>
+        <TDRow>
+          {field('精致度', refinement, TDIALOG.FIELD_W)}
+          {slider(refinement, setRefinement, 1, 100, 1, { flex: 1 })}
+        </TDRow>
+        <TDRow>
+          {field('统一', merge, TDIALOG.FIELD_W)}
+          {slider(merge, setMerge, 0, 1, 0.01, { flex: 1 })}
+        </TDRow>
+        {/* 最后一行两组：Alpha阈值 + 填充 */}
+        <TDRow>
+          {field('Alpha阈值', alphaThr, TDIALOG.FIELD_W_LONG)}
+          {slider(alphaThr, setAlpha, 0, 255, 1, { flex: 1 })}
+          {field('填充', padding, TDIALOG.FIELD_W_SHORT)}
+          {slider(padding, setPadding, 0, 32, 1, { width: TDIALOG.SLIDER_S })}
+        </TDRow>
       </div>
 
-      {/* 底部：左侧「描绘 / 调整」按钮 + 顶点数 + 右侧「取消 / 确定」 */}
+      {/* 底部：左侧「描绘 / 调整」+ 顶点数，右侧「取消 / 确定」 */}
       <div
         className="flex items-center"
-        style={{ height: 36, padding: '4px 8px 8px', borderTop: '1px solid #1f1f1f', marginTop: 4 }}
+        style={{
+          height: TDIALOG.FOOTER_H, padding: `0 ${TDIALOG.PAD_H}px`,
+          borderTop: '1px solid #262626', marginTop: 6,
+        }}
       >
         <button type="button"
           title="按当前参数重新描绘（实时刷新）"
           onClick={() => { if (meshEditSlot) requestTrace(); }}
-          style={traceBtnStyle(false)}
+          style={traceBtnStyle}
         ><TraceIconBrush />描绘</button>
-        <button type="button" title="调整（占位）" disabled style={traceBtnStyle(false)}><TraceIconAdjust />调整</button>
-        <span style={{ marginLeft: 16, fontSize: 12, color: 'var(--spine-text)' }}>顶点: {vertexCount}</span>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+        <button type="button" title="调整（占位）" disabled
+          style={{ ...traceBtnStyle, marginLeft: 6, opacity: 0.55, cursor: 'not-allowed' }}
+        ><TraceIconAdjust />调整</button>
+        <span style={{ marginLeft: 18, fontSize: 13, color: TDIALOG.TEXT }}>顶点: {vertexCount}</span>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
           <button type="button" title="取消（不写入网格）"
             onClick={() => { setVertexCount(0); setOpen(false); }}
-            style={traceBtnStyle(true)}
-          >取消</button>
+            style={traceBtnStyle}
+          ><TraceIconCancel />取消</button>
           <button type="button" title="应用当前参数到网格"
             onClick={() => { if (meshEditSlot) apply(); }}
-            style={{ ...traceBtnStyle(false), background: 'var(--spine-accent)', color: '#fff' }}
-          >确定</button>
+            style={traceBtnStyle}
+          ><TraceIconConfirm />确定</button>
         </div>
       </div>
     </div>
-  );
+  ), document.body);
 }
 
 // ---- 「编辑网格」面板的小图标（几何风格，颜色对齐 Spine）----

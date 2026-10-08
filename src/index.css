@@ -206,6 +206,44 @@ html, body, #root {
   border: none;
 }
 
+/* ============ 描绘弹窗滑条：两段式轨道 + 细竖线滑块（仿 Spine Trace Settings） ============ */
+/* 轨道底色（已选 / 剩余）由行内 background: linear-gradient(...) 提供 */
+.trace-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  outline: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+}
+.trace-slider::-webkit-slider-runnable-track {
+  background: transparent;
+  height: 26px;
+  border-radius: 3px;
+}
+.trace-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 3px;
+  height: 26px;
+  background: #d3dbde;
+  border: none;
+  border-radius: 0;
+  margin: 0;
+}
+.trace-slider::-moz-range-track {
+  background: transparent;
+  height: 26px;
+  border-radius: 3px;
+}
+.trace-slider::-moz-range-thumb {
+  width: 3px;
+  height: 26px;
+  background: #d3dbde;
+  border: none;
+  border-radius: 0;
+}
+
 /* ============ 右侧停靠面板左边缘的拖动分隔条（横向缩放手柄） ============ */
 .dock-resizer {
   background: transparent;
