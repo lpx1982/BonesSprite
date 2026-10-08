@@ -606,6 +606,8 @@ function MeshEditPanel() {
   const isolate = usePixiBonesStore((s) => s.meshIsolate);
   const setIsolate = usePixiBonesStore((s) => s.setMeshIsolate);
   const resetMesh = usePixiBonesStore((s) => s.resetMesh);
+  const newPolygon = usePixiBonesStore((s) => s.meshNewPolygon);
+  const setNewPolygon = usePixiBonesStore((s) => s.setMeshNewPolygon);
   const slots = usePixiBonesStore((s) => s.slots);
   const meshes = usePixiBonesStore((s) => s.attachmentMeshes);
 
@@ -705,9 +707,11 @@ function MeshEditPanel() {
         {/* 行 2：新建 / 重置 / 生成 / 描绘 */}
         <div className="flex items-center justify-center" style={{ gap: 4, marginBottom: 5 }}>
           <button
-            style={meshBtnStyle(false, true)}
-            title="新建顶点模式（待实现）"
-            disabled
+            style={meshBtnStyle(!!newPolygon, false)}
+            title={newPolygon
+              ? '取消描绘（Esc）'
+              : '新建：在图上逐点描绘轮廓，点回起点闭合（图片裁到轮廓内）'}
+            onClick={() => setNewPolygon(newPolygon ? null : [])}
           ><MeshIconNew />新建</button>
           <button
             style={meshBtnStyle(false, false)}

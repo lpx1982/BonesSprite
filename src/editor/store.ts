@@ -140,6 +140,11 @@ export interface PixiBonesState {
   /** 网格编辑：隔离（勾选后画布只显示正在编辑的那个插槽的图） */
   meshIsolate: boolean;
   setMeshIsolate: (v: boolean) => void;
+  /** 网格「新建」描绘中：已点出的轮廓点（附件局部坐标）。
+   *  null = 不在描绘；空数组 = 刚激活、还没点第一个点。
+   *  点回起点即闭合 → 用该多边形重建网格（图片裁到轮廓内）。 */
+  meshNewPolygon: Array<{ x: number; y: number }> | null;
+  setMeshNewPolygon: (pts: Array<{ x: number; y: number }> | null) => void;
   /** 线框：勾选后即使未选中该网格，也画出它的顶点和边（key = attachmentId） */
   meshWireframe: Record<string, boolean>;
   setMeshWireframe: (attachmentId: string, v: boolean) => void;
@@ -580,6 +585,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   setMeshDim: (v) => set({ meshDim: v }),
   meshIsolate: false,
   setMeshIsolate: (v) => set({ meshIsolate: v }),
+  meshNewPolygon: null,
+  setMeshNewPolygon: (pts) => set({ meshNewPolygon: pts }),
   meshWireframe: {},
   setMeshWireframe: (attachmentId, v) => set((state) => ({
     meshWireframe: { ...state.meshWireframe, [attachmentId]: v },

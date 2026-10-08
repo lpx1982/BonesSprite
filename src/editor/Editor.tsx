@@ -56,12 +56,15 @@ export function Editor() {
       const mod = e.metaKey || e.ctrlKey;
       if (!mod) {
         const key = e.key;
-        // Esc：退出「附件：设置父级」拾取模式 / 网格编辑模式
+        // Esc：退出「附件：设置父级」拾取 / 取消网格描绘 / 退出网格编辑
         if (key === 'Escape') {
           const s = usePixiBonesStore.getState();
           if (s.attachingSlotId) {
             e.preventDefault();
             s.cancelAttach();
+          } else if (s.meshNewPolygon) {
+            e.preventDefault();
+            s.setMeshNewPolygon(null);
           } else if (s.meshEditSlotId) {
             e.preventDefault();
             s.setMeshEditSlot(null);

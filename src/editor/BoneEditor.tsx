@@ -729,8 +729,11 @@ export function BoneEditor() {
         const editSlotId = s.meshEditSlotId;
         // 网格「隔离」：只画正在编辑的插槽的顶点 / 边
         const isolateId = s.meshIsolate ? s.meshEditSlotId : null;
+        // 正在描绘新轮廓时不画旧网格（避免干扰）
+        const drawingNew = !!s.meshNewPolygon;
 
         for (const slot of s.slots) {
+          if (drawingNew) break;
           if (isolateId && slot.id !== isolateId) continue;
           const aid = slot.activeAttachmentId;
           if (!aid) continue;
@@ -788,6 +791,48 @@ export function BoneEditor() {
             meshHandles.circle(p.x, p.y, r);
             meshHandles.stroke({ width: 1, color: 0x1E6FBF, alpha: isEditing ? 1 : 0.5 });
           }
+        }
+
+        // ---- 网格「新建」：正在描绘轮廓（逐点画多边形，点回起点即闭合）----
+        const newPoly = s.meshNewPolygon;
+        const editSlot = editSlotId ? s.slots.find((x) => x.id === editSlotId) ?? null : null;
+        const editLayer = editSlot?.activeAttachmentId
+          ? byId.get(editSlot.activeAttachmentId) ?? null
+          : null;
+        if (newPoly && editSlot && editLayer) {
+          // 图片原始边界的白色虚线框（提示描绘范围）
+          const c0 = attachmentLocalToScreen(editSlot.id, editLayer, 0, 0);
+          const c1 = attachmentLocalToScreen(editSlot.id, editLayer, editLayer.width, editLayer.height);
+          drawDashedRect(
+            meshHandles,
+            Math.min(c0.x, c1.x), Math.min(c0.y, c1.y),
+            Math.abs(c1.x - c0.x), Math.abs(c1.y - c0.y),
+            8, 6, 0xFFFFFF, 2,
+          );
+          const pts = newPoly.map((q) => attachmentLocalToScreen(editSlot.id, editLayer, q.x, q.y));
+          // 已画出的边（青绿实线）
+          if (pts.length >= 2) {
+            for (let i = 0; i + 1 < pts.length; i++) {
+              meshHandles.moveTo(pts[i].x, pts[i].y).lineTo(pts[i + 1].x, pts[i + 1].y);
+            }
+            meshHandles.stroke({ width: 2, color: 0x27D2BF, alpha: 1 });
+          }
+          // 从最后一个点到鼠标的预览虚线
+          if (pts.length >= 1 && lastPointer.x > -90000) {
+            const last = pts[pts.length - 1];
+            drawDashedLine(meshHandles, last.x, last.y, lastPointer.x, lastPointer.y, 6, 5, 0x4FB8F8, 1.5);
+          }
+          // 够 3 个点时，给起点画一圈提示（点它即可闭合）
+          if (pts.length >= 3) {
+            meshHandles.circle(pts[0].x, pts[0].y, 9);
+            meshHandles.stroke({ width: 1.5, color: 0x3BE06B, alpha: 0.9 });
+          }
+          // 顶点：最后一个绿色高亮（仿 Spine）
+          pts.forEach((q, i) => {
+            const isLast = i === pts.length - 1;
+            meshHandles.circle(q.x, q.y, isLast ? 5 : 4);
+            meshHandles.fill({ color: isLast ? 0x3BE06B : 0x27D2BF, alpha: 1 });
+          });
         }
       };
 
@@ -1079,6 +1124,32 @@ export function BoneEditor() {
       };
 
       /**
+       * 闭合「新建」描绘的轮廓 → 用该多边形重建网格。
+       * ★ UV 由每个点在图片上的位置决定（uv = position / 图层尺寸），
+       *   所以只有多边形内部的纹理会出现在网格里 —— 图片自然被裁到轮廓内。
+       */
+      const finishNewPolygon = (
+        attachmentId: string,
+        layer: PixiBonesLayer,
+        poly: Array<{ x: number; y: number }>,
+      ) => {
+        const s = usePixiBonesStore.getState();
+        s.setMeshNewPolygon(null);
+        if (poly.length < 3) return;
+        const indices = triangulatePolygon(poly);
+        if (indices.length < 3) return;   // 退化多边形：放弃
+        const vertices: number[] = [];
+        const uvs: number[] = [];
+        for (const p of poly) {
+          vertices.push(p.x, p.y);
+          uvs.push(p.x / layer.width, p.y / layer.height);
+        }
+        s.pushHistory();
+        s.setMeshData(attachmentId, { vertices, uvs, indices });
+        s.setMeshSelectedVertices([]);
+      };
+
+      /**
        * 鼠标悬停附件时的反馈（Gfx = attachmentHover）：
        *   1) 创建模式 + 按住 Command → 画白色虚线外框（提示将被 ⌘ 点击选中）
        *   2) 四变换工具（旋转/移动/缩放/倾斜）激活时 → 画白色虚线外框 +
@@ -1093,7 +1164,8 @@ export function BoneEditor() {
         //   - 创建模式 + 按住 Command（已有逻辑）
         //   - 四变换工具激活 + setup 模式（新增）
         const inCreateCmd = s.editorMode === 'create' && (createCmdHover || metaDown);
-        const inTransform = s.editorMode === 'idle' && s.activeTool !== null;
+        // 网格编辑模式下不显示变换工具的悬停白框（避免和网格描绘/顶点混淆）
+        const inTransform = s.editorMode === 'idle' && s.activeTool !== null && !s.meshEditSlotId;
         const showOutline = inTransform;
         const showDashedRect = inCreateCmd || inTransform;
         if (!showDashedRect && !showOutline) return;
@@ -2238,6 +2310,8 @@ export function BoneEditor() {
             ev.global.y,
             stHover.editorMode === 'create' && (ev.metaKey || metaDown),
           );
+          // 网格「新建」描绘中：鼠标移动 → 刷新「最后一点 → 鼠标」的预览虚线
+          if (stHover.meshNewPolygon) drawMeshHandles();
           return;
         }
         const st = usePixiBonesStore.getState();
@@ -2849,6 +2923,22 @@ export function BoneEditor() {
           if (ctx) {
             const p = screenToAttachmentLocal(ctx.slot.id, ctx.layer, ev.global.x, ev.global.y);
             if (p) {
+              // ★ 网格「新建」描绘中：点击逐点描绘轮廓；点回起点（12px 内）即闭合
+              if (stGrid.meshNewPolygon) {
+                ev.stopPropagation();
+                const poly = stGrid.meshNewPolygon;
+                if (poly.length >= 3) {
+                  const s0 = attachmentLocalToScreen(ctx.slot.id, ctx.layer, poly[0].x, poly[0].y);
+                  if (Math.hypot(s0.x - ev.global.x, s0.y - ev.global.y) < 12) {
+                    finishNewPolygon(ctx.attachmentId, ctx.layer, poly);
+                    drawMeshHandles();
+                    return;
+                  }
+                }
+                stGrid.setMeshNewPolygon([...poly, { x: p.x, y: p.y }]);
+                drawMeshHandles();
+                return;
+              }
               const pts = meshVerticesScreen(ctx.slot.id, ctx.layer, ctx.mesh);
               // 命中顶点（屏幕距离阈值 9px）
               let hitIdx = -1;
@@ -3416,6 +3506,82 @@ function distToSegment(
   let t = ((px - ax) * dx + (py - ay) * dy) / len2;
   t = Math.max(0, Math.min(1, t));
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+/** 画一条虚线（Pixi v8 的 Graphics 不支持 setLineDash，手动拆成小线段）。 */
+function drawDashedLine(
+  g: Gfx,
+  x0: number, y0: number, x1: number, y1: number,
+  dash: number, gap: number,
+  color: number, width: number,
+) {
+  const len = Math.hypot(x1 - x0, y1 - y0);
+  if (len < 0.01) return;
+  const ux = (x1 - x0) / len;
+  const uy = (y1 - y0) / len;
+  let d = 0;
+  while (d < len) {
+    const d2 = Math.min(d + dash, len);
+    g.moveTo(x0 + ux * d, y0 + uy * d).lineTo(x0 + ux * d2, y0 + uy * d2);
+    d = d2 + gap;
+  }
+  g.stroke({ width, color });
+}
+
+/** 闭合多边形的有符号面积（正 = 逆时针）。 */
+function polygonSignedArea(poly: Array<{ x: number; y: number }>): number {
+  let a = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i];
+    const q = poly[(i + 1) % poly.length];
+    a += p.x * q.y - q.x * p.y;
+  }
+  return a / 2;
+}
+
+/**
+ * 简单多边形三角化（ear clipping）—— 网格「新建」描绘轮廓后用它生成三角形。
+ * 顶点顺序任意（内部统一成逆时针）；对凹多边形（人脸轮廓的耳朵 / 下巴）也正确。
+ */
+function triangulatePolygon(poly: Array<{ x: number; y: number }>): number[] {
+  const n = poly.length;
+  if (n < 3) return [];
+  const idx: number[] = Array.from({ length: n }, (_, i) => i);
+  if (polygonSignedArea(poly) < 0) idx.reverse();   // 统一成逆时针
+  const out: number[] = [];
+  let guard = n * n + 16;
+  while (idx.length > 3 && guard-- > 0) {
+    let found = false;
+    for (let k = 0; k < idx.length; k++) {
+      const len = idx.length;
+      const i0 = idx[(k - 1 + len) % len];
+      const i1 = idx[k];
+      const i2 = idx[(k + 1) % len];
+      const a = poly[i0];
+      const b = poly[i1];
+      const c = poly[i2];
+      // 凸角判定（逆时针下 cross > 0）
+      const cross = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+      if (cross <= 1e-9) continue;
+      // 其余顶点不能落在这个「耳朵」三角形内
+      let blocked = false;
+      for (const j of idx) {
+        if (j === i0 || j === i1 || j === i2) continue;
+        if (pointInTriangle(poly[j].x, poly[j].y, a.x, a.y, b.x, b.y, c.x, c.y)) {
+          blocked = true;
+          break;
+        }
+      }
+      if (blocked) continue;
+      out.push(i0, i1, i2);
+      idx.splice(k, 1);
+      found = true;
+      break;
+    }
+    if (!found) break;   // 退化（自交等）：停止
+  }
+  if (idx.length === 3) out.push(idx[0], idx[1], idx[2]);
+  return out;
 }
 
 /** CSS hex（'#rrggbb' / 'rrggbb'）→ RGB 分量；非法 / 空则 null。 */
