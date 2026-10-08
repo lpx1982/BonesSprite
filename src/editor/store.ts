@@ -198,6 +198,8 @@ export interface PixiBonesState {
 
   setPsd: (p: PixiBonesPsd | null) => void;
   toggleSlotVisibility: (id: string) => void;
+  /** 选中插槽。★ 仿 Spine：姿势模式下（画布不可选图层）在层级树选中插槽/图片时，
+   *  自动切到「旋转」变换工具（变换工具与 mode 卡互斥，故会一并退出 pose）。 */
   selectSlot: (id: string | null) => void;
   setViewMode: (m: ViewMode) => void;
 
@@ -666,14 +668,19 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     set((state) => ({
       slotVisibility: { ...state.slotVisibility, [slotId]: !(state.slotVisibility[slotId] ?? true) },
     })),
-  selectSlot: (id) => set({
+  selectSlot: (id) => set((s) => ({
     selectedSlotId: id,
     selectedSlotIds: id ? [id] : [],
     selectedBoneId: null,
     selectedBoneIds: [],
     selectedSectionKey: null,
     attachingSlotId: null,
-  }),
+    // ★ 仿 Spine：姿势模式下在层级树选中插槽/图片 → 自动切到「旋转」工具。
+    //   变换工具与 mode 卡互斥，因此同时退出 pose（editorMode = 'idle'）。
+    ...(id && s.editorMode === 'pose'
+      ? { activeTool: 'rotate' as const, editorMode: 'idle' as const }
+      : {}),
+  })),
   // 多选素材：additive=true 增量追加，false 替换
   selectSlots: (ids, additive = false) => set((s) => {
     const next = additive ? Array.from(new Set([...s.selectedSlotIds, ...ids])) : ids;
