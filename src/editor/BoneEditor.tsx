@@ -621,25 +621,51 @@ export function BoneEditor() {
       };
 
       /**
-       * 创建模式 + 按住 Command 时的素材悬停提示：
-       *   show=true 且鼠标落在某个附件上 → 画白色虚线框；否则清空。
+       * 鼠标悬停附件时的反馈（Gfx = attachmentHover）：
+       *   1) 创建模式 + 按住 Command → 画白色虚线外框（提示将被 ⌘ 点击选中）
+       *   2) 四变换工具（旋转/移动/缩放/倾斜）激活时 → 画白色虚线外框 +
+       *      alpha>0 像素的外轮廓描边（仿 Spine 选中/悬停视觉）
+       *
+       * 选中状态下也保留 hover 反馈（高亮叠加，与角色驱动不一致）。
        */
-      const updateAttachmentHover = (gx: number, gy: number, show: boolean) => {
+      const updateAttachmentHover = (gx: number, gy: number, createCmdHover: boolean) => {
         attachmentHover.clear();
-        if (!show) return;
+        const s = usePixiBonesStore.getState();
+        // 计算是否进入"hover 显示"状态：
+        //   - 创建模式 + 按住 Command（已有逻辑）
+        //   - 四变换工具激活 + setup 模式（新增）
+        const inCreateCmd = s.editorMode === 'create' && (createCmdHover || metaDown);
+        const inTransform = s.editorMode === 'idle' && s.activeTool !== null;
+        const showOutline = inTransform;
+        const showDashedRect = inCreateCmd || inTransform;
+        if (!showDashedRect && !showOutline) return;
         const id = topAttachmentAt(gx, gy);
         if (!id) return;
-        const s = usePixiBonesStore.getState();
-        // 已经是「当前选中插槽的激活附件」：画布上已是实线蓝框，不再叠加白色虚线
-        const selSlot = s.selectedSlotId ? s.slots.find((x) => x.id === s.selectedSlotId) ?? null : null;
-        if (selSlot?.activeAttachmentId === id) return;
         const layer = allAttachmentsOf(s.psd, s.images).find((l) => l.id === id);
-        if (!layer || layer.width === 0 || layer.height === 0) return;
-        const x = root.x + layer.left * root.scale.x - 2;
-        const y = root.y + layer.top * root.scale.y - 2;
-        const w = layer.width * root.scale.x + 4;
-        const h = layer.height * root.scale.y + 4;
-        drawDashedRect(attachmentHover, x, y, w, h, 6, 4, 0xFFFFFF, 2);
+        if (!layer || !layer.canvas || layer.width === 0 || layer.height === 0) return;
+        const sx = root.scale.x;
+        const sy = root.scale.y;
+        const stageX = root.x + layer.left * sx;
+        const stageY = root.y + layer.top * sy;
+        const stageW = layer.width * sx;
+        const stageH = layer.height * sy;
+        if (showDashedRect) {
+          drawDashedRect(
+            attachmentHover,
+            stageX - 2, stageY - 2, stageW + 4, stageH + 4,
+            6, 4, 0xFFFFFF, 2,
+          );
+        }
+        if (inTransform) {
+          // alpha>0 轮廓描边（沿图层 canvas 像素边界）
+          const outline = computeAttachmentOutline(layer.canvas);
+          drawAttachmentOutline(
+            attachmentHover,
+            outline,
+            stageX, stageY, sx, sy,
+            0xFFFFFF, Math.max(1, 1 * Math.max(0.5, Math.min(sx, sy))),
+          );
+        }
       };
 
       const center = (psd: PixiBonesPsd | null) => {
@@ -2695,6 +2721,116 @@ function drawDashedRect(
   seg(x + w, y, x + w, y + h);
   seg(x + w, y + h, x, y + h);
   seg(x, y + h, x, y);
+  g.stroke({ width, color });
+}
+
+/**
+ * 用 marching squares 把图层 canvas 上「alpha > 0」的轮廓抽成若干短线段。
+ * 输出坐标 = 原图像素坐标（左上角原点）。调用方再按 layer.left/top + root.scale 平移/缩放到画布。
+ *
+ * 缓存到 module-level WeakMap：同一个 HTMLCanvasElement 只算一次。
+ * 大图（约 1500×1500）≈ 10–30ms；典型工作区只 hover 1 个图层，无须担心。
+ */
+type OutlineSegments = { w: number; h: number; segs: Float32Array };
+const _outlineCache = new WeakMap<HTMLCanvasElement, OutlineSegments>();
+
+function computeAttachmentOutline(canvas: HTMLCanvasElement): OutlineSegments {
+  const hit = _outlineCache.get(canvas);
+  if (hit) return hit;
+
+  const w = canvas.width;
+  const h = canvas.height;
+  if (w === 0 || h === 0) {
+    const empty: OutlineSegments = { w, h, segs: new Float32Array(0) };
+    _outlineCache.set(canvas, empty);
+    return empty;
+  }
+
+  // 拿 alpha 通道（PNG/PSD canvas 都会有 alpha 通道；image 数据按 RGBA 排列）
+  let ctx: CanvasRenderingContext2D | null = null;
+  try { ctx = canvas.getContext('2d'); } catch { /* 跨域 canvas 会抛 SecurityError */ }
+  if (!ctx) {
+    const empty: OutlineSegments = { w, h, segs: new Float32Array(0) };
+    _outlineCache.set(canvas, empty);
+    return empty;
+  }
+  const img: ImageData | null = ctx.getImageData(0, 0, w, h);
+  if (!img) {
+    const empty: OutlineSegments = { w, h, segs: new Float32Array(0) };
+    _outlineCache.set(canvas, empty);
+    return empty;
+  }
+  const data = img.data;
+  // solid[y * w + x] = (alpha > threshold) ? 1 : 0
+  // 64/255 是常用 alpha cut-off，能抗 JPG 压缩噪点又能识别半透明边缘
+  const alphaTh = 64;
+  const solid = new Uint8Array(w * h);
+  for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+    solid[j] = data[i + 3] > alphaTh ? 1 : 0;
+  }
+
+  // 估算段数：每行相邻对最多 1 段，每列相邻对最多 1 段；保守预估 = (w-1)h + w*(h-1)
+  const cap = (w - 1) * h + w * (h - 1);
+  const buf = new Float32Array(cap * 4);
+  let n = 0;
+
+  // 横向边：相邻两像素 sA, sB（左边=A，右边=B）。在两者**之间**画一条垂直短线段。
+  //   sA=0, sB=1 → 段 = (xA+1, y, xA+1, y+1)
+  //   sA=1, sB=0 → 段 = (xA+1, y+1, xA+1, y)
+  for (let y = 0; y < h; y++) {
+    const row = y * w;
+    for (let x = 0; x + 1 < w; x++) {
+      const a = solid[row + x];
+      const b = solid[row + x + 1];
+      if (a === b) continue;
+      const xe = x + 1;
+      if (a === 0 && b === 1) {
+        buf[n++] = xe; buf[n++] = y;     buf[n++] = xe; buf[n++] = y + 1;
+      } else {
+        buf[n++] = xe; buf[n++] = y + 1; buf[n++] = xe; buf[n++] = y;
+      }
+    }
+  }
+  // 纵向边：相邻两像素 sA（上）, sB（下）。在两者**之间**画一条水平短线段。
+  for (let x = 0; x < w; x++) {
+    for (let y = 0; y + 1 < h; y++) {
+      const a = solid[y * w + x];
+      const b = solid[(y + 1) * w + x];
+      if (a === b) continue;
+      const ye = y + 1;
+      if (a === 0 && b === 1) {
+        buf[n++] = x;     buf[n++] = ye; buf[n++] = x + 1; buf[n++] = ye;
+      } else {
+        buf[n++] = x + 1; buf[n++] = ye; buf[n++] = x;     buf[n++] = ye;
+      }
+    }
+  }
+
+  const out: OutlineSegments = { w, h, segs: buf.subarray(0, n) };
+  _outlineCache.set(canvas, out);
+  return out;
+}
+
+/** 把「alpha 轮廓」按图层位置/缩放画到目标 Gfx（世界坐标系）。 */
+function drawAttachmentOutline(
+  g: Gfx,
+  outline: OutlineSegments,
+  layerLeft: number,
+  layerTop: number,
+  sx: number,
+  sy: number,
+  color: number,
+  width: number,
+) {
+  const segs = outline.segs;
+  if (segs.length === 0) return;
+  for (let i = 0; i + 3 < segs.length; i += 4) {
+    const x0 = layerLeft + segs[i + 0] * sx;
+    const y0 = layerTop + segs[i + 1] * sy;
+    const x1 = layerLeft + segs[i + 2] * sx;
+    const y1 = layerTop + segs[i + 3] * sy;
+    g.moveTo(x0, y0).lineTo(x1, y1);
+  }
   g.stroke({ width, color });
 }
 
