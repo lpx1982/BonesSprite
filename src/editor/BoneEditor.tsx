@@ -1061,7 +1061,11 @@ export function BoneEditor() {
         }
         const indices = kept.map((x) => map[x]);
         s.pushHistory();
-        s.setMeshData(attachmentId, { vertices, uvs, indices });
+        // 删点后同样重新合法化，保证剩下的连接依然最优
+        s.setMeshData(attachmentId, {
+          vertices, uvs,
+          indices: delaunayRefine(flatToPoints(vertices), indices),
+        });
         s.setMeshSelectedVertices([]);
       };
 
@@ -1084,7 +1088,12 @@ export function BoneEditor() {
         indices[triIdx * 3 + 2] = nv;
         indices.push(b, c, nv, c, a, nv);
         s.pushHistory();
-        s.setMeshData(id, { vertices, uvs, indices });
+        // ★ 加完顶点后全局重新合法化：新顶点与附近顶点按最优（Delaunay）方式连接，
+        //   而不是只在原三角形里切三刀 —— 和 Spine「自动连接所有顶点」的行为一致。
+        s.setMeshData(id, {
+          vertices, uvs,
+          indices: delaunayRefine(flatToPoints(vertices), indices),
+        });
         s.setMeshSelectedVertices([nv]);
       };
 
@@ -1132,7 +1141,11 @@ export function BoneEditor() {
           indices.push(i0, nv, i2, nv, i1, i2);
         }
         s.pushHistory();
-        s.setMeshData(id, { vertices, uvs, indices });
+        // ★ 加完顶点后全局重新合法化（同 splitTriangle）
+        s.setMeshData(id, {
+          vertices, uvs,
+          indices: delaunayRefine(flatToPoints(vertices), indices),
+        });
         s.setMeshSelectedVertices([nv]);
       };
 
@@ -3587,6 +3600,13 @@ function inCircleDet(
        + (cdx * cdx + cdy * cdy) * (adx * bdy - ady * bdx);
 }
 
+/** 扁平顶点数组 [x0,y0,x1,y1,...] → {x,y}[]（网格数据 → 几何点，供三角剖分用）。 */
+function flatToPoints(flat: number[]): Array<{ x: number; y: number }> {
+  const out: Array<{ x: number; y: number }> = [];
+  for (let i = 0; i + 1 < flat.length; i += 2) out.push({ x: flat[i], y: flat[i + 1] });
+  return out;
+}
+
 /**
  * Delaunay 边翻转（Lawson）：把 ear clipping 的结果「摊平」。
  *
@@ -3595,6 +3615,10 @@ function inCircleDet(
  * 反复翻转不满足「空外接圆」条件的**内部边**，收敛到近似 Delaunay 剖分，三角形更
  * 均匀，与 Spine 勾勒后的观感一致。只翻转被两个三角形共享的边；边界边（只属于一个
  * 三角形）固定不动，保证轮廓不被破坏。
+ *
+ * 这个函数还会在**每次加/删顶点之后**被调用（见 splitTriangle / splitEdgeAt /
+ * collapseMeshVertex）：Spine 的做法是「自动连接所有顶点」，即每次顶点集变化都重算
+ * 一遍最优剖分，而不是只在局部三角形里切一刀 —— 那样会把网格切乱。
  */
 function delaunayRefine(poly: Array<{ x: number; y: number }>, indices: number[]): number[] {
   const tris: number[][] = [];
