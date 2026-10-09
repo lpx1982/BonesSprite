@@ -440,11 +440,15 @@ export function BoneEditor() {
         const meshes = st.attachmentMeshes;
         wrapMatrixBySlot.clear();
         for (const { slot, layer } of renderablesOf(psd, images, slots)) {
-          // ★ 网格编辑中且未勾选「变形」→ 不套用网格：显示**完整原图**，只让顶点可编辑
-          //   （仿 Spine 的 Deformed 未勾选：编辑时只看完整图 + 顶点，不施加裁切/变形；
-          //     退出编辑后网格照常生效）
-          const editingThisSlot = slot.id === st.meshEditSlotId && !st.meshDeformed;
-          addSlotView(slot, layer, editingThisSlot ? undefined : meshes[layer.id]);
+          // ★ 网格「作用于画面」（裁切 / 变形）只在两种情况下启用：
+          //   1. 权重绑定后（mesh.bones 非空）—— 蒙皮需要网格承载顶点
+          //   2. 正在编辑这个插槽 且 勾选了「变形」—— 编辑时预览网格效果
+          //   其它情况一律显示**完整原图**（网格只作为顶点编辑的载体存在，不裁切画面）
+          const m = meshes[layer.id];
+          const hasWeights = !!(m && m.bones && m.bones.length > 0);
+          const editingThisSlot = slot.id === st.meshEditSlotId;
+          const useMesh = hasWeights || (editingThisSlot && st.meshDeformed);
+          addSlotView(slot, layer, useMesh ? meshes[layer.id] : undefined);
         }
       };
 
@@ -3723,6 +3727,8 @@ export function BoneEditor() {
               || a.vertices.length !== b.vertices.length
               || a.indices !== b.indices
               || a.uvs !== b.uvs
+              // ★ 权重绑定状态变化（0 ↔ 非0）会切换 Mesh / Sprite 渲染 → 必须重建
+              || (a.bones?.length ?? 0) !== (b.bones?.length ?? 0)
             ) {
               structural = true;
               break;
