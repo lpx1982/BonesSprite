@@ -162,6 +162,8 @@ export function BoneEditor() {
     let metaDown = false;
     /** 网格编辑：上一次点击的顶点（双击同一顶点 320ms 内 = 删除） */
     let lastVertexClick = { idx: -1, t: 0 };
+    /** 权重模式：当前鼠标悬停的顶点（饼图）索引；-1 = 未悬停 */
+    let weightHoverVertex = -1;
 
     const cleanup = () => {
       if (destroyed) return;
@@ -814,6 +816,41 @@ export function BoneEditor() {
         return true;
       };
 
+      /**
+       * 权重模式：更新「鼠标悬停的顶点（饼图）」。
+       * 悬停的饼图会变大 / 不透明 / 加白色描边；只在悬停变化时才重画。
+       */
+      const updateWeightHover = (gx: number, gy: number) => {
+        const st = usePixiBonesStore.getState();
+        let hover = -1;
+        if (st.editorMode === 'weights' && !st.weightBindMode) {
+          let aid: string | null = st.weightMeshId;
+          if (!aid) {
+            const keys = Object.keys(st.attachmentMeshes);
+            if (keys.length === 1) aid = keys[0];
+          }
+          if (aid) {
+            const slot = st.slots.find((x) => x.activeAttachmentId === aid) ?? null;
+            const layer = allAttachmentsOf(st.psd, st.images).find((l) => l.id === aid) ?? null;
+            const mesh = st.attachmentMeshes[aid];
+            if (slot && layer && mesh) {
+              const pts = skinnedVerticesScreen(slot.id, layer, mesh);
+              let best = -1;
+              let bestD = 16;   // 悬停命中范围 = 选中饼图半径
+              for (let i = 0; i < pts.length; i++) {
+                const d = Math.hypot(pts[i].x - gx, pts[i].y - gy);
+                if (d < bestD) { bestD = d; best = i; }
+              }
+              hover = best;
+            }
+          }
+        }
+        if (weightHoverVertex !== hover) {
+          weightHoverVertex = hover;
+          drawMeshHandles();
+        }
+      };
+
       /** 唯一网格边 + 每条边被几个三角形共享（n=1 → 边界边；n=2 → 内部边）。 */
       const meshEdgeInfo = (mesh: MeshData) => {
         const map = new Map<number, { a: number; b: number; n: number }>();
@@ -1066,6 +1103,9 @@ export function BoneEditor() {
               for (let i = 0; i < vertCount; i++) {
                 // 「已选」过滤：仅选中顶点 + 其权重中包含选中骨骼的顶点
                 const isVertexSelected = selected.has(i);
+                // 悬停的饼图变大 / 不透明 / 加白色描边（与选中态一致）
+                const hovered = weightHoverVertex === i;
+                const emphasized = isVertexSelected || hovered;
                 const row = i * nb;
                 let hasSelectedBone = false;
                 if (onlySel) {
@@ -1078,7 +1118,7 @@ export function BoneEditor() {
                 }
                 const p = pts[i];
                 if (!p) continue;
-                const r = isVertexSelected ? 16 : 10;
+                const r = emphasized ? 16 : 10;
                 // 累计扇形：起点角度 0，依次按权重叠加
                 let startAngle = -Math.PI / 2;
                 for (let j = 0; j < nb; j++) {
@@ -1093,13 +1133,16 @@ export function BoneEditor() {
                     pts3.push(p.x + Math.cos(a) * r, p.y + Math.sin(a) * r);
                   }
                   meshHandles.poly(pts3);
-                  meshHandles.fill({ color: boneColorArr[j], alpha: 0.85 });
-                  meshHandles.stroke({ width: 0.5, color: 0x000000, alpha: 0.5 });
+                  // 未选中/未悬停 → 半透明；强调（选中或悬停）→ 不透明
+                  meshHandles.fill({ color: boneColorArr[j], alpha: emphasized ? 1 : 0.45 });
+                  meshHandles.stroke({ width: 0.5, color: 0x000000, alpha: emphasized ? 0.5 : 0.3 });
                   startAngle = endAngle;
                 }
-                // 边框
-                meshHandles.circle(p.x, p.y, r);
-                meshHandles.stroke({ width: isVertexSelected ? 1.4 : 0.8, color: 0xFFFFFF, alpha: 0.9 });
+                // 强调（选中或悬停）时外层加一圈白色描边
+                if (emphasized) {
+                  meshHandles.circle(p.x, p.y, r);
+                  meshHandles.stroke({ width: 1.6, color: 0xFFFFFF, alpha: 1 });
+                }
               }
             }
           }
@@ -2804,6 +2847,8 @@ export function BoneEditor() {
             ev.global.y,
             stHover.editorMode === 'create' && (ev.metaKey || metaDown),
           );
+          // 权重模式：更新悬停的饼图（变大 / 不透明 / 白描边）
+          updateWeightHover(ev.global.x, ev.global.y);
           // 网格「新建」描绘中：鼠标移动 → 刷新「最后一点 → 鼠标」的预览虚线
           if (stHover.meshNewPolygon) drawMeshHandles();
           return;
@@ -3330,6 +3375,14 @@ export function BoneEditor() {
       a.stage.on('pointermove', onPointerMove);
       a.stage.on('pointerup', onPointerUp);
       a.stage.on('pointerupoutside', onPointerUp);
+      // 鼠标离开画布 → 清空权重饼图悬停（避免白描边残留）
+      const onStagePointerLeave = () => {
+        if (weightHoverVertex !== -1) {
+          weightHoverVertex = -1;
+          drawMeshHandles();
+        }
+      };
+      a.stage.on('pointerleave', onStagePointerLeave);
 
       // ★ 选中图层 + 变换工具时：slotHandles 接收 pointerdown 启动 layer-transform 拖动。
       //   一次绑定即可（drawSlotHandles 每帧清空但不 destroy Gfx，事件正常发到 slotHandles.target）。
@@ -3829,6 +3882,7 @@ export function BoneEditor() {
         a.stage.off('pointermove', onPointerMove);
         a.stage.off('pointerup', onPointerUp);
         a.stage.off('pointerupoutside', onPointerUp);
+        a.stage.off('pointerleave', onStagePointerLeave);
         a.canvas.removeEventListener('wheel', wheelHandler);
         a.canvas.removeEventListener('contextmenu', onCanvasContextMenu);
       });
