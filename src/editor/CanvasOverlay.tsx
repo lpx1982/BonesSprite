@@ -652,6 +652,7 @@ function MeshEditPanel() {
   const isolate = usePixiBonesStore((s) => s.meshIsolate);
   const setIsolate = usePixiBonesStore((s) => s.setMeshIsolate);
   const resetMesh = usePixiBonesStore((s) => s.resetMesh);
+  const generateMesh = usePixiBonesStore((s) => s.generateMesh);
   /** 打开描绘弹窗（同时拍快照，用于取消时还原） */
   const openTraceDialog = usePixiBonesStore((s) => s.openTraceDialog);
   /** 描绘弹窗是否打开 → 本面板向下渐隐让位 */
@@ -776,9 +777,9 @@ function MeshEditPanel() {
             onClick={() => resetMesh(attachmentId)}
           ><MeshIconReset />重置</button>
           <button
-            style={meshBtnStyle(false, true)}
-            title="自动补充顶点（待实现）"
-            disabled
+            style={meshBtnStyle(false, false)}
+            title="生成：在最长边的中点自动添加顶点，让网格更密（利于权重绑定）；已有顶点不动，多次点击越来越密。会移除所有权重。"
+            onClick={() => generateMesh(attachmentId)}
           ><MeshIconGenerate />生成</button>
           <button
             style={meshBtnStyle(false, false)}

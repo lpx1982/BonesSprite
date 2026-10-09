@@ -165,6 +165,11 @@ export interface PixiBonesState {
   confirmMeshReset: (attachmentId: string, mode: 'keepWeights' | 'clearWeights') => void;
   /** 取消重置弹窗 */
   cancelMeshReset: () => void;
+  /**
+   * 生成（仿 Spine）：在「最有利于变形」的位置——当前最长边的中点——自动添加顶点，
+   * 已有顶点不动，多次点击网格越来越密。会移除所有权重（Spine 行为）。
+   */
+  generateMesh: (attachmentId: string) => void;
   /** 冻结：把该插槽当前的旋转 / 缩放（slotTransforms）烘焙进网格顶点，
    *  再把 rotation 归 0、scale 归 1 —— 视觉不变但变换值清零（仿 Spine 的「冻结」）。 */
   freezeMesh: (slotId: string, attachmentId: string) => void;
@@ -683,6 +688,77 @@ function applyMeshReset(getState: () => PixiBonesState, attachmentId: string, mo
 }
 
 /**
+ * 「生成」：反复在当前**最长边**的中点插入新顶点（边中点细分，接近 Delaunay 加密）。
+ *  - 已存在的顶点不动（新顶点正好落在边上）
+ *  - 矩形外壳时结果逐步逼近「行 / 列」网格（对齐 Spine 文档）
+ *  - 返回新的 vertices / uvs / indices（不含权重字段，生成会移除所有权重）
+ */
+function generateMeshData(mesh: MeshData): { vertices: number[]; uvs: number[]; indices: number[] } {
+  const vertices = mesh.vertices.slice();
+  const uvs = mesh.uvs.slice();
+  // 三角形列表（每 3 个索引一个三角形）
+  const tris: Array<[number, number, number]> = [];
+  for (let t = 0; t + 2 < mesh.indices.length; t += 3) {
+    tris.push([mesh.indices[t], mesh.indices[t + 1], mesh.indices[t + 2]]);
+  }
+  // 每次生成新增约 1/3 三角形数量的顶点（多次点击持续加密）
+  const addCount = Math.max(2, Math.round(tris.length / 3));
+  for (let k = 0; k < addCount && tris.length > 0; k++) {
+    // 找当前最长边
+    let best: [number, number] | null = null;
+    let bestLen = -1;
+    for (const [a, b, c] of tris) {
+      for (const [p, q] of [[a, b], [b, c], [c, a]] as Array<[number, number]>) {
+        const dx = vertices[p * 2] - vertices[q * 2];
+        const dy = vertices[p * 2 + 1] - vertices[q * 2 + 1];
+        const len = dx * dx + dy * dy;
+        if (len > bestLen) { bestLen = len; best = [p, q]; }
+      }
+    }
+    if (!best) break;
+    const [va, vb] = best;
+    // 收集所有包含该边的三角形并从列表移除
+    const shared: Array<[number, number, number]> = [];
+    for (let i = tris.length - 1; i >= 0; i--) {
+      const t3 = tris[i];
+      const hasEdge = [0, 1, 2].some((k2) => {
+        const p = t3[k2];
+        const q = t3[(k2 + 1) % 3];
+        return (p === va && q === vb) || (p === vb && q === va);
+      });
+      if (hasEdge) { shared.push(t3); tris.splice(i, 1); }
+    }
+    // 新顶点 = 边中点（位置与 UV 都取平均，纹理不畸变、不移动已有顶点）
+    const nv = vertices.length / 2;
+    vertices.push(
+      (vertices[va * 2] + vertices[vb * 2]) / 2,
+      (vertices[va * 2 + 1] + vertices[vb * 2 + 1]) / 2,
+    );
+    uvs.push(
+      (uvs[va * 2] + uvs[vb * 2]) / 2,
+      (uvs[va * 2 + 1] + uvs[vb * 2 + 1]) / 2,
+    );
+    // 每个共享三角形拆成两个，保持原绕序（新三角形顶点都在原三角形内部/边上）
+    for (const t3 of shared) {
+      const other = t3[0] !== va && t3[0] !== vb ? t3[0]
+        : t3[1] !== va && t3[1] !== vb ? t3[1]
+        : t3[2];
+      // 判断边方向：绕序中 va 的下一个（环转）是否是 vb
+      const idxA = t3.indexOf(va);
+      const next = t3[(idxA + 1) % 3];
+      if (next === vb) {
+        tris.push([va, nv, other], [nv, vb, other]);
+      } else {
+        tris.push([vb, nv, other], [nv, va, other]);
+      }
+    }
+  }
+  const indices: number[] = [];
+  for (const [a, b, c] of tris) indices.push(a, b, c);
+  return { vertices, uvs, indices };
+}
+
+/**
  * 为一批附件生成「1 图层 = 1 插槽」的初始插槽列表（导入时用）。
  * 每个插槽只持有 1 个附件，且该附件默认激活。
  */
@@ -839,6 +915,20 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   },
   cancelMeshReset: () => set({ resetMeshRequestAttachmentId: null }),
   resetMeshRequestAttachmentId: null,
+  // 生成：在最长边中点自动加点（多次点击越来越密）；移除所有权重（Spine 行为）
+  generateMesh: (attachmentId) => {
+    const mesh = get().attachmentMeshes[attachmentId];
+    if (!mesh || mesh.indices.length < 3) return;
+    const next = generateMeshData(mesh);
+    get().pushHistory();
+    set((s) => ({
+      attachmentMeshes: {
+        ...s.attachmentMeshes,
+        [attachmentId]: { vertices: next.vertices, uvs: next.uvs, indices: next.indices },
+      },
+      meshSelectedVertices: [],
+    }));
+  },
   setMeshVertices: (attachmentId, vertices) => set((state) => {
     const mesh = state.attachmentMeshes[attachmentId];
     if (!mesh) return state;
