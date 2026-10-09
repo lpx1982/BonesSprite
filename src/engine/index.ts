@@ -4,6 +4,7 @@ export * from './math/Mat3';
 export * from './math/Transform';
 export * from './Bone';
 export * from './Skeleton';
+export * from './IkConstraint';
 export * from './Keyframe';
 export * from './Track';
 export * from './Animation';

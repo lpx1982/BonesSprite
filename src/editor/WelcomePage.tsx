@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { usePixiBonesStore } from './store';
 import { useT } from './i18n';
+import { importDataFromFiles } from '../exporters/importDataFlow';
 import logoImg from '/logo.png';
 import folderIcon from './icons/folder.png';
 
@@ -124,8 +125,8 @@ export function WelcomePage() {
             </p>
           </div>
 
-          {/* 三个入口卡片 */}
-          <div className="grid grid-cols-3 gap-4 mb-8">
+          {/* 入口卡片（4 个：新建 / 打开 / 导入数据 / 导入 PSD）*/}
+          <div className="grid grid-cols-4 gap-4 mb-8">
             {/* 新建工程 */}
             <WelcomeCard
               icon="📄"
@@ -140,6 +141,14 @@ export function WelcomePage() {
               title={t('welcome.open')}
               desc={t('welcome.open_desc')}
               onClick={() => fileInputRef.current?.click()}
+            />
+
+            {/* 导入数据（JSON + 多张 PNG）*/}
+            <WelcomeCard
+              icon="📊"
+              title={t('welcome.import_data')}
+              desc={t('welcome.import_data_desc')}
+              onClick={() => { void importDataFromFiles(); }}
             />
 
             {/* 导入 PSD（额外入口，做工程用） */}

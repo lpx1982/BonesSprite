@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, DOCK_PANEL_DEFAULT_WIDTH, type BoneNode, type SlotBinding } from './store';
+import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, DOCK_PANEL_DEFAULT_WIDTH, type BoneNode, type SlotBinding, type IkConstraintDef } from './store';
 import { type PixiBonesLayer, type PixiBonesSlot } from '@psd/index';
 import { importAssetFile } from './importAsset';
 
@@ -161,6 +161,15 @@ export function HierarchyPanel() {
   const startAttach = usePixiBonesStore((s) => s.startAttach);
   const unbindSlot = usePixiBonesStore((s) => s.unbindSlot);
   const removeSlot = usePixiBonesStore((s) => s.removeSlot);
+  // ===== IK 约束（仿 Spine「约束」分区）=====
+  const constraints = usePixiBonesStore((s) => s.constraints);
+  const addIkConstraint = usePixiBonesStore((s) => s.addIkConstraint);
+  const removeConstraint = usePixiBonesStore((s) => s.removeConstraint);
+  const renameConstraint = usePixiBonesStore((s) => s.renameConstraint);
+  const setConstraintTarget = usePixiBonesStore((s) => s.setConstraintTarget);
+  const setConstraintMix = usePixiBonesStore((s) => s.setConstraintMix);
+  const setConstraintBendDirection = usePixiBonesStore((s) => s.setConstraintBendDirection);
+  const moveConstraint = usePixiBonesStore((s) => s.moveConstraint);
   const importInputRef = useRef<HTMLInputElement>(null);
   // 刷新（清缩略图缓存后强制重渲染）
   const [, setRefreshTick] = useState(0);
@@ -974,6 +983,19 @@ export function HierarchyPanel() {
         <ImagesSectionPropsBlock
           onAddPsd={() => importInputRef.current?.click()}
           onRefresh={() => { thumbCache.clear(); setRefreshTick((t) => t + 1); }}
+          C={C}
+        />
+      ) : selectedSectionKey === 'constraints' ? (
+        <ConstraintsSectionPropsBlock
+          constraints={constraints}
+          bones={bones}
+          onAdd={(boneId, targetBoneId, childBoneId) => addIkConstraint(boneId, targetBoneId, childBoneId)}
+          onRemove={(id) => removeConstraint(id)}
+          onRename={(id, name) => renameConstraint(id, name)}
+          onTarget={(id, targetId) => setConstraintTarget(id, targetId)}
+          onMix={(id, mix) => setConstraintMix(id, mix)}
+          onBend={(id, dir) => setConstraintBendDirection(id, dir)}
+          onMove={(id, toIndex) => moveConstraint(id, toIndex)}
           C={C}
         />
       ) : null}
@@ -2127,6 +2149,201 @@ function ImagesSectionPropsBlock(props: ImagesSectionPropsBlockProps) {
           <span>⟳</span> 刷新
         </button>
       </div>
+    </div>
+  );
+}
+
+// =================================================================================
+//  IK 约束管理面板（仿 Spine 的「约束」节点：列表 + 新建 + 属性编辑）
+// =================================================================================
+interface ConstraintsSectionPropsBlockProps {
+  constraints: IkConstraintDef[];
+  bones: BoneNode[];
+  onAdd: (boneId: string, targetBoneId: string, childBoneId: string | null) => void;
+  onRemove: (id: string) => void;
+  onRename: (id: string, name: string) => void;
+  onTarget: (id: string, targetBoneId: string) => void;
+  onMix: (id: string, mix: number) => void;
+  onBend: (id: string, dir: 1 | -1) => void;
+  onMove: (id: string, toIndex: number) => void;
+  C: any;
+}
+
+function ConstraintsSectionPropsBlock(props: ConstraintsSectionPropsBlockProps) {
+  const { constraints, bones, onAdd, onRemove, onRename, onTarget, onMix, onBend, onMove, C } = props;
+  const [selectedId, setSelectedId] = useState<string | null>(constraints[0]?.id ?? null);
+  const [newBone, setNewBone] = useState(bones[0]?.id ?? '');
+  const [newChild, setNewChild] = useState('');
+  const [newTarget, setNewTarget] = useState(bones[0]?.id ?? '');
+  const selected = constraints.find((c) => c.id === selectedId) ?? null;
+
+  // bones 变化时兜底修正下拉默认值（避免指向已删除的骨）
+  const boneIds = bones.map((b) => b.id);
+  if (boneIds.length > 0 && (!boneIds.includes(newBone) || newBone === '')) setNewBone(boneIds[0]);
+  if (boneIds.length > 0 && (!boneIds.includes(newTarget) || newTarget === '')) setNewTarget(boneIds[0]);
+
+  const boneName = (id: string) => bones.find((b) => b.id === id)?.name ?? '(已删除)';
+  const canAdd = newBone && newTarget && newBone !== newTarget;
+
+  return (
+    <div style={{ borderTop: '1px solid ' + C.border, background: C.panelDk, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      {/* 标题行 */}
+      <div className="flex items-center px-2 py-1.5 gap-1 shrink-0" style={{ background: C.toolbar, borderBottom: '1px solid ' + C.border }}>
+        <span className="text-xs font-semibold" style={{ color: C.selected }}>IK 约束</span>
+        <span className="text-[10px]" style={{ color: C.dim }}>{constraints.length} 条</span>
+      </div>
+
+      {/* 约束列表（顺序 = 应用顺序） */}
+      <div className="px-2 py-1 flex flex-col gap-0.5 overflow-y-auto shrink-0" style={{ maxHeight: 160 }}>
+        {constraints.length === 0 && (
+          <div className="text-[11px]" style={{ color: C.dim }}>尚未创建约束。用下方「新建」添加 IK。</div>
+        )}
+        {constraints.map((c, i) => (
+          <div
+            key={c.id}
+            onClick={() => setSelectedId(c.id)}
+            className="flex items-center gap-1 rounded px-1.5 py-1 text-[11px] cursor-pointer select-none"
+            style={{
+              background: selectedId === c.id ? C.accentDk : 'transparent',
+              color: selectedId === c.id ? '#fff' : C.text,
+            }}
+          >
+            <span className="flex-1 truncate">
+              {i + 1}. {c.name}
+              <span style={{ color: C.dim }}> · {boneName(c.boneId)}{c.childBoneId ? `→${boneName(c.childBoneId)}` : ''}→{boneName(c.targetBoneId)}</span>
+            </span>
+            {/* 上移 / 下移（调整应用顺序） */}
+            <button
+              className="w-4 h-4 flex items-center justify-center rounded text-[10px]"
+              style={{ background: 'transparent', border: 'none', color: C.dim, cursor: i === 0 ? 'default' : 'pointer' }}
+              disabled={i === 0}
+              title="上移（更先应用）"
+              onClick={(e) => { e.stopPropagation(); onMove(c.id, i - 1); }}
+            >▲</button>
+            <button
+              className="w-4 h-4 flex items-center justify-center rounded text-[10px]"
+              style={{ background: 'transparent', border: 'none', color: C.dim, cursor: i === constraints.length - 1 ? 'default' : 'pointer' }}
+              disabled={i === constraints.length - 1}
+              title="下移（更后应用）"
+              onClick={(e) => { e.stopPropagation(); onMove(c.id, i + 1); }}
+            >▼</button>
+            <button
+              className="w-4 h-4 flex items-center justify-center rounded text-[10px]"
+              style={{ background: 'transparent', border: 'none', color: C.warning, cursor: 'pointer' }}
+              title="删除约束"
+              onClick={(e) => { e.stopPropagation(); onRemove(c.id); setSelectedId((cur) => (cur === c.id ? null : cur)); }}
+            >✕</button>
+          </div>
+        ))}
+      </div>
+
+      {/* 新建约束 */}
+      <div className="px-2 py-1.5 border-t flex flex-col gap-1 text-[11px]" style={{ borderColor: C.border }}>
+        <div className="flex items-center gap-1">
+          <span className="shrink-0" style={{ color: C.dim }}>受约束</span>
+          <select
+            className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[11px]"
+            style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
+            value={newBone}
+            onChange={(e) => setNewBone(e.target.value)}
+          >
+            {bones.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        </div>
+        <div className="flex items-center gap-1">
+          <span className="shrink-0" style={{ color: C.dim }}>子骨(选)</span>
+          <select
+            className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[11px]"
+            style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
+            value={newChild}
+            onChange={(e) => setNewChild(e.target.value)}
+          >
+            <option value="">— 单骨 IK —</option>
+            {bones.filter((b) => b.id !== newBone).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        </div>
+        <div className="flex items-center gap-1">
+          <span className="shrink-0" style={{ color: C.dim }}>目标</span>
+          <select
+            className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[11px]"
+            style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
+            value={newTarget}
+            onChange={(e) => setNewTarget(e.target.value)}
+          >
+            {bones.filter((b) => b.id !== newBone).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        </div>
+        <button
+          className="rounded px-1 py-1 flex items-center justify-center gap-0.5"
+          style={{
+            background: canAdd ? C.accentDk : C.panel,
+            color: canAdd ? '#fff' : C.dim,
+            border: '1px solid ' + C.border,
+            cursor: canAdd ? 'pointer' : 'default',
+          }}
+          disabled={!canAdd}
+          onClick={() => {
+            if (!canAdd) return;
+            onAdd(newBone, newTarget, newChild || null);
+          }}
+        >
+          <span style={{ color: C.accent }}>+</span> 新建 IK 约束
+        </button>
+      </div>
+
+      {/* 选中约束的属性编辑 */}
+      {selected && (
+        <div className="px-2 py-1.5 border-t flex flex-col gap-1.5 text-[11px]" style={{ borderColor: C.border }}>
+          <div className="flex items-center gap-1">
+            <span className="shrink-0" style={{ color: C.dim }}>名称</span>
+            <input
+              className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[11px]"
+              style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
+              defaultValue={selected.name}
+              onBlur={(e) => { const v = e.target.value.trim(); if (v && v !== selected.name) onRename(selected.id, v); }}
+              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+            />
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="shrink-0" style={{ color: C.dim }}>目标骨</span>
+            <select
+              className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[11px]"
+              style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
+              value={selected.targetBoneId}
+              onChange={(e) => onTarget(selected.id, e.target.value)}
+            >
+              {bones.filter((b) => b.id !== selected.boneId).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          </div>
+          {selected.childBoneId && (
+            <div className="flex items-center gap-1">
+              <span className="shrink-0" style={{ color: C.dim }}>弯曲方向</span>
+              <select
+                className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[11px]"
+                style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
+                value={selected.bendDirection}
+                onChange={(e) => onBend(selected.id, Number(e.target.value) as 1 | -1)}
+              >
+                <option value={1}>正方向（逆时针）</option>
+                <option value={-1}>反方向（顺时针）</option>
+              </select>
+            </div>
+          )}
+          <div className="flex items-center gap-1">
+            <span className="shrink-0" style={{ color: C.dim }}>混合</span>
+            <input
+              type="range"
+              className="flex-1"
+              min={0}
+              max={1}
+              step={0.01}
+              value={selected.mix}
+              onChange={(e) => onMix(selected.id, Number(e.target.value))}
+            />
+            <span className="shrink-0 w-8 text-right" style={{ color: C.dim }}>{Math.round(selected.mix * 100)}%</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

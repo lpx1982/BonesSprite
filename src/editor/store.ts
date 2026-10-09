@@ -12,19 +12,22 @@ export type EditorTab = 'setup' | 'animate';
 //    Spine 语义：每根骨骼按「属性」分轨道，每条轨道一串关键帧。
 //    动画 tab 下 bones 的姿态 = 采样结果；未覆盖的属性回退到 setupPose（设置姿态）。
 // =================================================================================
-export type AnimProperty = 'x' | 'y' | 'rotation' | 'scaleX' | 'scaleY';
-/** 骨骼全部可动画属性（录制 / 采样共用）。 */
+export type AnimProperty = 'x' | 'y' | 'rotation' | 'scaleX' | 'scaleY' | 'mix';
+/** 骨骼全部可动画属性（录制 / 采样共用）。'mix' 不在这里 —— 它是约束 mix 专用属性。 */
 export const ANIM_PROPERTIES: AnimProperty[] = ['x', 'y', 'rotation', 'scaleX', 'scaleY'];
 /** 单个关键帧：time 为秒。 */
 export interface AnimKeyframe {
   time: number;
   value: number;
 }
-/** 一根骨骼一个属性的一条轨道（keys 恒按 time 升序）。 */
+/** 一根骨骼一个属性的一条轨道（keys 恒按 time 升序）。
+ *  constraintMix = true 时是「约束 mix」轨道：boneId 存约束 id，property 固定 'mix'。 */
 export interface AnimTrack {
   boneId: string;
   property: AnimProperty;
   keys: AnimKeyframe[];
+  /** 约束 mix 轨道标记（骨骼轨道不需要设置） */
+  constraintMix?: boolean;
 }
 /** 一段动画：一组轨道 + 时长（秒）。 */
 export interface EditorAnimation {
@@ -98,7 +101,28 @@ export interface SlotBinding {
   ref: number[];
 }
 
-/** 撤销 / 重做快照的内容（骨树 + 插槽变换 + 网格顶点 + 选中骨 + 动画）。 */
+/**
+ * IK 约束定义（仿 Spine 3.8 IkConstraint）。
+ * 单骨 IK：boneId 旋转指向 targetBoneId。
+ * 双骨 IK：boneId（父）→ childBoneId（子），子骨末梢落在 targetBoneId 上。
+ * 数组顺序即应用顺序（层级树「约束」节点里可拖拽调整）。
+ */
+export interface IkConstraintDef {
+  id: string;
+  name: string;
+  /** 受约束的第一根骨骼（单骨 IK 即这根） */
+  boneId: string;
+  /** 双骨 IK 的第二根骨骼（单骨 IK 为 null） */
+  childBoneId: string | null;
+  /** 目标骨骼（不能用受约束骨骼的后代） */
+  targetBoneId: string;
+  /** 弯曲方向：1 = 逆时针 / 正方向，-1 = 顺时针（仅双骨 IK 有效） */
+  bendDirection: 1 | -1;
+  /** 混合程度 0..1：0 = 完全不受约束 */
+  mix: number;
+}
+
+/** 撤销 / 重做快照的内容（骨树 + 插槽变换 + 网格顶点 + 选中骨 + 动画 + 约束）。 */
 export type HistorySnapshot = {
   bones: BoneNode[];
   slotTransforms: Record<string, { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }>;
@@ -107,6 +131,8 @@ export type HistorySnapshot = {
   selectedBoneId: string | null;
   /** 动画数据也纳入快照：关键帧增删/拖动、动画增删重命名都能 Cmd+Z 撤销 */
   animations: EditorAnimation[];
+  /** IK 约束也纳入快照（增删/改 mix/调顺序都能 Cmd+Z 撤销） */
+  constraints: IkConstraintDef[];
 };
 
 /**
@@ -132,6 +158,8 @@ export interface ProjectData {
   animations: EditorAnimation[];
   activeAnimationId: string | null;
   setupPose: Record<string, BonePose>;
+  /** IK 约束列表（顺序即应用顺序；旧存档缺省为 []） */
+  constraints: IkConstraintDef[];
   editorTab?: EditorTab;
   viewport?: { panX: number; panY: number; zoom: number };
 }
@@ -176,9 +204,16 @@ export interface PixiBonesState {
   /** 把 fromTime 处的关键帧移到 toTime（入历史；随后采样应用） */
   moveKeyframe: (boneId: string, property: AnimProperty, fromTime: number, toTime: number) => void;
   /** 动画 tab + 关键帧锁开启时：把骨骼当前值的若干属性在 currentTime 写关键帧（一次拖动合并为一步历史） */
-  recordBoneEdits: (boneId: string, props: AnimProperty[]) => void;
+  recordBoneEdits: (boneId: string, props: Array<Exclude<AnimProperty, 'mix'>>) => void;
   /** 用当前激活动画在 currentTime 的采样覆盖 bones（不入历史；仅动画 tab 有效） */
   applyActiveAnimation: () => void;
+  /** 写 / 更新某约束在 time 处的 mix 关键帧（入历史；随后采样应用） */
+  setConstraintMixKeyframe: (constraintId: string, time: number, value: number) => void;
+  /** 删除某约束在 time 处的 mix 关键帧（入历史；随后采样应用） */
+  removeConstraintMixKeyframe: (constraintId: string, time: number) => void;
+  /** 动画 tab 下约束 mix 的运行时值（key = 约束 id，由 applyActiveAnimation 采样写入，
+   *  离开动画 tab 时清空）。渲染 IK 时用它覆盖 constraints[].mix。 */
+  constraintRuntimeMix: Record<string, number>;
 
   // ---- Day 2 ----
   psd: PixiBonesPsd | null;
@@ -437,6 +472,24 @@ export interface PixiBonesState {
   /** 鼠标悬停的骨骼 id（用于显示 hover 高亮） */
   hoveredBoneId: string | null;
 
+  // ---- IK 约束（仿 Spine 3.8，顺序 = 应用顺序）----
+  /** IK 约束列表。数组顺序即应用顺序（层级树「约束」节点里可拖拽调整）。 */
+  constraints: IkConstraintDef[];
+  /** 新建一条 IK 约束：boneId = 受约束骨，targetBoneId = 目标骨，childBoneId 可选（双骨 IK）。 */
+  addIkConstraint: (boneId: string, targetBoneId: string, childBoneId?: string | null) => string;
+  /** 删除约束（id 不存在则忽略） */
+  removeConstraint: (id: string) => void;
+  /** 重命名约束 */
+  renameConstraint: (id: string, name: string) => void;
+  /** 改目标骨 */
+  setConstraintTarget: (id: string, targetBoneId: string) => void;
+  /** 改混合程度 0..1 */
+  setConstraintMix: (id: string, mix: number) => void;
+  /** 改弯曲方向（双骨 IK） */
+  setConstraintBendDirection: (id: string, dir: 1 | -1) => void;
+  /** 调整顺序：把 id 对应约束移到新索引（数组索引，0 = 最先应用） */
+  moveConstraint: (id: string, toIndex: number) => void;
+
   // ---- UI state ----
   showLeftPanel: boolean;
   showRightPanel: boolean;
@@ -648,6 +701,17 @@ function sampleTrackValue(keys: AnimKeyframe[], t: number, setupValue: number): 
   return a.value + (b.value - a.value) * u;
 }
 
+/** 采样约束 mix 轨道（constraintMix = true 的轨道），返回 约束 id → mix 值。
+ *  t 处无轨道 → 不包含该约束（调用方用 setupPose 缺省）。 */
+function sampleConstraintMixes(anim: EditorAnimation, t: number): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const tr of anim.tracks) {
+    if (!tr.constraintMix || tr.keys.length === 0) continue;
+    out[tr.boneId] = sampleTrackValue(tr.keys, t, 1);
+  }
+  return out;
+}
+
 /**
  * 采样一段动画在 t 时刻的骨骼姿态。
  * 每根骨骼、每个属性独立：有轨道 → 按关键帧插值；无轨道 → 用 setupPose 缺省值。
@@ -672,8 +736,8 @@ function sampleAnimationPose(
   return bones.map((n) => {
     const sp = setupPose[n.id] ?? { x: n.x, y: n.y, rotation: n.rotation, scaleX: n.scaleX, scaleY: n.scaleY };
     const byProp = trackMap.get(n.id);
-    const val = (p: AnimProperty): number => {
-      const keys = byProp?.get(p);
+    const val = (p: keyof BonePose): number => {
+      const keys = byProp?.get(p as AnimProperty);
       return keys ? sampleTrackValue(keys, clampT, sp[p]) : sp[p];
     };
     return {
@@ -729,6 +793,13 @@ let _animIdCounter = 0;
 function genAnimId(): string {
   _animIdCounter++;
   return `anim_${_animIdCounter}`;
+}
+
+/** IK 约束 id 自增（一次会话内稳定）。 */
+let _constraintIdCounter = 0;
+function genConstraintId(): string {
+  _constraintIdCounter++;
+  return `ik_${_constraintIdCounter}`;
 }
 
 /**
@@ -969,6 +1040,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   fps: 30,
   setupPose: {},
   keyframeLock: true,
+  constraintRuntimeMix: {},
   selectedBoneName: null,
 
   psd: null,
@@ -1393,6 +1465,75 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   selectedBoneId: null,
   selectedBoneIds: [],
 
+  constraints: [],
+  addIkConstraint: (boneId, targetBoneId, childBoneId = null) => {
+    const s = get();
+    if (!s.bones.some((b) => b.id === boneId)) return '';
+    if (!s.bones.some((b) => b.id === targetBoneId)) return '';
+    if (childBoneId && !s.bones.some((b) => b.id === childBoneId)) childBoneId = null;
+    const id = genConstraintId();
+    s.pushHistory();
+    const def: IkConstraintDef = {
+      id,
+      name: `IK ${s.constraints.length + 1}`,
+      boneId,
+      childBoneId: childBoneId ?? null,
+      targetBoneId,
+      bendDirection: 1,
+      mix: 1,
+    };
+    set((st) => ({ constraints: [...st.constraints, def] }));
+    return id;
+  },
+  removeConstraint: (id) => {
+    const s = get();
+    if (!s.constraints.some((c) => c.id === id)) return;
+    s.pushHistory();
+    set((st) => ({ constraints: st.constraints.filter((c) => c.id !== id) }));
+  },
+  renameConstraint: (id, name) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    get().pushHistory();
+    set((st) => ({
+      constraints: st.constraints.map((c) => (c.id === id ? { ...c, name: trimmed } : c)),
+    }));
+  },
+  setConstraintTarget: (id, targetBoneId) => {
+    const s = get();
+    const c = s.constraints.find((x) => x.id === id);
+    if (!c || c.targetBoneId === targetBoneId) return;
+    if (!s.bones.some((b) => b.id === targetBoneId)) return;
+    s.pushHistory();
+    set((st) => ({
+      constraints: st.constraints.map((x) => (x.id === id ? { ...x, targetBoneId } : x)),
+    }));
+  },
+  setConstraintMix: (id, mix) => {
+    const m = Math.max(0, Math.min(1, mix));
+    get().pushHistory();
+    set((st) => ({
+      constraints: st.constraints.map((x) => (x.id === id ? { ...x, mix: m } : x)),
+    }));
+  },
+  setConstraintBendDirection: (id, dir) => {
+    get().pushHistory();
+    set((st) => ({
+      constraints: st.constraints.map((x) => (x.id === id ? { ...x, bendDirection: dir } : x)),
+    }));
+  },
+  moveConstraint: (id, toIndex) => {
+    const s = get();
+    const from = s.constraints.findIndex((c) => c.id === id);
+    if (from < 0) return;
+    const list = s.constraints.slice();
+    const [item] = list.splice(from, 1);
+    const idx = Math.max(0, Math.min(list.length, toIndex));
+    list.splice(idx, 0, item);
+    s.pushHistory();
+    set({ constraints: list });
+  },
+
   showLeftPanel: false,
   showRightPanel: false,  // 默认隐藏层级树，用户从 View 菜单手动开启
   showRulers: true,
@@ -1495,6 +1636,9 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       let animations = s.animations;
       if (animations.length === 0) {
         animations = [{ id: genAnimId(), name: 'Animation', duration: 1, tracks: [] }];
+      } else {
+        // ★ 兜底：老工程 idb 里可能存了 duration<=0 的动画，修正为 1s 让时间轴有内容
+        animations = animations.map((a) => a.duration > 0 ? a : { ...a, duration: 1 });
       }
       const activeAnimationId = s.activeAnimationId && animations.some((a) => a.id === s.activeAnimationId)
         ? s.activeAnimationId
@@ -1514,7 +1658,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
         const sp = setup[n.id];
         return sp ? { ...n, x: sp.x, y: sp.y, rotation: sp.rotation, scaleX: sp.scaleX, scaleY: sp.scaleY } : n;
       });
-      set({ editorTab: 'setup', bones, playing: false });
+      // 离开动画 tab：清空约束 mix 运行时值（IK 回到设置姿态的 mix）
+      set({ editorTab: 'setup', bones, playing: false, constraintRuntimeMix: {} });
     }
   },
 
@@ -1541,6 +1686,9 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
         }],
         selectedBoneId: rootId,
         selectedBoneIds: [rootId],
+        // ★ 新工程自动建一个默认动画（duration=1s），保证时间轴有内容可见
+        animations: [{ id: genAnimId(), name: 'Animation', duration: 1, tracks: [] }],
+        activeAnimationId: null,  // setEditorTab 切到 animate 时会选中
       }));
     }
   },
@@ -1570,6 +1718,9 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       animations: d.animations ?? [],
       activeAnimationId: d.activeAnimationId ?? null,
       setupPose: d.setupPose ?? {},
+      // IK 约束（旧存档缺省为空）
+      constraints: d.constraints ?? [],
+      constraintRuntimeMix: {},
       currentTime: 0,
       playing: false,
       loop: true,
@@ -1599,6 +1750,15 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       d.bones.map((b) => b.id),
       d.slots.map((s) => s.id),
       (d.animations ?? []).map((a) => a.id),
+    );
+    // 约束 id 计数器对齐（ik_ 前缀）
+    _constraintIdCounter = Math.max(
+      _constraintIdCounter,
+      Math.max(0, ...(d.constraints ?? []).map((c) => {
+        if (!c.id.startsWith('ik_')) return 0;
+        const n = parseInt(c.id.slice(3), 10);
+        return Number.isFinite(n) ? n : 0;
+      })),
     );
     // 载入时若停在动画 tab，按当前时间（0）采样一次，画面与动画一致
     if (get().editorTab === 'animate' && get().animations.length > 0) {
@@ -1643,6 +1803,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       )),
       selectedBoneId: s.selectedBoneId,
       animations: JSON.parse(JSON.stringify(s.animations)),
+      constraints: JSON.parse(JSON.stringify(s.constraints)),
     };
     const past = [...s.historyPast, snap].slice(-50);  // 最多 50 步
     set({ historyPast: past, historyFuture: [] });
@@ -1661,6 +1822,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       )),
       selectedBoneId: s.selectedBoneId,
       animations: JSON.parse(JSON.stringify(s.animations)),
+      constraints: JSON.parse(JSON.stringify(s.constraints)),
     };
     const future = [currentSnap, ...s.historyFuture];
     set({
@@ -1671,6 +1833,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       attachmentMeshes: prev.attachmentMeshes,
       selectedBoneId: prev.selectedBoneId,
       animations: prev.animations,
+      constraints: prev.constraints,
     });
     // 撤销后若在动画 tab，按当前时间重新采样骨骼（保证画面与动画一致）
     if (get().editorTab === 'animate') get().applyActiveAnimation();
@@ -1688,6 +1851,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       )),
       selectedBoneId: s.selectedBoneId,
       animations: JSON.parse(JSON.stringify(s.animations)),
+      constraints: JSON.parse(JSON.stringify(s.constraints)),
     };
     const past = [...s.historyPast, currentSnap];
     set({
@@ -1698,6 +1862,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       attachmentMeshes: next.attachmentMeshes,
       selectedBoneId: next.selectedBoneId,
       animations: next.animations,
+      constraints: next.constraints,
     });
     if (get().editorTab === 'animate') get().applyActiveAnimation();
   },
@@ -1838,6 +2003,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     s.pushHistory();
     const t = Math.max(0, toTime);
     const value = keyValueAt(anim, boneId, property, fromTime);
+    // 判断是否为约束 mix 轨道（移动后要保留 constraintMix 标记）
+    const isConstraintTrack = anim.tracks.some((x) => x.boneId === boneId && x.property === property && x.constraintMix);
     // 先从原处移除
     let tracks = anim.tracks
       .map((x) => {
@@ -1847,6 +2014,9 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       })
       .filter((x) => x.keys.length > 0);
     tracks = upsertTrackKey(tracks, boneId, property, t, value);
+    if (isConstraintTrack) {
+      tracks = tracks.map((tr) => (tr.boneId === boneId && tr.property === property ? { ...tr, constraintMix: true } : tr));
+    }
     set((st) => ({ animations: st.animations.map((a) => (a.id === anim.id ? { ...a, tracks } : a)) }));
     get().applyActiveAnimation();
   },
@@ -1872,6 +2042,36 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     if (!anim) return;
     const next = sampleAnimationPose(anim, s.setupPose, s.bones, s.currentTime);
     if (next) set({ bones: next });
+    // 采样约束 mix 轨道 → 运行时值（渲染 IK 时覆盖 constraints[].mix）
+    const mixes = sampleConstraintMixes(anim, s.currentTime);
+    if (Object.keys(mixes).length > 0) set({ constraintRuntimeMix: mixes });
+  },
+  setConstraintMixKeyframe: (constraintId, time, value) => {
+    const s = get();
+    const anim = s.animations.find((a) => a.id === s.activeAnimationId);
+    if (!anim) return;
+    s.pushHistory();
+    const t = Math.max(0, time);
+    // 复用 upsertTrackKey：constraintMix 轨道 boneId = 约束 id，property = 'mix'
+    const tracks = upsertTrackKey(anim.tracks, constraintId, 'mix' as AnimProperty, t, value)
+      .map((tr) => (tr.boneId === constraintId && tr.property === 'mix' ? { ...tr, constraintMix: true } : tr));
+    set((st) => ({ animations: st.animations.map((a) => (a.id === anim.id ? { ...a, tracks } : a)) }));
+    get().applyActiveAnimation();
+  },
+  removeConstraintMixKeyframe: (constraintId, time) => {
+    const s = get();
+    const anim = s.animations.find((a) => a.id === s.activeAnimationId);
+    if (!anim) return;
+    s.pushHistory();
+    const tracks = anim.tracks
+      .map((x) => {
+        if (x.boneId !== constraintId || x.property !== 'mix' || !x.constraintMix) return x;
+        const keys = x.keys.filter((k) => Math.abs(k.time - time) >= 1e-6);
+        return { ...x, keys };
+      })
+      .filter((x) => x.keys.length > 0);
+    set((st) => ({ animations: st.animations.map((a) => (a.id === anim.id ? { ...a, tracks } : a)) }));
+    get().applyActiveAnimation();
   },
 
   // Day 2 setters

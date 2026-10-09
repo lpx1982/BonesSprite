@@ -59,6 +59,8 @@ const dict = {
     open_desc:        { zh: '从 .pbs / .json 加载',          en: 'Load .pbs / .json' },
     import_psd:       { zh: '导入 PSD',                      en: 'Import PSD' },
     import_psd_desc:  { zh: '从 Photoshop 图层创建骨骼',      en: 'Create bones from Photoshop layers' },
+    import_data:      { zh: '导入数据',                      en: 'Import Data' },
+    import_data_desc: { zh: '从 JSON + 多张 PNG 重建骨骼',    en: 'Build skeleton from JSON + PNGs' },
     recent:           { zh: '最近打开的工程',                en: 'Recent Projects' },
     name_placeholder: { zh: '工程名称（留空使用 untitled）',  en: 'Project name (blank = untitled)' },
     cancel:           { zh: '取消',                          en: 'Cancel' },

@@ -12,9 +12,10 @@ import {
   FederatedPointerEvent,
   FederatedWheelEvent,
 } from 'pixi.js';
-import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, type BoneNode, type SlotBinding } from './store';
+import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, type BoneNode, type SlotBinding, type IkConstraintDef } from './store';
 import { Bone as EngineBone } from '@engine/Bone';
 import { Skeleton } from '@engine/Skeleton';
+import { applyIkConstraints, type IkSolveContext } from '@engine/IkConstraint';
 import { parsePsd, type PixiBonesLayer, type PixiBonesPsd, type PixiBonesSlot } from '@psd/index';
 import type { MeshData } from '@psd/types';
 import { importAssetFile } from './importAsset';
@@ -29,6 +30,36 @@ const BONE_PALETTE = [
   '#E61E1E', '#1E78E6', '#2EC75E', '#F0A020', '#9B59B6', '#16A085',
   '#E67E22', '#3498DB', '#E84393', '#27AE60', '#8E44AD', '#D35400',
 ];
+
+/**
+ * 把 store 里的 IK 约束组装成引擎解算上下文，并按顺序应用到引擎骨架。
+ * 只影响引擎骨骼（world 矩阵），不写回 store。
+ * mix 优先用动画 tab 的运行时值（constraintRuntimeMix），否则用约束定义值。
+ */
+function applyIkConstraintsToSkeleton(
+  skeleton: Skeleton,
+  constraints: IkConstraintDef[],
+  boneById: Map<string, EngineBone>,
+): void {
+  const st = usePixiBonesStore.getState();
+  const runtimeMix = st.constraintRuntimeMix;
+  const contexts: IkSolveContext[] = [];
+  for (const c of constraints) {
+    const bone = boneById.get(c.boneId);
+    const target = boneById.get(c.targetBoneId);
+    if (!bone || !target) continue;
+    const mix = runtimeMix[c.id] ?? c.mix;
+    if (mix <= 0) continue;
+    contexts.push({
+      bone,
+      child: c.childBoneId ? (boneById.get(c.childBoneId) ?? null) : null,
+      target,
+      bendDirection: c.bendDirection,
+      mix,
+    });
+  }
+  if (contexts.length > 0) applyIkConstraints(skeleton, contexts);
+}
 
 /**
  * Day 3.5 · 主编辑器画布（Spine 风格）
@@ -2091,6 +2122,10 @@ export function BoneEditor() {
         };
         addChildren(rootBone, rootNode.id);
         skel.update();
+        // ★ IK 约束：基础世界矩阵算好后按顺序应用 IK（修改引擎骨骼的 local rotation，
+        //   之后所有 getWorldPosition / getWorldTip 拿到的都是 IK 后的结果）。
+        //   注意：只影响引擎骨架，不写回 store（store 保存的是未约束的设置姿态）。
+        applyIkConstraintsToSkeleton(skel, usePixiBonesStore.getState().constraints, boneById);
         skeletonRef = skel;
       };
 
@@ -4217,9 +4252,9 @@ export function BoneEditor() {
             }
           });
         }
-        if (state.bones !== prev.bones) {
+        if (state.bones !== prev.bones || state.constraints !== prev.constraints) {
           buildSkeleton(state.bones);
-          // ★ 骨骼平移 / 旋转 / 缩放 → 重算所有已绑定网格的顶点蒙皮
+          // ★ 骨骼平移 / 旋转 / 缩放（或约束变化）→ 重算所有已绑定网格的顶点蒙皮
           //   注意：applySkinning 需要 wrapMatrixBySlot 已有该插槽记录，
           //   所以先调一次 applyBindings 把 slot 变换矩阵算好（即使骨骼驱动被跳过也无碍）。
           applyBindings(state.psd, state.images, state.slots, state.slotBindings, state.slotTransforms);

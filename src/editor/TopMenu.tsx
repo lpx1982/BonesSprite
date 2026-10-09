@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { usePixiBonesStore } from './store';
 import { useT, type Locale } from './i18n';
 import { saveCurrentProject, saveProjectAsPrompt } from './projectIO';
+import { importDataFromFiles } from '../exporters/importDataFlow';
 import logoImg from '/logo.png';
 import folderIcon from './icons/folder.png';
 import saveIcon from './icons/save.png';
@@ -72,7 +73,7 @@ const MENU_ITEMS: MenuItem[] = [
   { icon: '🦴', labelKey: 'menu.new_skeleton',    shortcutKey: 'shortcut.cmd_n' },
   { divider: true } as MenuItem,
   { icon: '📥', labelKey: 'menu.import_project' },
-  { icon: '📊', labelKey: 'menu.import_data' },
+  { icon: '📊', labelKey: 'menu.import_data', action: () => { void importDataFromFiles(); } },
   { icon: '🖼', labelKey: 'menu.import_psd' },
   { icon: '📤', labelKey: 'menu.export',          shortcutKey: 'shortcut.cmd_e' },
   { divider: true } as MenuItem,
