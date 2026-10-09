@@ -7,6 +7,7 @@ import { TopMenu } from './TopMenu';
 import { AnimationTimeline } from './AnimationTimeline';
 import { useT } from './i18n';
 import { ViewMenu } from './ViewMenu';
+import { useProjectPersistence } from './projectIO';
 import hideViewsIcon from './icons/hideviews.png';
 
 /**
@@ -17,6 +18,8 @@ import hideViewsIcon from './icons/hideviews.png';
  *   - 导入素材走画布拖拽 / 顶部菜单（图片素材显示在层级树的「图片」节点下）
  */
 export function Editor() {
+  // 工程持久化：打开工程时自动载入存档 + 变更防抖自动保存 + 关闭/隐藏前保存
+  useProjectPersistence();
   const showRightPanel = usePixiBonesStore((s) => s.showRightPanel);
   const viewGridTool = usePixiBonesStore((s) => s.viewGridTool);
   const viewDockOrder = usePixiBonesStore((s) => s.viewDockOrder);

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { usePixiBonesStore } from './store';
 import { useT, type Locale } from './i18n';
+import { saveCurrentProject } from './projectIO';
 import logoImg from '/logo.png';
 import folderIcon from './icons/folder.png';
 import saveIcon from './icons/save.png';
@@ -64,7 +65,7 @@ const MENU_ITEMS: MenuItem[] = [
   { icon: '📁', labelKey: 'menu.open_project',    shortcutKey: 'shortcut.cmd_o' },
   { icon: '🕘', labelKey: 'menu.recent',          shortcutKey: 'shortcut.arrow_right' },
   { divider: true } as MenuItem,
-  { icon: '💾', labelKey: 'menu.save',            shortcutKey: 'shortcut.cmd_s' },
+  { icon: '💾', labelKey: 'menu.save',            shortcutKey: 'shortcut.cmd_s', action: () => { void saveCurrentProject(); } },
   { icon: '📝', labelKey: 'menu.save_as',         shortcutKey: 'shortcut.cmd_shift_s' },
   { icon: '📦', labelKey: 'menu.pack' },
   { divider: true } as MenuItem,
@@ -181,10 +182,7 @@ export function TopMenu() {
           <QuickBtn title={t('quickbtn.open_tip')} onClick={() => console.log(t('quickbtn.open_console'))}>
             <img src={folderIcon} alt="打开" width={M.ICON_GRP.ICON_SIZE} height={M.ICON_GRP.ICON_SIZE} style={{ display: 'block' }} />
           </QuickBtn>
-          <QuickBtn title={t('quickbtn.save_tip')} onClick={(e) => {
-            if (e.shiftKey) console.log(t('quickbtn.save_as_console'));
-            else console.log(t('quickbtn.save_console'));
-          }}>
+          <QuickBtn title={t('quickbtn.save_tip')} onClick={() => { void saveCurrentProject(); }}>
             <img src={saveIcon} alt="保存" width={M.ICON_GRP.ICON_SIZE} height={M.ICON_GRP.ICON_SIZE} style={{ display: 'block' }} />
           </QuickBtn>
           <QuickBtn title={t('quickbtn.undo_tip')} onClick={() => usePixiBonesStore.getState().undo()}>

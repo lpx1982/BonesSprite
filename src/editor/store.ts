@@ -70,6 +70,29 @@ export type HistorySnapshot = {
   selectedBoneId: string | null;
 };
 
+/**
+ * 一个已保存工程的完整数据（projectIO 反序列化后交给 applyProjectData 落盘）。
+ * 注意：psd / images 里的 PixiBonesLayer.canvas 此时必须是**已还原好的 canvas**。
+ */
+export interface ProjectData {
+  psd: PixiBonesPsd | null;
+  images: PixiBonesLayer[];
+  slots: PixiBonesSlot[];
+  slotVisibility: Record<string, boolean>;
+  slotTransforms: Record<string, { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }>;
+  slotStyle: Record<string, { color: string; blend: string }>;
+  attachmentStyle: Record<string, { color: string; blend: string }>;
+  attachmentMeshes: Record<string, MeshData>;
+  slotOrder: string[];
+  slotBindings: Record<string, SlotBinding>;
+  bones: BoneNode[];
+  selectedBoneId: string | null;
+  selectedBoneIds: string[];
+  projectName: string;
+  editorTab?: EditorTab;
+  viewport?: { panX: number; panY: number; zoom: number };
+}
+
 export interface PixiBonesState {
   // ---- Day 1 残留字段（Demo 用自己的 skeleton，这里保留兼容）----
   skeleton: Skeleton | null;
@@ -342,6 +365,8 @@ export interface PixiBonesState {
   /** 当前打开的工程 id。null = 在欢迎页（未进入编辑器） */
   currentProjectId: string | null;
   openProject:    (id: string, name: string) => void;
+  /** 载入一份已保存的工程数据（一次性覆盖全部工程态 + 清撤销栈），供 projectIO 调用 */
+  applyProjectData: (d: ProjectData) => void;
   closeProject:   () => void;
   /** 最近工程列表（按打开时间倒序，最多 8 个，localStorage 持久化） */
   recentProjects: Array<{ id: string; name: string; openedAt: number }>;
@@ -498,6 +523,24 @@ let _slotIdCounter = 0;
 function genSlotId(): string {
   _slotIdCounter++;
   return `slot_${_slotIdCounter}`;
+}
+
+/**
+ * 把骨骼 / 插槽的 id 自增计数器推到已载入 id 的最大序号之后。
+ * 载入工程后必须调用，否则新建的 bone_1 / slot_1 会和已载入的 id 撞号。
+ */
+function syncIdCounters(boneIds: string[], slotIds: string[]): void {
+  const maxSuffix = (ids: string[], prefix: string): number => {
+    let m = 0;
+    for (const id of ids) {
+      if (typeof id !== 'string' || !id.startsWith(prefix)) continue;
+      const n = parseInt(id.slice(prefix.length), 10);
+      if (Number.isFinite(n)) m = Math.max(m, n);
+    }
+    return m;
+  };
+  _boneIdCounter = Math.max(_boneIdCounter, maxSuffix(boneIds, 'bone_'));
+  _slotIdCounter = Math.max(_slotIdCounter, maxSuffix(slotIds, 'slot_'));
 }
 
 /** 判断一个图层是否是「可渲染的附件」（有画布且尺寸非 0）。 */
@@ -1061,6 +1104,57 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     }
   },
   closeProject:     () => set({ currentProjectId: null, selectedBoneId: null, selectedBoneIds: [] }),
+  /**
+   * 载入一份已保存的工程：一次性覆盖全部工程态，并清掉撤销栈与各种"编辑中"临时状态。
+   * 同时把 id 自增计数器推到已载入 id 之后，避免之后新建骨骼/插槽与旧 id 撞号。
+   */
+  applyProjectData: (d) => {
+    set({
+      psd: d.psd,
+      images: d.images,
+      slots: d.slots,
+      slotVisibility: d.slotVisibility,
+      slotTransforms: d.slotTransforms,
+      slotStyle: d.slotStyle,
+      attachmentStyle: d.attachmentStyle,
+      attachmentMeshes: d.attachmentMeshes,
+      slotOrder: d.slotOrder,
+      slotBindings: d.slotBindings,
+      bones: d.bones,
+      selectedBoneId: d.selectedBoneId,
+      selectedBoneIds: d.selectedBoneIds,
+      projectName: d.projectName,
+      ...(d.editorTab ? { editorTab: d.editorTab } : {}),
+      // 临时态一律清零（编辑网格 / 描绘 / 拾取 / 权重绑定 / 各种选中）
+      meshEditSlotId: null,
+      meshSelectedVertices: [],
+      meshNewPolygon: null,
+      attachingSlotId: null,
+      weightBindMode: false,
+      traceDialogOpen: false,
+      traceLivePreview: false,
+      traceSnapshot: null,
+      selectedSlotId: null,
+      selectedSlotIds: [],
+      selectedAttachmentId: null,
+      selectedRowKey: null,
+      selectedSectionKey: null,
+      // 撤销栈清空（载入是新起点，不允许撤回到"另一个工程"的状态）
+      historyPast: [],
+      historyFuture: [],
+    });
+    // id 计数器对齐（bone_ / slot_ 前缀）
+    syncIdCounters(
+      d.bones.map((b) => b.id),
+      d.slots.map((s) => s.id),
+    );
+    // 视口延后一拍恢复：BoneEditor 在 psd 变化时会用微任务把视口重置为默认，
+    // 我们的微任务排在它后面（同一同步块里更晚入队）→ 不会被覆盖。
+    if (d.viewport) {
+      const vp = d.viewport;
+      queueMicrotask(() => set({ viewport: vp }));
+    }
+  },
   // 从 localStorage 加载最近工程
   recentProjects: (() => {
     try {
