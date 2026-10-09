@@ -965,9 +965,10 @@ export function BoneEditor() {
         //   - weightPie：为每个顶点画权重饼图（选中的顶点饼图更大）
         //   - weightOverlay：用骨骼颜色填充网格
         //   - weightSelectedOnly：仅对选中顶点 / 选中骨骼绘制（叠加时未选骨用黑色）
-        // ★ 绑定模式下不画（顶点要隐藏，只留外轮廓蓝线）
-        const showPie = s.weightPie && !newPoly && !s.weightBindMode;
-        const showOverlay = s.weightOverlay && !newPoly && !s.weightBindMode;
+        // ★ 权重「激活」= 底部「权重」按钮按下（editorMode === 'weights'）时才显示饼图/叠加；
+        //   未激活（如切回姿势/变换工具）时只显示顶点圆点（对齐 Spine 两种模式）。绑定模式下也不画。
+        const showPie = s.weightPie && s.editorMode === 'weights' && !newPoly && !s.weightBindMode;
+        const showOverlay = s.weightOverlay && s.editorMode === 'weights' && !newPoly && !s.weightBindMode;
         if (showPie || showOverlay) {
           for (const slot of s.slots) {
             const aid = slot.activeAttachmentId;
