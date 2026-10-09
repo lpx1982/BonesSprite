@@ -471,16 +471,16 @@ export function BoneEditor() {
         wrapMatrixBySlot.clear();
         for (const { slot, layer } of renderablesOf(psd, images, slots)) {
           // ★ 网格「作用于画面」的规则（对齐 Spine）：
-          //   - **裁切永远生效**：只要有网格（新建闭合 / 描绘确定后 / 退出编辑后），
-          //     画面就裁到网格轮廓内，只显示轮廓内像素；
-          //   - **顶点不产生"变形"**：只有权重绑定后才按骨骼变形（蒙皮）。
-          //   - 例外：**正在编辑**这个插槽 且 未勾选「变形」→ 显示完整原图（方便看清整张图调顶点）；
-          //     正在用「新建」逐点描绘轮廓时 → 也必须显示完整原图（否则看不见要描的边）。
+          //   - **裁切永远生效**：只要有网格（新建闭合 / 描绘确定后 / 编辑中 / 退出编辑后），
+          //     画面就裁到网格轮廓内，只显示轮廓内像素；**与「变形」勾选无关**。
+          //   - 「变形」勾选只决定顶点**位置**是否作用于画面：
+          //     勾选 → 用拖过的顶点位置（拉扯预览）；不勾选 → 用 UV 位置（不拉扯，仅裁切）。
+          //   - 例外：正在用「新建」逐点描绘轮廓时 → 显示完整原图（否则看不见要描的边）。
           const m = meshes[layer.id];
           const hasWeights = !!(m && m.bones && m.bones.length > 0);
           const editingThisSlot = slot.id === st.meshEditSlotId;
           const drawingNew = editingThisSlot && !!st.meshNewPolygon;
-          const showFullImage = (editingThisSlot && !st.meshDeformed) || drawingNew;
+          const showFullImage = drawingNew;
           const useMesh = !showFullImage || hasWeights;
           addSlotView(slot, layer, useMesh ? meshes[layer.id] : undefined);
         }
@@ -1682,9 +1682,6 @@ export function BoneEditor() {
         s.pushHistory();
         s.setMeshData(attachmentId, { vertices, uvs, indices });
         s.setMeshSelectedVertices([]);
-        // ★ 闭合即展示裁切：即使之前未勾「变形」（完整原图），
-        //   新建轮廓闭合后也自动切到「变形」视图 —— 路径外图像立即裁掉（对齐既定规则）。
-        if (!s.meshDeformed) s.setMeshDeformed(true);
       };
 
       /**
