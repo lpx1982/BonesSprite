@@ -612,7 +612,10 @@ export function BoneEditor() {
           const aid = slot.activeAttachmentId;
           const layer = aid ? byId.get(aid) ?? null : null;
           if (!layer) continue;
-          view.tint = composeTint(attachmentStyle[layer.id]?.color, slotStyle[slot.id]?.color);
+          // 颜色：tint = 插槽色 × 附件色；「变暗」勾选时正在编辑的插槽再乘一个暗灰（纯压暗、保持不透明，仿 Spine）
+          const tintColors = [attachmentStyle[layer.id]?.color, slotStyle[slot.id]?.color];
+          if (st.meshDim && slot.id === editingId) tintColors.push('#4d4d4d');
+          view.tint = composeTint(...tintColors);
           const blend = attachmentStyle[layer.id]?.blend || slotStyle[slot.id]?.blend || layer.blendMode;
           (view as unknown as { blendMode: string }).blendMode = blend || 'normal';
           const wantCursor = slot.id === editingId ? editCursor : 'pointer';
