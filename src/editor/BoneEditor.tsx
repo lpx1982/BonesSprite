@@ -1119,20 +1119,18 @@ export function BoneEditor() {
                 const p = pts[i];
                 if (!p) continue;
                 const r = emphasized ? 16 : 10;
-                // 累计扇形：起点角度 0，依次按权重叠加
+                // 累计扇形：起点角度 0，依次按权重叠加（不做局部扇形放大，对齐 Spine）
                 let startAngle = -Math.PI / 2;
                 for (let j = 0; j < nb; j++) {
                   const w = mesh.weights![row + j];
                   if (w <= 0) continue;
                   const endAngle = startAngle + w * Math.PI * 2;
-                  // ★ 选中骨骼对应的扇形放大（突出该骨骼影响的区域）
-                  const sliceR = selBones.has(mesh.bones[j]) ? r + 8 : r;
                   // 三角形扇形用 poly 近似：12 段
                   const segs = 12;
                   const pts3: number[] = [p.x, p.y];
                   for (let k = 0; k <= segs; k++) {
                     const a = startAngle + (endAngle - startAngle) * (k / segs);
-                    pts3.push(p.x + Math.cos(a) * sliceR, p.y + Math.sin(a) * sliceR);
+                    pts3.push(p.x + Math.cos(a) * r, p.y + Math.sin(a) * r);
                   }
                   meshHandles.poly(pts3);
                   // 未选中/未悬停 → 半透明；强调（选中或悬停）→ 不透明
@@ -1140,8 +1138,8 @@ export function BoneEditor() {
                   meshHandles.stroke({ width: 0.5, color: 0x000000, alpha: emphasized ? 0.5 : 0.3 });
                   startAngle = endAngle;
                 }
-                // 强调（选中或悬停）时外层加一圈白色描边
-                if (emphasized) {
+                // ★ 白色描边只在「悬停」时画（选中后鼠标离开没有描边，对齐 Spine 图2）
+                if (hovered) {
                   meshHandles.circle(p.x, p.y, r);
                   meshHandles.stroke({ width: 1.6, color: 0xFFFFFF, alpha: 1 });
                 }
