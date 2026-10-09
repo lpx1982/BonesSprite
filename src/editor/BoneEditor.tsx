@@ -1011,7 +1011,7 @@ export function BoneEditor() {
                 }
                 const p = pts[i];
                 if (!p) continue;
-                const r = isVertexSelected ? 8 : 5;
+                const r = isVertexSelected ? 16 : 10;
                 // 累计扇形：起点角度 0，依次按权重叠加
                 let startAngle = -Math.PI / 2;
                 for (let j = 0; j < nb; j++) {
