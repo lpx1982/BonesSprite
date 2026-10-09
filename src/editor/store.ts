@@ -193,6 +193,14 @@ export interface PixiBonesState {
   weightOverlay: boolean; setWeightOverlay: (v: boolean) => void;
   /** 已选：只画选中顶点 / 选中骨骼的饼图（叠加时未选骨骼用黑色） */
   weightSelectedOnly: boolean; setWeightSelectedOnly: (v: boolean) => void;
+  /**
+   * 权重视图「当前作用的网格附件 id」（key = attachmentId）。
+   * ★ 关键：它**不随选中骨骼而清空** —— 在权重面板的骨骼列表里点某根骨骼时，
+   *   插槽/附件选中会被清掉，但 weightMeshId 保留，面板才能继续列出该网格绑定的骨骼。
+   * 选中插槽 / 附件 / 绑定骨骼时会自动更新。
+   */
+  weightMeshId: string | null;
+  setWeightMesh: (attachmentId: string | null) => void;
   /** 正在编辑网格的插槽 id（null = 未进入网格编辑模式） */
   meshEditSlotId: string | null;
   setMeshEditSlot: (slotId: string | null) => void;
@@ -684,7 +692,11 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   removeMesh: (attachmentId) => set((state) => {
     const next = { ...state.attachmentMeshes };
     delete next[attachmentId];
-    return { attachmentMeshes: next };
+    return {
+      attachmentMeshes: next,
+      // 该网格被移除 → 权重视图当前网格一并清空
+      ...(state.weightMeshId === attachmentId ? { weightMeshId: null } : {}),
+    };
   }),
   // 重置 = 把顶点移回 UV 位置（uv × 图层尺寸）→ 消除变形，拓扑不变
   resetMesh: (attachmentId) => set((state) => {
@@ -818,6 +830,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
           ...s.attachmentMeshes,
           [attachmentId]: { ...m, bones, weights, bindPose, boneBindWorld },
         },
+        // ★ 绑定后把权重视图的「当前网格」切到这里，面板立即列出刚绑的骨骼
+        weightMeshId: attachmentId,
       };
     });
   },
@@ -965,6 +979,9 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   setWeightOverlay: (v) => set({ weightOverlay: v }),
   weightSelectedOnly: false,
   setWeightSelectedOnly: (v) => set({ weightSelectedOnly: v }),
+  // 权重视图当前作用的网格（选中骨骼时不清空，见接口注释）
+  weightMeshId: null,
+  setWeightMesh: (attachmentId) => set({ weightMeshId: attachmentId }),
   meshNewPolygon: null,
   setMeshNewPolygon: (pts) => set({ meshNewPolygon: pts }),
   meshWireframe: {},
@@ -1131,6 +1148,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       meshNewPolygon: null,
       attachingSlotId: null,
       weightBindMode: false,
+      weightMeshId: null,
       traceDialogOpen: false,
       traceLivePreview: false,
       traceSnapshot: null,
@@ -1273,6 +1291,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       slotStyle: {},
       attachmentStyle: {},
       attachmentMeshes: {},
+      weightMeshId: null,   // 新 PSD：权重视图的当前网格清空
       meshEditSlotId: null,
       meshSelectedVertices: [],
       meshWireframe: {},
@@ -1393,6 +1412,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
         attachmentStyle: nextAttachmentStyle,
         attachmentMeshes: nextMeshes,
         meshWireframe: nextWire,
+        ...(state.weightMeshId === id ? { weightMeshId: null } : {}),
         meshEditSlotId: state.meshEditSlotId && state.meshEditSlotId === state.selectedSlotId && attSelected
           ? null
           : state.meshEditSlotId,
@@ -1403,7 +1423,10 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     set((state) => ({
       slotVisibility: { ...state.slotVisibility, [slotId]: !(state.slotVisibility[slotId] ?? true) },
     })),
-  selectSlot: (id, rowKey) => set((s) => ({
+  selectSlot: (id, rowKey) => set((s) => {
+    const slot = id ? s.slots.find((x) => x.id === id) ?? null : null;
+    const attId = slot?.activeAttachmentId ?? null;
+    return {
     selectedSlotId: id,
     selectedSlotIds: id ? [id] : [],
     // 选中插槽 = 未选中具体附件（底部面板显示「插槽属性」）
@@ -1414,12 +1437,15 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     selectedBoneIds: [],
     selectedSectionKey: null,
     attachingSlotId: null,
+    // ★ 权重视图：把「当前网格」切到这个插槽的激活附件（选骨骼时不会被清）
+    ...(attId ? { weightMeshId: attId } : {}),
     // ★ 仿 Spine：姿势模式下在层级树选中插槽/图片 → 自动切到「旋转」工具。
     //   变换工具与 mode 卡互斥，因此同时退出 pose（editorMode = 'idle'）。
     ...(id && s.editorMode === 'pose'
       ? { activeTool: 'rotate' as const, editorMode: 'idle' as const }
       : {}),
-  })),
+    };
+  }),
   // 选中一个附件（层级树附件行 / 点小圆点切当前）：同时选中它所属插槽
   selectAttachment: (slotId, attachmentId, rowKey) => set((s) => ({
     selectedSlotId: slotId,
@@ -1431,6 +1457,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     selectedBoneIds: [],
     selectedSectionKey: null,
     attachingSlotId: null,
+    // ★ 权重视图：当前网格 = 刚选中的附件
+    weightMeshId: attachmentId,
     // 与 selectSlot 一致：pose 模式下切到旋转工具
     ...(s.editorMode === 'pose'
       ? { activeTool: 'rotate' as const, editorMode: 'idle' as const }
@@ -1439,6 +1467,9 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   // 多选素材：additive=true 增量追加，false 替换
   selectSlots: (ids, additive = false) => set((s) => {
     const next = additive ? Array.from(new Set([...s.selectedSlotIds, ...ids])) : ids;
+    // 单选时把权重当前网格同步过去
+    const onlySlot = next.length === 1 ? s.slots.find((x) => x.id === next[0]) ?? null : null;
+    const onlyAtt = onlySlot?.activeAttachmentId ?? null;
     return {
       selectedSlotIds: next,
       selectedSlotId: next[0] ?? null,
@@ -1448,6 +1479,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       selectedBoneIds: [],
       selectedSectionKey: null,
       attachingSlotId: null,
+      ...(onlyAtt ? { weightMeshId: onlyAtt } : {}),
     };
   }),
   // 只设置目标素材，保留骨骼选中（创建模式 ⌘ 点击素材用）

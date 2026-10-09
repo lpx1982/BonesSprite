@@ -2140,7 +2140,10 @@ export function BoneEditor() {
               //   若当前已选骨骼 + 又点骨骼 → 累加绑定（多根一起绑）
               const stBind = usePixiBonesStore.getState();
               if (stBind.weightBindMode) {
-                const currentAid = stBind.selectedAttachmentId
+                // 目标网格：优先用权重视图登记的「当前网格」（选骨骼不会清它），
+                // 再退回当前选中附件 / 单选插槽。
+                const currentAid = stBind.weightMeshId
+                  ?? stBind.selectedAttachmentId
                   ?? (stBind.selectedSlotIds.length === 1
                         ? stBind.slots.find((x) => x.id === stBind.selectedSlotIds[0])?.activeAttachmentId ?? null
                         : null);

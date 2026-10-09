@@ -451,8 +451,15 @@ function WeightsPanel() {
   const bones              = usePixiBonesStore((s) => s.bones);
   const unbindBoneFromMesh = usePixiBonesStore((s) => s.unbindBoneFromMesh);
   const recomputeWeights   = usePixiBonesStore((s) => s.recomputeMeshWeights);
-  // 当前网格 attachmentId（用于骨骼列表 + 「删除」按钮）
+  /**
+   * 权重视图「当前作用的网格」。
+   * ★ 优先用 store.weightMeshId —— 它在「选中骨骼」时**不会**被清空，
+   *   所以在骨骼列表里点骨骼后，列表仍能继续显示该网格绑定的骨骼。
+   *   兜底：若还没设过，就按当前选中插槽/附件推断。
+   */
+  const weightMeshId       = usePixiBonesStore((s) => s.weightMeshId);
   const currentAttachmentId: string | null = (() => {
+    if (weightMeshId) return weightMeshId;
     if (selectedAttachment) return selectedAttachment;
     if (selectedSlotIds.length === 1) {
       const s = slots.find((x) => x.id === selectedSlotIds[0]);
