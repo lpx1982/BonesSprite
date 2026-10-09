@@ -141,6 +141,17 @@ export function BoneEditor() {
           /** 按下时已选中的顶点 */
           prevSel: number[];
         }
+      /** 权重模式：框选顶点（在权重网格上空白处拖动，单选 / ⌘加选 / 框选） */
+      | {
+          kind: 'weight-marquee';
+          slotId: string;
+          attachmentId: string;
+          startScreen: { x: number; y: number };
+          nowScreen: { x: number; y: number };
+          rect: Gfx;
+          additive: boolean;
+          prevSel: number[];
+        }
       | null;
     /** 0 长度骨骼上的悬停分区（黑圈内=移动，圈外=旋转） */
     type HoverZone = { boneId: string; kind: 'move' | 'rotate' };
@@ -3023,6 +3034,38 @@ export function BoneEditor() {
             );
             drawMeshHandles();
           }
+        } else if (dragState.kind === 'weight-marquee') {
+          // 权重模式框选顶点：实时画矩形 + 更新选中集合（顶点 = 饼图）
+          // ★ 用局部 const 缓存收窄类型（箭头函数里捕获 dragState 会退回声明类型）
+          const wd = dragState;
+          wd.nowScreen = { x: ev.global.x, y: ev.global.y };
+          const { startScreen, nowScreen, rect } = wd;
+          const x = Math.min(startScreen.x, nowScreen.x);
+          const y = Math.min(startScreen.y, nowScreen.y);
+          const w = Math.abs(nowScreen.x - startScreen.x);
+          const h = Math.abs(nowScreen.y - startScreen.y);
+          rect.clear();
+          rect.rect(x, y, w, h)
+              .stroke({ width: 1, color: 0x4FB8F8, alpha: 0.8 })
+              .fill({ color: 0x4FB8F8, alpha: 0.12 });
+          const stM = usePixiBonesStore.getState();
+          const wSlot = stM.slots.find((s) => s.id === wd.slotId) ?? null;
+          const wLayer = wd.attachmentId
+            ? allAttachmentsOf(stM.psd, stM.images).find((l) => l.id === wd.attachmentId) ?? null
+            : null;
+          const wMesh = wd.attachmentId ? stM.attachmentMeshes[wd.attachmentId] : null;
+          if (wSlot && wLayer && wMesh) {
+            const pts = skinnedVerticesScreen(wSlot.id, wLayer, wMesh);
+            const picked: number[] = [];
+            for (let i = 0; i < pts.length; i++) {
+              const q = pts[i];
+              if (q.x >= x && q.x <= x + w && q.y >= y && q.y <= y + h) picked.push(i);
+            }
+            stM.setMeshSelectedVertices(
+              wd.additive ? Array.from(new Set([...wd.prevSel, ...picked])) : picked,
+            );
+            drawMeshHandles();
+          }
         } else if (dragState.kind === 'marquee') {
           // 框选：实时画蓝色矩形 + 命中检测
           dragState.nowScreen = { x: ev.global.x, y: ev.global.y };
@@ -3078,8 +3121,8 @@ export function BoneEditor() {
       };
       const onPointerUp = (ev: FederatedPointerEvent) => {
         if (!dragState) return;
-        // 网格编辑：顶点框选收尾（销毁选框；顶点拖动无需特殊处理）
-        if (dragState.kind === 'mesh-marquee') {
+        // 网格编辑 / 权重模式：顶点框选收尾（销毁选框；顶点拖动无需特殊处理）
+        if (dragState.kind === 'mesh-marquee' || dragState.kind === 'weight-marquee') {
           a.stage.removeChild(dragState.rect);
           dragState.rect.destroy();
         }
@@ -3477,6 +3520,56 @@ export function BoneEditor() {
               };
               return;
             }
+          }
+        }
+
+        // ★ 权重模式：单选 / ⌘加选 / 框选 顶点（饼图 = 顶点）
+        const stW = usePixiBonesStore.getState();
+        if (stW.editorMode === 'weights' && !stW.weightBindMode) {
+          // 目标网格：weightMeshId 优先，否则场景里唯一的网格
+          let wAid: string | null = stW.weightMeshId;
+          if (!wAid) {
+            const keys = Object.keys(stW.attachmentMeshes);
+            if (keys.length === 1) wAid = keys[0];
+          }
+          const wSlot = wAid ? stW.slots.find((x) => x.activeAttachmentId === wAid) ?? null : null;
+          const wLayer = wAid ? allAttachmentsOf(stW.psd, stW.images).find((l) => l.id === wAid) ?? null : null;
+          const wMesh = wAid ? stW.attachmentMeshes[wAid] : null;
+          if (wAid && wSlot && wLayer && wMesh) {
+            ev.stopPropagation();
+            const pts = skinnedVerticesScreen(wSlot.id, wLayer, wMesh);
+            // 命中阈值：饼图选中 16 / 普通 10，用 14px
+            let hitIdx = -1;
+            let bestD = 14;
+            for (let i = 0; i < pts.length; i++) {
+              const d = Math.hypot(pts[i].x - ev.global.x, pts[i].y - ev.global.y);
+              if (d < bestD) { bestD = d; hitIdx = i; }
+            }
+            const additive = ev.metaKey || ev.ctrlKey || ev.shiftKey;
+            if (hitIdx >= 0) {
+              const cur = stW.meshSelectedVertices;
+              const next = additive
+                ? (cur.includes(hitIdx) ? cur.filter((i) => i !== hitIdx) : [...cur, hitIdx])
+                : [hitIdx];
+              stW.setMeshSelectedVertices(next);
+              drawMeshHandles();
+              return;
+            }
+            // 空白处 → 框选顶点
+            const wRect = new Gfx();
+            wRect.eventMode = 'none';
+            a.stage.addChild(wRect);
+            dragState = {
+              kind: 'weight-marquee',
+              slotId: wSlot.id,
+              attachmentId: wAid,
+              startScreen: { x: ev.global.x, y: ev.global.y },
+              nowScreen: { x: ev.global.x, y: ev.global.y },
+              rect: wRect,
+              additive,
+              prevSel: stW.meshSelectedVertices,
+            };
+            return;
           }
         }
 
