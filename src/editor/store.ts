@@ -952,7 +952,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   setMeshSelectedVertices: (idx) => set({ meshSelectedVertices: idx }),
   meshShowTriangles: true,
   setMeshShowTriangles: (v) => set({ meshShowTriangles: v }),
-  meshDeformed: false,   // 默认不勾：编辑网格时显示完整原图，只编辑顶点（网格不施加到图片）
+  meshDeformed: true,   // 默认勾选（对齐 Spine）：编辑时也套用网格（裁切预览）；取消勾选 = 显示完整原图
   setMeshDeformed: (v) => set({ meshDeformed: v }),
   meshDim: false,
   setMeshDim: (v) => set({ meshDim: v }),

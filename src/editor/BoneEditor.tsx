@@ -440,14 +440,18 @@ export function BoneEditor() {
         const meshes = st.attachmentMeshes;
         wrapMatrixBySlot.clear();
         for (const { slot, layer } of renderablesOf(psd, images, slots)) {
-          // ★ 网格「作用于画面」（裁切 / 变形）只在两种情况下启用：
-          //   1. 权重绑定后（mesh.bones 非空）—— 蒙皮需要网格承载顶点
-          //   2. 正在编辑这个插槽 且 勾选了「变形」—— 编辑时预览网格效果
-          //   其它情况一律显示**完整原图**（网格只作为顶点编辑的载体存在，不裁切画面）
+          // ★ 网格「作用于画面」的规则（对齐 Spine）：
+          //   - **裁切永远生效**：只要有网格（新建闭合 / 描绘确定后 / 退出编辑后），
+          //     画面就裁到网格轮廓内，只显示轮廓内像素；
+          //   - **顶点不产生"变形"**：只有权重绑定后才按骨骼变形（蒙皮）。
+          //   - 例外：**正在编辑**这个插槽 且 未勾选「变形」→ 显示完整原图（方便看清整张图调顶点）；
+          //     正在用「新建」逐点描绘轮廓时 → 也必须显示完整原图（否则看不见要描的边）。
           const m = meshes[layer.id];
           const hasWeights = !!(m && m.bones && m.bones.length > 0);
           const editingThisSlot = slot.id === st.meshEditSlotId;
-          const useMesh = hasWeights || (editingThisSlot && st.meshDeformed);
+          const drawingNew = editingThisSlot && !!st.meshNewPolygon;
+          const showFullImage = (editingThisSlot && !st.meshDeformed) || drawingNew;
+          const useMesh = !showFullImage || hasWeights;
           addSlotView(slot, layer, useMesh ? meshes[layer.id] : undefined);
         }
       };
@@ -893,8 +897,8 @@ export function BoneEditor() {
             alpha: isEditing ? 0.95 : 0.55,
           });
 
-          // 内部边：勾选「三角形」时显示 → 能看清三角剖分
-          if (s.meshShowTriangles) {
+          // 内部边（三角剖分线）：★ 只在「编辑网格」时显示（退出编辑后不画三角，对齐 Spine）
+          if (isEditing && s.meshShowTriangles) {
             for (const e of edges) {
               if (e.n === 1) continue;
               const p0 = pts[e.a];
@@ -905,33 +909,34 @@ export function BoneEditor() {
             meshHandles.stroke({
               width: 1,
               color: 0x9BD1FF,
-              alpha: isEditing ? 0.7 : 0.35,
+              alpha: 0.7,
             });
           }
 
-          // 软选择着色（仅编辑态 + 勾选软选择 + 有选中顶点）：
-          //   选中顶点 = 青色；受软选择影响的顶点在「青色 ↔ 深蓝」之间按权重取色，
-          //   直观显示羽化衰减程度（对齐 Spine「网格工具」视图文档）。
-          const softOn = isEditing && s.meshSoftSelect && selected.size > 0;
-          const softW = softOn
-            ? computeSoftWeights(mesh, [...selected], s.meshSoftSize, s.meshSoftFeather, s.meshSoftHull)
-            : null;
-          const SEL_COLOR = softOn ? 0x4FE3E3 : 0xFFD34D;
-          const SOFT_DARK = 0x1B2A4A;
+          // 顶点手柄 / 软选择着色：★ 只在「编辑网格」时显示
+          if (isEditing) {
+            // 软选择着色（仅编辑态 + 勾选软选择 + 有选中顶点）：
+            //   选中顶点 = 青色；受软选择影响的顶点在「青色 ↔ 深蓝」之间按权重取色
+            const softOn = s.meshSoftSelect && selected.size > 0;
+            const softW = softOn
+              ? computeSoftWeights(mesh, [...selected], s.meshSoftSize, s.meshSoftFeather, s.meshSoftHull)
+              : null;
+            const SEL_COLOR = softOn ? 0x4FE3E3 : 0xFFD34D;
+            const SOFT_DARK = 0x1B2A4A;
 
-          // 顶点
-          for (let i = 0; i < pts.length; i++) {
-            const p = pts[i];
-            if (!p) continue;
-            const sel = isEditing && selected.has(i);
-            const sw = softW ? softW[i] : 0;
-            const softHit = !sel && sw > 0.001;
-            const r = sel ? 5 : softHit ? 4 : (isEditing ? 3.5 : 2.5);
-            const color = sel ? SEL_COLOR : softHit ? lerpColor(SOFT_DARK, SEL_COLOR, sw) : 0xFFFFFF;
-            meshHandles.circle(p.x, p.y, r);
-            meshHandles.fill({ color, alpha: isEditing ? 1 : 0.65 });
-            meshHandles.circle(p.x, p.y, r);
-            meshHandles.stroke({ width: 1, color: 0x1E6FBF, alpha: isEditing ? 1 : 0.5 });
+            for (let i = 0; i < pts.length; i++) {
+              const p = pts[i];
+              if (!p) continue;
+              const sel = selected.has(i);
+              const sw = softW ? softW[i] : 0;
+              const softHit = !sel && sw > 0.001;
+              const r = sel ? 5 : softHit ? 4 : 3.5;
+              const color = sel ? SEL_COLOR : softHit ? lerpColor(SOFT_DARK, SEL_COLOR, sw) : 0xFFFFFF;
+              meshHandles.circle(p.x, p.y, r);
+              meshHandles.fill({ color, alpha: 1 });
+              meshHandles.circle(p.x, p.y, r);
+              meshHandles.stroke({ width: 1, color: 0x1E6FBF, alpha: 1 });
+            }
           }
         }
 
@@ -3702,7 +3707,7 @@ export function BoneEditor() {
       const unsub = usePixiBonesStore.subscribe((state) => {
         if (destroyed) return;
         // 插槽结构（增删/切换激活附件/绘制顺序）变化 → 重建 sprite
-        // ★ 进出「网格编辑」或切换「变形」也会改变用 Mesh 还是 Sprite 渲染 → 一并重建
+        // ★ 进出「网格编辑」/ 切换「变形」/ 开始·结束「新建」描绘，都会改变用 Mesh 还是 Sprite 渲染 → 一并重建
         if (
           state.psd !== prev.psd
           || state.images !== prev.images
@@ -3710,6 +3715,8 @@ export function BoneEditor() {
           || state.slots !== prev.slots
           || state.meshEditSlotId !== prev.meshEditSlotId
           || state.meshDeformed !== prev.meshDeformed
+          // 开始 / 结束「新建」描绘时（null ↔ 数组），在完整原图 ↔ 网格裁切之间切换
+          || (state.meshNewPolygon === null) !== (prev.meshNewPolygon === null)
         ) {
           rebuildAssets(state.psd, state.images, state.slots);
         }
