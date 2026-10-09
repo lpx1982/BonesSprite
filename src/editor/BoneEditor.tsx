@@ -390,25 +390,33 @@ export function BoneEditor() {
        *   两者坐标系一致（都在 wrap 局部，position = layer.left/top），后续绑定 / 变换 / 颜色逻辑通用。
        */
       /**
-       * 计算网格渲染用的顶点位置（positions）。
-       * ★ 变形规则（唯一权威，供渲染 / 同步 / 手柄三处共用）：
-       *   deform = 已绑定权重 || 勾选「变形」→ 用 mesh.vertices（顶点拉扯图像）；
-       *   否则 → 用 UV 对应位置（不拉扯，只裁切）。与「是否正在编辑」无关。
+       * 网格渲染用的顶点位置（positions）。
+       * ★ 轮廓（裁切）始终由顶点位置决定：positions 恒等于 mesh.vertices，
+       *   拖动边缘顶点 → 裁切边界跟着走（与「变形」勾选无关）。
        */
-      const meshRenderPositions = (mesh: MeshData, layer: PixiBonesLayer): Float32Array => {
+      const meshRenderPositions = (mesh: MeshData): Float32Array => {
+        return new Float32Array(mesh.vertices);
+      };
+
+      /**
+       * 网格渲染用的纹理坐标（uvs）。
+       * ★ 「变形」只控制纹理是否被拉扯（与轮廓/裁切无关）：
+       *   - 已绑定权重 或 勾选「变形」→ 用固定 mesh.uvs（纹理被拉扯 = 变形）；
+       *   - 否则 → 用 vertices/size（纹理跟随顶点，不拉扯）。
+       */
+      const meshRenderUvs = (mesh: MeshData, layer: PixiBonesLayer): Float32Array => {
         const stNow = usePixiBonesStore.getState();
         const hasWeights = !!(mesh.bones && mesh.bones.length > 0);
         const deform = hasWeights || stNow.meshDeformed;
-        const positions = new Float32Array(mesh.vertices.length);
         if (deform) {
-          positions.set(mesh.vertices);
-        } else {
-          for (let i = 0; i + 1 < mesh.uvs.length; i += 2) {
-            positions[i] = mesh.uvs[i] * layer.width;
-            positions[i + 1] = mesh.uvs[i + 1] * layer.height;
-          }
+          return new Float32Array(mesh.uvs);
         }
-        return positions;
+        const uvs = new Float32Array(mesh.vertices.length);
+        for (let i = 0; i + 1 < mesh.vertices.length; i += 2) {
+          uvs[i] = mesh.vertices[i] / layer.width;
+          uvs[i + 1] = mesh.vertices[i + 1] / layer.height;
+        }
+        return uvs;
       };
 
       const addSlotView = (
@@ -424,10 +432,10 @@ export function BoneEditor() {
 
         let view: AttachView;
         if (mesh && mesh.vertices.length >= 6 && mesh.indices.length >= 6) {
-          // 网格附件：positions 由 meshRenderPositions 统一计算（权重蒙皮后由 applySkinning 覆盖）
+          // 网格附件：positions 恒 = vertices（裁切轮廓）；uvs 由 meshRenderUvs 决定（权重蒙皮后 applySkinning 只覆盖 positions）
           const geometry = new MeshGeometry({
-            positions: meshRenderPositions(mesh, layer),
-            uvs: new Float32Array(mesh.uvs),
+            positions: meshRenderPositions(mesh),
+            uvs: meshRenderUvs(mesh, layer),
             indices: new Uint32Array(mesh.indices),
           });
           const m = new Mesh({ geometry, texture: tex });
@@ -769,20 +777,6 @@ export function BoneEditor() {
       };
 
       /**
-       * 网格顶点 → 屏幕坐标数组（**用 UV 位置**，即未变形时的裁切轮廓）。
-       * 无权重且非变形显示时，网格只做裁切、顶点不拉扯图像，
-       * 顶点手柄也要画在 UV 位置，和实际渲染一致。
-       */
-      const uvVerticesScreen = (slotId: string, layer: PixiBonesLayer, mesh: MeshData) => {
-        const n = Math.floor(mesh.uvs.length / 2);
-        const out: Array<{ x: number; y: number }> = new Array(n);
-        for (let i = 0; i < n; i++) {
-          out[i] = attachmentLocalToScreen(slotId, layer, mesh.uvs[i * 2] * layer.width, mesh.uvs[i * 2 + 1] * layer.height);
-        }
-        return out;
-      };
-
-      /**
        * 网格顶点 → 屏幕坐标数组（**考虑蒙皮**）。
        *  - 有骨骼绑定时：顶点 = (left,top) + bindPose + Σ w_j·(bone_now - bone_bind)，再转屏幕；
        *    这样拖动骨骼后，画布上的顶点手柄也会跟着变形后的位置走。
@@ -1004,16 +998,12 @@ export function BoneEditor() {
           const layer = byId.get(aid);
           if (!layer) continue;
 
-          // ★ 顶点显示位置与实际渲染保持一致（同一 deform 规则）：
-          //   有权重 → 蒙皮位置；
-          //   编辑中 或 勾选「变形」→ 真实顶点位置（编辑中保证可拖动命中）；
-          //   其余（退出编辑且未勾变形）→ UV 位置（只裁切不拉扯）。
+          // ★ 顶点手柄位置与实际渲染保持一致：
+          //   有权重 → 蒙皮位置（skinned）；无权重 → 真实顶点位置（轮廓恒 = vertices）。
           const hasWeights = !!(mesh.bones && mesh.bones.length > 0);
           const pts = hasWeights
             ? skinnedVerticesScreen(slot.id, layer, mesh)
-            : (isEditing || s.meshDeformed)
-              ? meshVerticesScreen(slot.id, layer, mesh)
-              : uvVerticesScreen(slot.id, layer, mesh);
+            : meshVerticesScreen(slot.id, layer, mesh);
           const edges = meshEdgeInfo(mesh);
 
           // 绑定模式：只画外轮廓边线（被选中的蓝线状态），顶点与三角剖分都隐藏
@@ -1357,9 +1347,10 @@ export function BoneEditor() {
         if (!mesh) return;
         const layer = allAttachmentsOf(s.psd, s.images).find((l) => l.id === attachmentId);
         if (!layer) return;
-        // ★ 用与 addSlotView 相同的 meshRenderPositions：未勾「变形」且未绑权重时
-        //   拖动顶点只改 vertices，positions 仍用 UV 位置（不拉扯图像）。
-        const positions = meshRenderPositions(mesh, layer);
+        // ★ 与 addSlotView 同一规则：positions 恒 = vertices（裁切轮廓跟着顶点走）；
+        //   uvs 在未勾「变形」且未绑权重时跟随顶点（不拉扯），否则固定。
+        const positions = meshRenderPositions(mesh);
+        const uvs = meshRenderUvs(mesh, layer);
         for (const slot of s.slots) {
           if (slot.activeAttachmentId !== attachmentId) continue;
           const wrap = viewBySlotId.get(slot.id);
@@ -1370,6 +1361,8 @@ export function BoneEditor() {
           if (pos.length === mesh.vertices.length) {
             pos.set(positions);
             geo.getBuffer('aPosition').update();
+            geo.uvs.set(uvs);
+            geo.getBuffer('aUV').update();
           }
         }
       };
