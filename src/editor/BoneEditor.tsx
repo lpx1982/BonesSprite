@@ -1125,12 +1125,14 @@ export function BoneEditor() {
                   const w = mesh.weights![row + j];
                   if (w <= 0) continue;
                   const endAngle = startAngle + w * Math.PI * 2;
+                  // ★ 选中骨骼对应的扇形放大（突出该骨骼影响的区域）
+                  const sliceR = selBones.has(mesh.bones[j]) ? r + 8 : r;
                   // 三角形扇形用 poly 近似：12 段
                   const segs = 12;
                   const pts3: number[] = [p.x, p.y];
                   for (let k = 0; k <= segs; k++) {
                     const a = startAngle + (endAngle - startAngle) * (k / segs);
-                    pts3.push(p.x + Math.cos(a) * r, p.y + Math.sin(a) * r);
+                    pts3.push(p.x + Math.cos(a) * sliceR, p.y + Math.sin(a) * sliceR);
                   }
                   meshHandles.poly(pts3);
                   // 未选中/未悬停 → 半透明；强调（选中或悬停）→ 不透明
@@ -1993,6 +1995,33 @@ export function BoneEditor() {
         const isMultiSel = (id: string | undefined) =>
           id !== undefined && (selectedBoneIds ? selectedBoneIds.includes(id) : id === selectedBoneId);
 
+        // ★ 权重模式：骨骼颜色 = 骨骼面板的颜色标签（按该网格 bones 数组顺序），
+        //   且选中任意骨骼时，未选中的骨骼半透明显示。
+        const stWm = usePixiBonesStore.getState();
+        const weightsMode = stWm.editorMode === 'weights';
+        const boneColorMap = new Map<string, number>();
+        const boneAlphaMap = new Map<string, number>();
+        if (weightsMode) {
+          let wAid2: string | null = stWm.weightMeshId;
+          if (!wAid2) {
+            const ks = Object.keys(stWm.attachmentMeshes);
+            if (ks.length === 1) wAid2 = ks[0];
+          }
+          const wMesh2 = wAid2 ? stWm.attachmentMeshes[wAid2] : null;
+          if (wMesh2?.bones) {
+            wMesh2.bones.forEach((bid, i2) => {
+              boneColorMap.set(bid, parseInt(BONE_PALETTE[i2 % BONE_PALETTE.length].replace('#', ''), 16));
+            });
+          }
+          const anyBoneSel = (selectedBoneIds && selectedBoneIds.length > 0) || selectedBoneId != null;
+          for (const n of nodes) {
+            const nSel = (selectedBoneIds && selectedBoneIds.length > 0)
+              ? selectedBoneIds.includes(n.id)
+              : n.id === selectedBoneId;
+            boneAlphaMap.set(n.id, anyBoneSel && !nSel ? 0.35 : 1);
+          }
+        }
+
         const sx = root.scale.x;
         const sy = root.scale.y;
         const ox = root.x;
@@ -2023,19 +2052,19 @@ export function BoneEditor() {
             const isRootBone = node.parentId === null;
             const cx = (isRootBone ? rootAnchorX : ox) + p0.x * sx;
             const cy = (isRootBone ? rootAnchorY : oy) + p0.y * sy;
-            // 颜色优先级：选中 > hover > 默认
-            // - 选中：黄色
-            // - 未选中但 hover：浅灰（HOVER_COLOR）
-            // - 默认：灰（BONE_COLOR）
+            // 颜色：权重模式 = 骨骼面板颜色标签；否则 选中(黄) > hover(浅灰) > 默认(灰)
             let color: number;
             const rootBoneId = (bone as unknown as { _id?: string })._id;
-            if (isSelected) {
+            if (weightsMode) {
+              color = rootBoneId ? (boneColorMap.get(rootBoneId) ?? BONE_COLOR) : BONE_COLOR;
+            } else if (isSelected) {
               color = SELECTED_COLOR;
             } else if (hoveredBoneId === rootBoneId) {
               color = HOVER_COLOR;
             } else {
               color = BONE_COLOR;
             }
+            const boneAlpha = rootBoneId ? (boneAlphaMap.get(rootBoneId) ?? 1) : 1;
             // anchor (viewBox 中心) — 4 条 line 都相对它对称布置
             const ax = 223;
             const ay = 167;
@@ -2063,7 +2092,7 @@ export function BoneEditor() {
               const a1 = project(x1, y1);
               const a2 = project(x2, y2);
               bonesLayer.moveTo(a1.x, a1.y).lineTo(a2.x, a2.y)
-                .stroke({ width: strokeW * A, color, cap: 'round' });
+                .stroke({ width: strokeW * A, color, cap: 'round', alpha: boneAlpha });
             };
             // 4 条带圆头的线段（左/上/下 短，右 长 指向 +X）
             // 左臂 [121, 167] → [176, 167]（靠近中心）
@@ -2077,26 +2106,29 @@ export function BoneEditor() {
             // 双圆环（先画内圈深色背景，再画外圈 stroke 覆盖）
             // 内圈实心填充（深色）— 让中央不会透出画布
             const c0 = project(223, 167);
-            bonesLayer.circle(c0.x, c0.y, 26 * A).fill({ color: innerBg });
+            bonesLayer.circle(c0.x, c0.y, 26 * A).fill({ color: innerBg, alpha: boneAlpha });
             // 外圈 stroke（带圆角端点，模仿原图）
             bonesLayer.circle(c0.x, c0.y, 32 * A)
-              .stroke({ width: 12 * A, color, cap: 'round' });
+              .stroke({ width: 12 * A, color, cap: 'round', alpha: boneAlpha });
           } else {
             // 普通子骨骼（按 Codex 设计的 spine 风格）
             // 几何（viewBox 446x335，anchor (50, 167)，关节在左，尖端在右）：
             //   - 关节圆环：r=18 stroke + r=13 fill（深色背景）
             //   - 三角形主体（指向 tip）：4 点 [78,153] → [410,167] → [78,181] → [62,167]
             //   - viewBox 长度 = 410 - 50 = 360 单位，对应 bone.length 世界单位
-            // 颜色优先级：选中 > hover > 默认
+            // 颜色：权重模式 = 骨骼面板颜色标签；否则 选中(黄) > hover(浅灰) > 默认(灰)
             let color: number;
             const bId = (bone as unknown as { _id?: string })._id;
-            if (isSelected) {
+            if (weightsMode) {
+              color = bId ? (boneColorMap.get(bId) ?? BONE_COLOR) : BONE_COLOR;
+            } else if (isSelected) {
               color = SELECTED_COLOR;
             } else if (hoveredBoneId === bId) {
               color = HOVER_COLOR;
             } else {
               color = BONE_COLOR;
             }
+            const boneAlpha = bId ? (boneAlphaMap.get(bId) ?? 1) : 1;
             // anchor 位置 = 骨骼 joint 屏幕位置；尖端 = world tip 屏幕位置
             const jx = ox + p0.x * sx;
             const jy = oy + p0.y * sy;
@@ -2120,7 +2152,7 @@ export function BoneEditor() {
             // 关节圆环跟 root zoom 走，并且和三角形一样乘宽度系数
             //（短骨骼整体等比缩小，所以圆也一起变小；超过锁定长度后一起锁定）
             const jointR = 9 * Math.max(Math.abs(sx), Math.abs(sy)) * wScale;
-            drawBoneShape(bonesLayer, jx, jy, e0x, e0y, e1x, e1y, color, jointR);
+            drawBoneShape(bonesLayer, jx, jy, e0x, e0y, e1x, e1y, color, jointR, boneAlpha);
           }
           for (const c of bone.children) {
             const sel = isMultiSel((c as unknown as { _id?: string })._id);
@@ -4886,6 +4918,7 @@ function drawBoneShape(
   e1x: number, e1y: number,
   color: number,
   jointR: number = 9,
+  alpha: number = 1,
 ) {
   const innerBg = 0x1a1d22;
   const strokeBg = 0x000000;
@@ -4916,8 +4949,8 @@ function drawBoneShape(
   // 否则短骨骼的小圆圈会被固定 2px 描边糊成一坨
   const k = jointR / 9;
   // 1. 关节圆环：与三角形最左端的角相切（紧挨着，不重叠）
-  g.circle(circleCx, circleCy, jointR).stroke({ width: 2 * k, color });
-  g.circle(circleCx, circleCy, jointR * 0.72).fill({ color: innerBg });
+  g.circle(circleCx, circleCy, jointR).stroke({ width: 2 * k, color, alpha });
+  g.circle(circleCx, circleCy, jointR * 0.72).fill({ color: innerBg, alpha });
   // 2. 三角形主体：用 worldMatrix 变换 —— scaleX 拉伸只改尖端 X 位置，
   //    三角形厚度只受 scaleY 影响（Spine 正确行为）
   const a = project(78, 153);
@@ -4929,8 +4962,8 @@ function drawBoneShape(
     .lineTo(c2.x, c2.y)
     .lineTo(d.x, d.y)
     .closePath()
-    .fill({ color })
-    .stroke({ width: 1.5 * k, color: strokeBg });
+    .fill({ color, alpha })
+    .stroke({ width: 1.5 * k, color: strokeBg, alpha });
 }
 
 /**
