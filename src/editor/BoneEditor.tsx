@@ -1127,7 +1127,7 @@ export function BoneEditor() {
                   const endAngle = startAngle + w * Math.PI * 2;
                   // ★ 选中骨骼对应的扇形放大 —— 仅对「未被选中/未悬停」的顶点生效；
                   //   被强调（悬停/选中）的顶点整体放大，不做局部扇形放大
-                  const sliceR = (!emphasized && selBones.has(mesh.bones[j])) ? r + 8 : r;
+                  const sliceR = (!emphasized && selBones.has(mesh.bones[j])) ? r + 4 : r;
                   // 三角形扇形用 poly 近似：12 段
                   const segs = 12;
                   const pts3: number[] = [p.x, p.y];
