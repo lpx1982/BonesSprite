@@ -389,6 +389,28 @@ export function BoneEditor() {
        * ★ 有网格数据（attachmentMeshes[layer.id]）→ 用 Mesh 渲染三角网格；否则用 Sprite。
        *   两者坐标系一致（都在 wrap 局部，position = layer.left/top），后续绑定 / 变换 / 颜色逻辑通用。
        */
+      /**
+       * 计算网格渲染用的顶点位置（positions）。
+       * ★ 变形规则（唯一权威，供渲染 / 同步 / 手柄三处共用）：
+       *   deform = 已绑定权重 || 勾选「变形」→ 用 mesh.vertices（顶点拉扯图像）；
+       *   否则 → 用 UV 对应位置（不拉扯，只裁切）。与「是否正在编辑」无关。
+       */
+      const meshRenderPositions = (mesh: MeshData, layer: PixiBonesLayer): Float32Array => {
+        const stNow = usePixiBonesStore.getState();
+        const hasWeights = !!(mesh.bones && mesh.bones.length > 0);
+        const deform = hasWeights || stNow.meshDeformed;
+        const positions = new Float32Array(mesh.vertices.length);
+        if (deform) {
+          positions.set(mesh.vertices);
+        } else {
+          for (let i = 0; i + 1 < mesh.uvs.length; i += 2) {
+            positions[i] = mesh.uvs[i] * layer.width;
+            positions[i + 1] = mesh.uvs[i + 1] * layer.height;
+          }
+        }
+        return positions;
+      };
+
       const addSlotView = (
         slot: PixiBonesSlot,
         layer: PixiBonesLayer,
@@ -402,26 +424,9 @@ export function BoneEditor() {
 
         let view: AttachView;
         if (mesh && mesh.vertices.length >= 6 && mesh.indices.length >= 6) {
-          // ★ 顶点「变形」只在两种情况下作用于画面（对齐 Spine）：
-          //   1) 正在编辑该插槽 且 勾选「变形」→ 预览顶点拉扯效果
-          //   2) 已绑定权重 → 顶点位置由 applySkinning 蒙皮覆盖
-          //   其它情况（退出编辑 / 未勾变形）：网格只做**裁切**——
-          //   positions 用 UV 对应位置（未变形），拖动顶点不会拉扯图像。
-          const stNow = usePixiBonesStore.getState();
-          const editingThisSlot = slot.id === stNow.meshEditSlotId;
-          const hasWeights = !!(mesh.bones && mesh.bones.length > 0);
-          const deform = hasWeights || (editingThisSlot && stNow.meshDeformed);
-          const positions = new Float32Array(mesh.vertices.length);
-          if (deform) {
-            positions.set(mesh.vertices);
-          } else {
-            for (let i = 0; i + 1 < mesh.uvs.length; i += 2) {
-              positions[i] = mesh.uvs[i] * layer.width;
-              positions[i + 1] = mesh.uvs[i + 1] * layer.height;
-            }
-          }
+          // 网格附件：positions 由 meshRenderPositions 统一计算（权重蒙皮后由 applySkinning 覆盖）
           const geometry = new MeshGeometry({
-            positions,
+            positions: meshRenderPositions(mesh, layer),
             uvs: new Float32Array(mesh.uvs),
             indices: new Uint32Array(mesh.indices),
           });
@@ -999,13 +1004,14 @@ export function BoneEditor() {
           const layer = byId.get(aid);
           if (!layer) continue;
 
-          // ★ 顶点显示位置与实际渲染保持一致（对齐 Spine）：
-          //   有权重 → 蒙皮位置；**编辑中** → 真实顶点位置（命中/拖动都基于它，保证可拖）；
-          //   非编辑态（无权重）→ UV 位置（与「退出后只裁切不变形」的渲染一致）。
+          // ★ 顶点显示位置与实际渲染保持一致（同一 deform 规则）：
+          //   有权重 → 蒙皮位置；
+          //   编辑中 或 勾选「变形」→ 真实顶点位置（编辑中保证可拖动命中）；
+          //   其余（退出编辑且未勾变形）→ UV 位置（只裁切不拉扯）。
           const hasWeights = !!(mesh.bones && mesh.bones.length > 0);
           const pts = hasWeights
             ? skinnedVerticesScreen(slot.id, layer, mesh)
-            : isEditing
+            : (isEditing || s.meshDeformed)
               ? meshVerticesScreen(slot.id, layer, mesh)
               : uvVerticesScreen(slot.id, layer, mesh);
           const edges = meshEdgeInfo(mesh);
@@ -1349,6 +1355,11 @@ export function BoneEditor() {
         const s = usePixiBonesStore.getState();
         const mesh = s.attachmentMeshes[attachmentId];
         if (!mesh) return;
+        const layer = allAttachmentsOf(s.psd, s.images).find((l) => l.id === attachmentId);
+        if (!layer) return;
+        // ★ 用与 addSlotView 相同的 meshRenderPositions：未勾「变形」且未绑权重时
+        //   拖动顶点只改 vertices，positions 仍用 UV 位置（不拉扯图像）。
+        const positions = meshRenderPositions(mesh, layer);
         for (const slot of s.slots) {
           if (slot.activeAttachmentId !== attachmentId) continue;
           const wrap = viewBySlotId.get(slot.id);
@@ -1357,7 +1368,7 @@ export function BoneEditor() {
           const geo = v.geometry as MeshGeometry;
           const pos = geo.positions;
           if (pos.length === mesh.vertices.length) {
-            pos.set(mesh.vertices);
+            pos.set(positions);
             geo.getBuffer('aPosition').update();
           }
         }
