@@ -402,9 +402,26 @@ export function BoneEditor() {
 
         let view: AttachView;
         if (mesh && mesh.vertices.length >= 6 && mesh.indices.length >= 6) {
-          // 网格附件：顶点已是「相对图层左上角」的像素坐标，UV 归一化 0..1
+          // ★ 顶点「变形」只在两种情况下作用于画面（对齐 Spine）：
+          //   1) 正在编辑该插槽 且 勾选「变形」→ 预览顶点拉扯效果
+          //   2) 已绑定权重 → 顶点位置由 applySkinning 蒙皮覆盖
+          //   其它情况（退出编辑 / 未勾变形）：网格只做**裁切**——
+          //   positions 用 UV 对应位置（未变形），拖动顶点不会拉扯图像。
+          const stNow = usePixiBonesStore.getState();
+          const editingThisSlot = slot.id === stNow.meshEditSlotId;
+          const hasWeights = !!(mesh.bones && mesh.bones.length > 0);
+          const deform = hasWeights || (editingThisSlot && stNow.meshDeformed);
+          const positions = new Float32Array(mesh.vertices.length);
+          if (deform) {
+            positions.set(mesh.vertices);
+          } else {
+            for (let i = 0; i + 1 < mesh.uvs.length; i += 2) {
+              positions[i] = mesh.uvs[i] * layer.width;
+              positions[i + 1] = mesh.uvs[i + 1] * layer.height;
+            }
+          }
           const geometry = new MeshGeometry({
-            positions: new Float32Array(mesh.vertices),
+            positions,
             uvs: new Float32Array(mesh.uvs),
             indices: new Uint32Array(mesh.indices),
           });
@@ -747,6 +764,20 @@ export function BoneEditor() {
       };
 
       /**
+       * 网格顶点 → 屏幕坐标数组（**用 UV 位置**，即未变形时的裁切轮廓）。
+       * 无权重且非变形显示时，网格只做裁切、顶点不拉扯图像，
+       * 顶点手柄也要画在 UV 位置，和实际渲染一致。
+       */
+      const uvVerticesScreen = (slotId: string, layer: PixiBonesLayer, mesh: MeshData) => {
+        const n = Math.floor(mesh.uvs.length / 2);
+        const out: Array<{ x: number; y: number }> = new Array(n);
+        for (let i = 0; i < n; i++) {
+          out[i] = attachmentLocalToScreen(slotId, layer, mesh.uvs[i * 2] * layer.width, mesh.uvs[i * 2 + 1] * layer.height);
+        }
+        return out;
+      };
+
+      /**
        * 网格顶点 → 屏幕坐标数组（**考虑蒙皮**）。
        *  - 有骨骼绑定时：顶点 = (left,top) + bindPose + Σ w_j·(bone_now - bone_bind)，再转屏幕；
        *    这样拖动骨骼后，画布上的顶点手柄也会跟着变形后的位置走。
@@ -968,7 +999,15 @@ export function BoneEditor() {
           const layer = byId.get(aid);
           if (!layer) continue;
 
-          const pts = skinnedVerticesScreen(slot.id, layer, mesh);
+          // ★ 顶点显示位置与实际渲染保持一致（对齐 Spine）：
+          //   有权重 → 蒙皮位置；编辑中勾「变形」→ 拖过的顶点位置；
+          //   其余（退出编辑 / 未勾变形）→ UV 位置（未变形，只裁切）。
+          const hasWeights = !!(mesh.bones && mesh.bones.length > 0);
+          const pts = hasWeights
+            ? skinnedVerticesScreen(slot.id, layer, mesh)
+            : (isEditing && s.meshDeformed)
+              ? meshVerticesScreen(slot.id, layer, mesh)
+              : uvVerticesScreen(slot.id, layer, mesh);
           const edges = meshEdgeInfo(mesh);
 
           // 绑定模式：只画外轮廓边线（被选中的蓝线状态），顶点与三角剖分都隐藏
