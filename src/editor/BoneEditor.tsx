@@ -1119,18 +1119,21 @@ export function BoneEditor() {
                 const p = pts[i];
                 if (!p) continue;
                 const r = emphasized ? 16 : 10;
-                // 累计扇形：起点角度 0，依次按权重叠加（不做局部扇形放大，对齐 Spine）
+                // 累计扇形：起点角度 0，依次按权重叠加
                 let startAngle = -Math.PI / 2;
                 for (let j = 0; j < nb; j++) {
                   const w = mesh.weights![row + j];
                   if (w <= 0) continue;
                   const endAngle = startAngle + w * Math.PI * 2;
+                  // ★ 选中骨骼对应的扇形放大 —— 仅对「未被选中/未悬停」的顶点生效；
+                  //   被强调（悬停/选中）的顶点整体放大，不做局部扇形放大
+                  const sliceR = (!emphasized && selBones.has(mesh.bones[j])) ? r + 8 : r;
                   // 三角形扇形用 poly 近似：12 段
                   const segs = 12;
                   const pts3: number[] = [p.x, p.y];
                   for (let k = 0; k <= segs; k++) {
                     const a = startAngle + (endAngle - startAngle) * (k / segs);
-                    pts3.push(p.x + Math.cos(a) * r, p.y + Math.sin(a) * r);
+                    pts3.push(p.x + Math.cos(a) * sliceR, p.y + Math.sin(a) * sliceR);
                   }
                   meshHandles.poly(pts3);
                   // 未选中/未悬停 → 半透明；强调（选中或悬停）→ 不透明
