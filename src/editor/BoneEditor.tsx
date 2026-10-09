@@ -4130,6 +4130,26 @@ export function BoneEditor() {
             });
           }
         }
+        // ★ 进入权重模式：若当前没选中任何已绑骨骼，自动选中第一个，
+        //   让「该骨骼扇形放大 + 其余骨骼半透明」立即可见（刷新后选中态回根骨的问题）
+        if (
+          state.editorMode !== prev.editorMode
+          && state.editorMode === 'weights'
+          && !state.weightBindMode
+        ) {
+          let wAid = state.weightMeshId;
+          if (!wAid) {
+            const ks = Object.keys(state.attachmentMeshes);
+            if (ks.length === 1) wAid = ks[0];
+          }
+          const wMesh = wAid ? state.attachmentMeshes[wAid] : null;
+          if (wMesh?.bones && wMesh.bones.length > 0) {
+            const selSet = new Set(state.selectedBoneIds);
+            if (!wMesh.bones.some((b) => selSet.has(b))) {
+              usePixiBonesStore.getState().selectBone(wMesh.bones[0]);
+            }
+          }
+        }
         applyVisibility(state.psd, state.images, state.slots, state.slotVisibility);
         applyBindings(state.psd, state.images, state.slots, state.slotBindings, state.slotTransforms);
         applySlotStyles(state.psd, state.images, state.slots, state.slotStyle, state.attachmentStyle);
