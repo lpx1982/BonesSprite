@@ -458,6 +458,7 @@ function WeightsPanel() {
    *   兜底：若还没设过，就按当前选中插槽/附件推断。
    */
   const weightMeshId       = usePixiBonesStore((s) => s.weightMeshId);
+  const setWeightMesh      = usePixiBonesStore((s) => s.setWeightMesh);
   const currentAttachmentId: string | null = (() => {
     if (weightMeshId) return weightMeshId;
     if (selectedAttachment) return selectedAttachment;
@@ -674,19 +675,12 @@ function WeightsPanel() {
                 ? '退出绑定模式（Esc）'
                 : '进入绑定模式：先选网格则点骨骼绑定；先选骨骼则点网格绑全部骨骼'}
               onClick={() => {
-                // 关闭绑定模式前：若当前是「先选骨骼」且开着绑定、且用户又点了一次，
-                // 就只退出绑定模式（不绑）。否则按当前选中的皮肤决定走哪条流程。
                 if (bindMode) { toggleBind(); return; }
-                if (selectedBoneIds.length > 0 && !selectedAttachment && selectedSlotIds.length === 0) {
-                  // 流程 B：先选骨骼（且没选网格）→ 进入绑定模式，等用户点网格
-                  toggleBind();
-                } else if (currentAttachmentId) {
-                  // 流程 A：先选网格 → 进入绑定模式，等用户点骨骼
-                  toggleBind();
-                } else {
-                  // 啥也没选 → 当作流程 A 进入绑定模式（让用户之后点骨骼）
-                  toggleBind();
-                }
+                // 进入绑定模式前：把「当前网格」登记到 weightMeshId，
+                // 画布上该网格会变成「只显示选中蓝外轮廓」并出现顶部提示条。
+                if (currentAttachmentId) setWeightMesh(currentAttachmentId);
+                // 有「当前网格」→ 流程 A（点骨骼往上绑）；否则流程 B（先选骨骼再点网格）
+                toggleBind();
               }}
               style={{
                 ...weightBtn,

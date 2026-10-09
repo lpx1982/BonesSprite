@@ -872,16 +872,31 @@ export function BoneEditor() {
           if (!aid) continue;
           const mesh = s.attachmentMeshes[aid];
           if (!mesh) continue;
+          // ★ 绑定模式：目标网格进入「只显示选中蓝外轮廓」状态（顶点/三角隐藏）
+          const isBindTarget = s.weightBindMode && !!s.weightMeshId && aid === s.weightMeshId;
           const isEditing = slot.id === editSlotId;
           const isSelected = slot.id === s.selectedSlotId;
           const isWire = !!s.meshWireframe[aid];
-          if (!isEditing && !isSelected && !isWire) continue;
+          if (!isBindTarget && !isEditing && !isSelected && !isWire) continue;
           if (s.slotVisibility[slot.id] === false) continue;
           const layer = byId.get(aid);
           if (!layer) continue;
 
           const pts = skinnedVerticesScreen(slot.id, layer, mesh);
           const edges = meshEdgeInfo(mesh);
+
+          // 绑定模式：只画外轮廓边线（被选中的蓝线状态），顶点与三角剖分都隐藏
+          if (isBindTarget) {
+            for (const e of edges) {
+              if (e.n !== 1) continue;
+              const p0 = pts[e.a];
+              const p1 = pts[e.b];
+              if (!p0 || !p1) continue;
+              meshHandles.moveTo(p0.x, p0.y).lineTo(p1.x, p1.y);
+            }
+            meshHandles.stroke({ width: 1.4, color: 0x4FB8F8, alpha: 0.95 });
+            continue;
+          }
 
           // 边界边：总是画（网格外轮廓）
           for (const e of edges) {
@@ -950,8 +965,9 @@ export function BoneEditor() {
         //   - weightPie：为每个顶点画权重饼图（选中的顶点饼图更大）
         //   - weightOverlay：用骨骼颜色填充网格
         //   - weightSelectedOnly：仅对选中顶点 / 选中骨骼绘制（叠加时未选骨用黑色）
-        const showPie = s.weightPie && !newPoly;
-        const showOverlay = s.weightOverlay && !newPoly;
+        // ★ 绑定模式下不画（顶点要隐藏，只留外轮廓蓝线）
+        const showPie = s.weightPie && !newPoly && !s.weightBindMode;
+        const showOverlay = s.weightOverlay && !newPoly && !s.weightBindMode;
         if (showPie || showOverlay) {
           for (const slot of s.slots) {
             const aid = slot.activeAttachmentId;

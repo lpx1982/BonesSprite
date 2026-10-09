@@ -22,6 +22,7 @@ export function CanvasOverlay() {
   const editorTab = usePixiBonesStore((s) => s.editorTab);
   const setEditorTab = usePixiBonesStore((s) => s.setEditorTab);
   const timelineHeight = usePixiBonesStore((s) => s.timelineHeight);
+  const weightBindMode = usePixiBonesStore((s) => s.weightBindMode);
   const { t } = useT();
 
   const [canvasSize, setCanvasSize] = useState({ width: 1000, height: 600 });
@@ -59,6 +60,48 @@ export function CanvasOverlay() {
         onChange={setEditorTab}
         t={t}
       />
+
+      {/* 权重绑定模式：画布顶部提示条（对齐 Spine「权重：绑定骨骼」） */}
+      {weightBindMode && (
+        <div
+          className="absolute pointer-events-none"
+          style={{
+            top: 6,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 5,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+          }}
+        >
+          <div
+            style={{
+              background: 'var(--spine-accent)',
+              color: '#fff',
+              fontSize: 13,
+              fontWeight: 600,
+              padding: '4px 16px',
+              borderRadius: '3px 3px 0 0',
+            }}
+          >
+            权重：绑定骨骼
+          </div>
+          <div
+            style={{
+              background: 'var(--spine-bg-panel)',
+              color: 'var(--spine-text)',
+              fontSize: 12,
+              padding: '3px 16px',
+              borderRadius: '0 0 3px 3px',
+              border: '1px solid var(--spine-border)',
+              borderTop: 'none',
+            }}
+          >
+            选择要绑定到附件的骨骼
+          </div>
+        </div>
+      )}
 
       {/* 顶横标尺 —— Spine 风格：ruler 高度 22px，黑色背景 + 纯黑下边线 */}
       {showRulers && (

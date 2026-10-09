@@ -250,9 +250,13 @@ export function BottomToolbar() {
           <ModeButton
             icon={<IconWeights />}
             label={t('toolbar.mode_weights')}
-            badge="PRO"
             active={editorMode === 'weights'}
-            onClick={() => setEditorMode('weights')}
+            onClick={() => {
+              setEditorMode('weights');
+              // ★ 底部「权重」按钮也打开右侧权重面板（与视图菜单「权重」同效果）
+              const st = usePixiBonesStore.getState();
+              if (!st.viewWeights) st.toggleViewWeights();
+            }}
           />
           <ModeButton
             icon={<IconCreate />}
