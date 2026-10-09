@@ -1609,7 +1609,7 @@ export function BoneEditor() {
         const sw = Math.max(1, rw - margin * 2);
         const sh = Math.max(1, rh - margin * 2);
         const baseFit = Math.min(sw / psd.width, sh / psd.height);
-        const scale = Math.max(0.01, Math.min(baseFit * vp.zoom, 8));
+        const scale = Math.max(0.01, Math.min(baseFit * vp.zoom, 16));
         root.scale.set(scale, scale);
         root.x = (rw - psd.width * scale) / 2 + vp.panX;
         root.y = rh / 2 - psd.height * scale + vp.panY;
@@ -3624,7 +3624,7 @@ export function BoneEditor() {
 
         const s0 = usePixiBonesStore.getState();
         const curVp = s0.viewport;
-        const newZoom = Math.max(0.05, Math.min(curVp.zoom * factor, 8));
+        const newZoom = Math.max(0.05, Math.min(curVp.zoom * factor, 16));
         const psd = s0.psd;
         const rw = host.clientWidth;
         const rh = host.clientHeight;
@@ -3647,7 +3647,7 @@ export function BoneEditor() {
           Math.max(1, rw - margin * 2) / psd.width,
           Math.max(1, rh - margin * 2) / psd.height,
         );
-        const clampScale = (z: number) => Math.max(0.01, Math.min(baseFit * z, 8));
+        const clampScale = (z: number) => Math.max(0.01, Math.min(baseFit * z, 16));
         const oldScale = clampScale(curVp.zoom);
         const newScale = clampScale(newZoom);
         // 鼠标下的世界坐标（缩放前后保持不变）
@@ -3860,7 +3860,7 @@ export function BoneEditor() {
               (cssW - margin * 2) / b.width,
               (cssH - margin * 2) / b.height,
             );
-            const z = Math.max(0.05, Math.min(fitScale, 8));
+            const z = Math.max(0.05, Math.min(fitScale, 16));
             // center 用 vp.zoom * baseFit 作为实际 scale
             const psd = state.psd;
             const baseFit = psd && psd.width > 0 && psd.height > 0
@@ -3884,7 +3884,7 @@ export function BoneEditor() {
                 const curVp = usePixiBonesStore.getState().viewport;
                 setViewport({
                   ...curVp,
-                  zoom: Math.max(0.05, Math.min(targetVpZoom, 8)),
+                  zoom: Math.max(0.05, Math.min(targetVpZoom, 16)),
                   panX,
                   panY,
                 });

@@ -138,7 +138,7 @@ export function CanvasOverlay() {
             type="range"
             className="zoom-slider-track"
             min="0.1"
-            max="8"
+            max="16"
             step="0.1"
             value={viewport.zoom}
             onChange={(e) => {
