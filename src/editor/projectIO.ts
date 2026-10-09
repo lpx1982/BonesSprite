@@ -9,7 +9,7 @@
  * dataURL 按图层 id 缓存（图层的 canvas 导入后不再变化），避免每次自动保存都重编码。
  */
 import { useEffect, useRef } from 'react';
-import { usePixiBonesStore, type ProjectData, type BoneNode, type SlotBinding } from './store';
+import { usePixiBonesStore, type ProjectData, type BoneNode, type SlotBinding, type EditorAnimation, type BonePose } from './store';
 import type { PixiBonesLayer, PixiBonesPsd, PixiBonesSlot, MeshData } from '@psd/types';
 import { idbPut, idbGet } from './idb';
 
@@ -59,6 +59,10 @@ interface SerializedProject {
   projectName: string;
   editorTab: 'setup' | 'animate';
   viewport: { panX: number; panY: number; zoom: number };
+  // 动画数据（可序列化模型；旧存档缺省为空）
+  animations: EditorAnimation[];
+  activeAnimationId: string | null;
+  setupPose: Record<string, BonePose>;
 }
 
 // =================================================================================
@@ -179,6 +183,9 @@ function buildSnapshot(): SerializedProject {
     projectName: s.projectName,
     editorTab: s.editorTab,
     viewport: s.viewport,
+    animations: s.animations,
+    activeAnimationId: s.activeAnimationId,
+    setupPose: s.setupPose,
   };
 }
 
@@ -275,6 +282,10 @@ export async function loadProject(id: string): Promise<boolean> {
       projectName: snap.projectName,
       editorTab: snap.editorTab,
       viewport: snap.viewport,
+      // 旧存档没有这些字段 → 缺省为空
+      animations: snap.animations ?? [],
+      activeAnimationId: snap.activeAnimationId ?? null,
+      setupPose: snap.setupPose ?? {},
     };
     usePixiBonesStore.getState().applyProjectData(data);
     return true;

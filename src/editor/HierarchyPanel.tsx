@@ -32,6 +32,9 @@ function buildChildMap(nodes: BoneNode[]): Map<string | null, BoneNode[]> {
 /** 工程节点（根骨的父节点，仿 Spine 的 skeleton 节点）的折叠 key */
 const PROJECT_KEY = '__project__';
 
+/** 层级树顶部「动画」节点的固定 key（显示当前动画名，仿 Spine） */
+const ANIM_KEY = 'animation';
+
 /** 骨骼下方的分区节点（仿 Spine：约束 / 绘制顺序 / 皮肤 / 事件 / 动画 / 图片 / 音频） */
 const SECTIONS: Array<{ key: string; label: string; icon: string }> = [
   { key: 'constraints', label: '约束',     icon: '🪢' },
@@ -50,7 +53,7 @@ interface TreeRow {
    * slot  = 插槽行（◉ 插槽名），其下挂它全部附件行
    * asset = 附件行（🖼 图片名）
    */
-  kind: 'project' | 'bone' | 'section' | 'asset' | 'slot';
+  kind: 'project' | 'bone' | 'section' | 'asset' | 'slot' | 'animation';
   /** 缩进层级：project=0，根骨/分区=1，更深 = 子骨 / 插槽 / 附件 */
   depth: number;
   /** 是否是同层最后一个（决定连线画「└」还是「├」） */
@@ -64,6 +67,8 @@ interface TreeRow {
   slotId?: string;
   /** 附件行是否是所属插槽「当前显示」的附件 */
   attachmentActive?: boolean;
+  /** 附件行是否已转成网格（曲面）：有 attachmentMeshes 记录 */
+  isMesh?: boolean;
   /** 是否可拖拽（「绘制顺序」里的插槽行） */
   draggableRow?: boolean;
   icon: string;
@@ -149,6 +154,10 @@ export function HierarchyPanel() {
   const pushHistory = usePixiBonesStore((s) => s.pushHistory);
   const selectedSectionKey = usePixiBonesStore((s) => s.selectedSectionKey);
   const selectSection = usePixiBonesStore((s) => s.selectSection);
+  // ★ 动画节点（层级树顶部，显示当前动画名；选中它 = 高亮并清空其它选中）
+  const animations = usePixiBonesStore((s) => s.animations);
+  const activeAnimationId = usePixiBonesStore((s) => s.activeAnimationId);
+  const selectAnimationNode = usePixiBonesStore((s) => s.selectAnimationNode);
   const startAttach = usePixiBonesStore((s) => s.startAttach);
   const unbindSlot = usePixiBonesStore((s) => s.unbindSlot);
   const removeSlot = usePixiBonesStore((s) => s.removeSlot);
@@ -372,6 +381,12 @@ export function HierarchyPanel() {
     });
     if (collapsed.has(PROJECT_KEY)) return out;
 
+    // ★ 当前动画名（显示在树底部的「动画」分区节点下，仿 Spine）
+    const currentAnimName =
+      animations.find((a) => a.id === activeAnimationId)?.name
+      ?? animations[0]?.name
+      ?? '无动画';
+
     // 项目节点的子节点 = 根骨们 + 7 个分区节点
     type Desc =
       | { kind: 'bone'; node: BoneNode }
@@ -421,6 +436,7 @@ export function HierarchyPanel() {
           asset: l,
           slotId: slot.id,
           attachmentActive: aid === slot.activeAttachmentId,
+          isMesh: !!attachmentMeshes[l.id],
           icon: '🖼',
           label: l.name,
           collapsible: false,
@@ -434,9 +450,15 @@ export function HierarchyPanel() {
         if (d.kind === 'section') {
           const isImagesNode = d.section.key === 'images';
           const isDrawOrderNode = d.section.key === 'drawOrder';
+          // ★ 「动画」分区下挂当前动画节点（仿 Spine：动画列在分区里）
+          const isAnimNode = d.section.key === 'animations';
           const sectionKey = 'section:' + d.section.key;
           const isCollapsed = collapsed.has(sectionKey);
-          const kids = (isImagesNode || isDrawOrderNode) ? orderedSlots : [];
+          const kids = (isImagesNode || isDrawOrderNode)
+            ? orderedSlots
+            : isAnimNode && animations.length > 0
+              ? [ANIM_KEY]
+              : [];
           out.push({
             key: sectionKey,
             kind: 'section',
@@ -446,6 +468,18 @@ export function HierarchyPanel() {
             label: d.section.label,
             collapsible: kids.length > 0,
           });
+          // ★ 「动画」分区：其下挂当前动画节点（点击 = 高亮并清空其它选中）
+          if (isAnimNode && !isCollapsed && animations.length > 0) {
+            out.push({
+              key: ANIM_KEY,
+              kind: 'animation',
+              depth: depth + 1,
+              isLast: true,
+              icon: '🎬',
+              label: currentAnimName,
+              collapsible: false,
+            });
+          }
           // 「图片」分区 = 素材库：列出全部附件（点它 = 选中所属插槽）
           if (isImagesNode && !isCollapsed) {
             attachments.forEach((l, j) => {
@@ -458,6 +492,7 @@ export function HierarchyPanel() {
                 asset: l,
                 slotId: sid ?? undefined,
                 attachmentActive: sid ? orderedSlots.find((s) => s.id === sid)?.activeAttachmentId === l.id : false,
+                isMesh: !!attachmentMeshes[l.id],
                 icon: '🖼',
                 label: l.name,
                 collapsible: false,
@@ -518,7 +553,7 @@ export function HierarchyPanel() {
       1,
     );
     return out;
-  }, [projectName, collapsed, childMap, filteredRoots, orderedSlots, attachments, attachmentById, bones, slotBindings]);
+  }, [projectName, collapsed, childMap, filteredRoots, orderedSlots, attachments, attachmentById, bones, slotBindings, animations, activeAnimationId, attachmentMeshes]);
 
   // ===== Spine 暗灰配色（直接读 CSS 变量，避免改 Tailwind 主题）=====
   const C = {
@@ -686,68 +721,59 @@ export function HierarchyPanel() {
             <ToolBtn icon="📥" title="粘贴" C={C} />
           </div>
 
-          {/* 树主体：左列（👁/●）+ 右列（树）—— 两列由同一个 rows 数组驱动，保证行对齐 */}
+          {/* 树主体：左列（显隐小圆点）+ 右列（树）—— 两列由同一个 rows 数组驱动，保证行对齐 */}
           <div className="flex flex-1 min-h-0 overflow-y-auto">
-            {/* 左列：骨行 👁（装饰）、素材行 👁（可点，切显隐）、其它行 ● */}
+            {/* 左列：统一用小圆点。显示/当前 = 浅灰，隐藏/非当前 = 深灰；插槽与附件行可点击切换 */}
             <div
               className="w-4 flex flex-col shrink-0"
               style={{ background: C.panelDk, borderRight: '1px solid ' + C.border }}
             >
               {rows.map((r) => {
-                // 插槽行：👁 显隐（key = slotId）
+                const dotStyle = (on: boolean, clickable: boolean, tip: string, act: () => void) => (
+                  <button
+                    key={r.key}
+                    className="h-[22px] flex items-center justify-center shrink-0"
+                    title={tip}
+                    style={{
+                      background: 'transparent', border: 'none',
+                      cursor: clickable ? 'pointer' : 'default',
+                      padding: 0,
+                    }}
+                    onClick={(e) => { e.stopPropagation(); if (clickable) act(); }}
+                  >
+                    <span
+                      style={{
+                        display: 'inline-block', width: 5, height: 5, borderRadius: '50%',
+                        background: on ? '#9a9a9a' : '#4a4a4a',
+                      }}
+                    />
+                  </button>
+                );
+                // 插槽行：圆点 = 显隐（可点击切换）
                 if (r.kind === 'slot' && r.slot) {
                   const vis = slotVisibility[r.slot.id] ?? true;
-                  const sel = selectedSlotId === r.slot.id;
-                  return (
-                    <button
-                      key={r.key}
-                      className="h-[22px] flex items-center justify-center text-[10px] shrink-0"
-                      title={vis ? '隐藏插槽' : '显示插槽'}
-                      style={{
-                        background: 'transparent', border: 'none', cursor: 'pointer',
-                        color: sel ? C.accent : (vis ? C.dim : 'rgba(255,255,255,0.25)'),
-                      }}
-                      onClick={() => toggleSlotVisibility(r.slot!.id)}
-                    >
-                      {vis ? '👁' : '🚫'}
-                    </button>
-                  );
+                  return dotStyle(vis, true, vis ? '隐藏插槽' : '显示插槽', () => toggleSlotVisibility(r.slot!.id));
                 }
-                // 附件行：○ = 非当前附件，👁 = 该插槽当前显示的附件。
-                // 点 ○ 即把该附件切换为「当前显示」→ 变成 👁（仿 Spine）
+                // 附件行：圆点 = 是否当前显示（可点击切换）
                 if (r.kind === 'asset' && r.asset && r.slotId) {
                   const isCur = !!r.attachmentActive;
                   const sid = r.slotId;
                   const aid = r.asset.id;
-                  return (
-                    <button
-                      key={r.key}
-                      className="h-[22px] flex items-center justify-center text-[10px] shrink-0"
-                      title={isCur ? '当前显示' : '点击切换为当前显示'}
-                      style={{
-                        background: 'transparent', border: 'none',
-                        cursor: isCur ? 'default' : 'pointer',
-                        color: isCur ? C.accent : C.dim,
-                      }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (!isCur) setActiveAttachment(sid, aid);
-                      }}
-                    >
-                      {isCur ? '👁' : '○'}
-                    </button>
-                  );
+                  return dotStyle(isCur, !isCur, isCur ? '当前显示' : '点击切换为当前显示', () => setActiveAttachment(sid, aid));
                 }
+                // 骨骼 / 分区 / 动画节点：中性深灰圆点（无显隐）
                 return (
                   <div
                     key={r.key}
-                    className="h-[22px] flex items-center justify-center text-[10px] shrink-0"
+                    className="h-[22px] flex items-center justify-center shrink-0"
                     title={r.label}
-                    style={{
-                      color: r.kind === 'bone' && r.node && r.node.id === selectedBoneId ? C.accent : C.dim,
-                    }}
                   >
-                    {r.kind === 'bone' ? '👁' : '●'}
+                    <span
+                      style={{
+                        display: 'inline-block', width: 5, height: 5, borderRadius: '50%',
+                        background: r.kind === 'bone' && r.node && r.node.id === selectedBoneId ? '#9a9a9a' : '#4a4a4a',
+                      }}
+                    />
                   </div>
                 );
               })}
@@ -841,6 +867,7 @@ export function HierarchyPanel() {
                       onActivateAttachment={setActiveAttachment}
                       selectedSectionKey={selectedSectionKey}
                       onSelectSection={selectSection}
+                      onSelectAnimation={selectAnimationNode}
                       slotBindings={slotBindings}
                       boneNameById={new Map(bones.map((b) => [b.id, b.name]))}
                       onImport={r.kind === 'section' && r.key === 'section:images'
@@ -1093,6 +1120,8 @@ interface TreeRowViewProps {
   /** 分区节点（约束 / 图片 / …）相关 */
   selectedSectionKey: string | null;
   onSelectSection: (key: string) => void;
+  /** 层级树顶部的「动画」节点被点击 */
+  onSelectAnimation: () => void;
   slotBindings: Record<string, SlotBinding>;
   boneNameById: Map<string, string>;
   /** 「图片」节点上的 ＋ 导入按钮 */
@@ -1111,7 +1140,7 @@ function TreeRowView(props: TreeRowViewProps) {
   const {
     row, selectedBoneId, onSelect, onAddChild, collapsed, onToggleCollapse, search, C,
     selectedRowKey, onSelectSlot, onSelectAttachment,
-    onActivateAttachment, selectedSectionKey, onSelectSection,
+    onActivateAttachment, selectedSectionKey, onSelectSection, onSelectAnimation,
     slotBindings, boneNameById, onImport, drag, drop,
     onAssetHoverEnter, onAssetHoverMove, onAssetHoverLeave,
   } = props;
@@ -1121,6 +1150,8 @@ function TreeRowView(props: TreeRowViewProps) {
   const isSection = row.kind === 'section';
   /** 插槽行（◉） */
   const isSlot = row.kind === 'slot';
+  /** 顶部「动画」节点（🎬 当前动画名） */
+  const isAnim = row.kind === 'animation';
   /** 分区原始 key（'section:images' → 'images'） */
   const sectionKey = isSection && row.key.startsWith('section:') ? row.key.slice('section:'.length) : null;
   const node = row.node;
@@ -1132,7 +1163,7 @@ function TreeRowView(props: TreeRowViewProps) {
   //   避免同一插槽在 主树 / 绘制顺序 / 图片分区 多处同时高亮。
   const isSelected =
     (isBone && !!node && selectedBoneId === node.id) ||
-    ((isSlot || isAsset) && row.key === selectedRowKey) ||
+    ((isSlot || isAsset || isAnim) && row.key === selectedRowKey) ||
     (isSection && sectionKey !== null && selectedSectionKey === sectionKey);
 
   // 绑定信息（按插槽查；附件行显示它所属插槽的绑定）
@@ -1147,7 +1178,7 @@ function TreeRowView(props: TreeRowViewProps) {
 
   const isCollapsed = collapsed.has(row.key);
   const thumb = isAsset && asset ? attachmentThumb(asset) : null;
-  const clickable = isBone || isAsset || isSection || isSlot;
+  const clickable = isBone || isAsset || isSection || isSlot || isAnim;
 
   /** 绑定/解绑「该行对应的插槽」 */
   const doBindToggle = () => {
@@ -1199,6 +1230,7 @@ function TreeRowView(props: TreeRowViewProps) {
       }}
       onClick={() => {
         if (isBone && node) onSelect(node.id);
+        else if (isAnim) onSelectAnimation();
         else if (isSection && sectionKey !== null) onSelectSection(sectionKey);
         else if (isSlot && slot) onSelectSlot(slot.id, row.key);
         else if (isAsset && asset) {
@@ -1266,29 +1298,22 @@ function TreeRowView(props: TreeRowViewProps) {
         {isSlot && slot && slot.attachmentIds.length === 0 && (
           <span className="ml-1 text-[9px]" style={{ color: C.dim }}>（空）</span>
         )}
+        {isAsset && row.isMesh && (
+          <span className="ml-1 text-[9px]" style={{ color: C.accent }} title="网格附件（曲面）">▦ 曲面</span>
+        )}
       </span>
 
-      {/* 插槽行 / 附件行：绑定状态 / 绑定按钮（都作用于插槽） */}
-      {(isSlot && slot) || (isAsset && assetSlotId) ? (
-        boundBoneName ? (
-          <button
-            className="shrink-0 text-[10px] px-1 rounded"
-            style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#7dd3a0' }}
-            title={`已绑定到骨骼 ${boundBoneName}（点击解绑）`}
-            onClick={(e) => { e.stopPropagation(); doBindToggle(); }}
-          >
-            🔗{boundBoneName}
-          </button>
-        ) : (
-          <button
-            className="shrink-0 w-4 h-4 flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100"
-            style={{ background: 'transparent', border: 'none', cursor: selectedBoneId ? 'pointer' : 'not-allowed', color: selectedBoneId ? C.text : C.dim }}
-            title={selectedBoneId ? '绑定到选中骨骼' : '先在画布/树里选中一根骨骼'}
-            onClick={(e) => { e.stopPropagation(); if (selectedBoneId) doBindToggle(); }}
-          >
-            🔗
-          </button>
-        )
+      {/* 插槽行 / 附件行：绑定状态已并入树形结构（插槽挂到绑定骨骼下），
+          不再显示 🔗绑定名 标签（对齐 Spine）；未绑定时保留 hover 的 🔗 绑定入口 */}
+      {((isSlot && slot) || (isAsset && assetSlotId)) && !boundBoneName ? (
+        <button
+          className="shrink-0 w-4 h-4 flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100"
+          style={{ background: 'transparent', border: 'none', cursor: selectedBoneId ? 'pointer' : 'not-allowed', color: selectedBoneId ? C.text : C.dim }}
+          title={selectedBoneId ? '绑定到选中骨骼' : '先在画布/树里选中一根骨骼'}
+          onClick={(e) => { e.stopPropagation(); if (selectedBoneId) doBindToggle(); }}
+        >
+          🔗
+        </button>
       ) : null}
 
       {/* 「图片」节点上的 ＋ 导入素材 */}

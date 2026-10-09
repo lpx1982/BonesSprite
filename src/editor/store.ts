@@ -1,12 +1,47 @@
 import { create } from 'zustand';
 import type { Skeleton } from '@engine/Skeleton';
-import type { Animation } from '@engine/Animation';
 import type { PixiBonesPsd, PixiBonesLayer, PixiBonesSlot, MeshData } from '@psd/types';
 import { flattenLayers } from '@psd/index';
 import type { Locale } from './i18n';
 
 export type ViewMode = 'editor' | 'demo';
 export type EditorTab = 'setup' | 'animate';
+
+// =================================================================================
+//  动画数据模型（可序列化，随工程保存 / 载入）
+//    Spine 语义：每根骨骼按「属性」分轨道，每条轨道一串关键帧。
+//    动画 tab 下 bones 的姿态 = 采样结果；未覆盖的属性回退到 setupPose（设置姿态）。
+// =================================================================================
+export type AnimProperty = 'x' | 'y' | 'rotation' | 'scaleX' | 'scaleY';
+/** 骨骼全部可动画属性（录制 / 采样共用）。 */
+export const ANIM_PROPERTIES: AnimProperty[] = ['x', 'y', 'rotation', 'scaleX', 'scaleY'];
+/** 单个关键帧：time 为秒。 */
+export interface AnimKeyframe {
+  time: number;
+  value: number;
+}
+/** 一根骨骼一个属性的一条轨道（keys 恒按 time 升序）。 */
+export interface AnimTrack {
+  boneId: string;
+  property: AnimProperty;
+  keys: AnimKeyframe[];
+}
+/** 一段动画：一组轨道 + 时长（秒）。 */
+export interface EditorAnimation {
+  id: string;
+  name: string;
+  /** 时长（秒）。播放时 currentTime 超出按 loop 决定回绕或停在末尾。 */
+  duration: number;
+  tracks: AnimTrack[];
+}
+/** 骨骼设置姿态（进入动画 tab 时从 bones 快照；动画未覆盖属性的缺省值）。 */
+export interface BonePose {
+  x: number;
+  y: number;
+  rotation: number;
+  scaleX: number;
+  scaleY: number;
+}
 
 /** 描绘弹窗打开前的网格快照（用于「取消」时还原） */
 export interface TraceSnapshot {
@@ -52,22 +87,26 @@ export interface BoneNode {
 /**
  * 「图层 → 骨骼」绑定。
  *
- * ref = 绑定那一刻该骨骼的世界矩阵（列主序 6 元组 [a, b, c, d, tx, ty]，等价 PIXI Matrix）。
- * 渲染时用增量变换 delta = 当前世界矩阵 × ref⁻¹ 去驱动图层，
- * 这样「绑定」这个动作本身不会让图层跳动，之后骨骼怎么动图层就怎么跟。
+ * ref = 绑定参考矩阵（列主序 6 元组 [a, b, c, d, tx, ty]，等价 PIXI Matrix）。
+ * 渲染时用增量变换 delta = 当前骨骼世界矩阵 × ref⁻¹ 去驱动图层。
+ * - 首次绑定：ref = 该骨骼绑定时的世界矩阵 → 绑定瞬间 delta = I，图层不动。
+ * - 重新父级到另一根骨骼：ref 会反解为「旧父级驱动 × 新骨骼世界矩阵⁻¹」，
+ *   使绑定瞬间仍然 delta = 旧父级驱动，位置和朝向都不跳。
  */
 export interface SlotBinding {
   boneId: string;
   ref: number[];
 }
 
-/** 撤销 / 重做快照的内容（骨树 + 插槽变换 + 网格顶点 + 选中骨）。 */
+/** 撤销 / 重做快照的内容（骨树 + 插槽变换 + 网格顶点 + 选中骨 + 动画）。 */
 export type HistorySnapshot = {
   bones: BoneNode[];
   slotTransforms: Record<string, { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }>;
   /** 网格数据也纳入快照，这样拖顶点 / 增删顶点都能 Cmd+Z 撤销 */
   attachmentMeshes: Record<string, MeshData>;
   selectedBoneId: string | null;
+  /** 动画数据也纳入快照：关键帧增删/拖动、动画增删重命名都能 Cmd+Z 撤销 */
+  animations: EditorAnimation[];
 };
 
 /**
@@ -89,6 +128,10 @@ export interface ProjectData {
   selectedBoneId: string | null;
   selectedBoneIds: string[];
   projectName: string;
+  /** 动画数据（可序列化模型；旧存档缺省为 []） */
+  animations: EditorAnimation[];
+  activeAnimationId: string | null;
+  setupPose: Record<string, BonePose>;
   editorTab?: EditorTab;
   viewport?: { panX: number; panY: number; zoom: number };
 }
@@ -96,10 +139,46 @@ export interface ProjectData {
 export interface PixiBonesState {
   // ---- Day 1 残留字段（Demo 用自己的 skeleton，这里保留兼容）----
   skeleton: Skeleton | null;
-  animations: Animation[];
+  selectedBoneName: string | null;
+
+  // ---- 动画（仿 Spine 动画 tab）----
+  animations: EditorAnimation[];
+  /** 当前激活（正在编辑/播放）的动画 id */
+  activeAnimationId: string | null;
+  /** 当前时间（秒） */
   currentTime: number;
   playing: boolean;
-  selectedBoneName: string | null;
+  /** 循环播放：时间到达 duration 后回绕到 0 */
+  loop: boolean;
+  /** 时间轴标尺 / 帧步进的帧率（fps） */
+  fps: number;
+  /** 进入动画 tab 时捕获的「设置姿态」（动画未覆盖属性的缺省值） */
+  setupPose: Record<string, BonePose>;
+  /** 关键帧锁（动画 tab 钥匙按钮）：true = 变换骨骼时自动在 currentTime 写关键帧 */
+  keyframeLock: boolean;
+  setActiveAnimation: (id: string | null) => void;
+  addAnimation: (name?: string) => string;
+  duplicateAnimation: (id: string) => string;
+  renameAnimation: (id: string, name: string) => void;
+  removeAnimation: (id: string) => void;
+  setAnimationDuration: (id: string, duration: number) => void;
+  /** 设置当前时间并（动画 tab 下）采样应用到骨骼（不入历史） */
+  seekTo: (t: number) => void;
+  /** 前进 / 后退一帧（1/fps） */
+  stepFrame: (dir: 1 | -1) => void;
+  togglePlay: () => void;
+  setLoop: (v: boolean) => void;
+  toggleKeyframeLock: () => void;
+  /** 写 / 更新某骨骼某属性在 time 处的关键帧（入历史；随后采样应用） */
+  setKeyframe: (boneId: string, property: AnimProperty, time: number, value: number) => void;
+  /** 删除某骨骼某属性在 time 处的关键帧（入历史；随后采样应用） */
+  removeKeyframe: (boneId: string, property: AnimProperty, time: number) => void;
+  /** 把 fromTime 处的关键帧移到 toTime（入历史；随后采样应用） */
+  moveKeyframe: (boneId: string, property: AnimProperty, fromTime: number, toTime: number) => void;
+  /** 动画 tab + 关键帧锁开启时：把骨骼当前值的若干属性在 currentTime 写关键帧（一次拖动合并为一步历史） */
+  recordBoneEdits: (boneId: string, props: AnimProperty[]) => void;
+  /** 用当前激活动画在 currentTime 的采样覆盖 bones（不入历史；仅动画 tab 有效） */
+  applyActiveAnimation: () => void;
 
   // ---- Day 2 ----
   psd: PixiBonesPsd | null;
@@ -337,6 +416,8 @@ export interface PixiBonesState {
   selectedSectionKey: string | null;
   /** 选中分区节点（如 'images'）。会清掉骨骼 / 素材选中态。 */
   selectSection: (key: string | null) => void;
+  /** 选中层级树顶部的「动画」节点（当前动画名），清空骨骼/素材/分区选中 */
+  selectAnimationNode: () => void;
   viewMode: ViewMode;
   /** 正在等待拾取父级骨骼的素材 id。非 null = 「附件：设置父级」拾取模式。 */
   attachingSlotId: string | null;
@@ -434,7 +515,6 @@ export interface PixiBonesState {
 
   // ---- Setters ----
   setSkeleton: (s: Skeleton) => void;
-  addAnimation: (a: Animation) => void;
   setCurrentTime: (t: number) => void;
   setPlaying: (p: boolean) => void;
   setSelectedBoneName: (n: string | null) => void;
@@ -542,6 +622,98 @@ function fillMeshDefaults(m: MeshData): MeshData {
 }
 
 // =================================================================================
+//  动画采样（纯函数，供 applyActiveAnimation 等调用）
+// =================================================================================
+
+/** 单属性关键帧插值（线性）。keys 必须按 time 升序、非空。
+ *  - t < 第一个关键帧：从 t=0 的 setupValue 线性插到第一个关键帧（Spine 语义）
+ *  - 关键帧之间：线性插值
+ *  - t > 最后一个关键帧：钳在最后一个关键帧的值
+ */
+function sampleTrackValue(keys: AnimKeyframe[], t: number, setupValue: number): number {
+  const first = keys[0];
+  if (t <= first.time) {
+    if (first.time <= 1e-6) return first.value;
+    const u = t / first.time;
+    return setupValue + (first.value - setupValue) * u;
+  }
+  const last = keys[keys.length - 1];
+  if (t >= last.time) return last.value;
+  let i = 1;
+  while (i < keys.length - 1 && keys[i].time < t) i++;
+  const a = keys[i - 1];
+  const b = keys[i];
+  const span = b.time - a.time;
+  const u = span > 1e-9 ? (t - a.time) / span : 0;
+  return a.value + (b.value - a.value) * u;
+}
+
+/**
+ * 采样一段动画在 t 时刻的骨骼姿态。
+ * 每根骨骼、每个属性独立：有轨道 → 按关键帧插值；无轨道 → 用 setupPose 缺省值。
+ * 返回 null = 无有效动画（调用方保持 bones 不动）。
+ */
+function sampleAnimationPose(
+  anim: EditorAnimation,
+  setupPose: Record<string, BonePose>,
+  bones: BoneNode[],
+  t: number,
+): BoneNode[] | null {
+  if (anim.duration <= 0) return null;
+  // 轨道按 骨骼 → 属性 → keys 索引
+  const trackMap = new Map<string, Map<AnimProperty, AnimKeyframe[]>>();
+  for (const tr of anim.tracks) {
+    if (!tr.keys || tr.keys.length === 0) continue;
+    let byProp = trackMap.get(tr.boneId);
+    if (!byProp) { byProp = new Map(); trackMap.set(tr.boneId, byProp); }
+    byProp.set(tr.property, tr.keys);
+  }
+  const clampT = Math.min(anim.duration, Math.max(0, t));
+  return bones.map((n) => {
+    const sp = setupPose[n.id] ?? { x: n.x, y: n.y, rotation: n.rotation, scaleX: n.scaleX, scaleY: n.scaleY };
+    const byProp = trackMap.get(n.id);
+    const val = (p: AnimProperty): number => {
+      const keys = byProp?.get(p);
+      return keys ? sampleTrackValue(keys, clampT, sp[p]) : sp[p];
+    };
+    return {
+      ...n,
+      x: val('x'),
+      y: val('y'),
+      rotation: val('rotation'),
+      scaleX: val('scaleX'),
+      scaleY: val('scaleY'),
+    };
+  });
+}
+
+/** 在 tracks 里 upsert 一条关键帧（同位置已有关键帧则覆盖），返回新 tracks（保持 time 升序）。 */
+function upsertTrackKey(
+  tracks: AnimTrack[],
+  boneId: string,
+  property: AnimProperty,
+  time: number,
+  value: number,
+): AnimTrack[] {
+  const key: AnimKeyframe = { time, value };
+  const idx = tracks.findIndex((tr) => tr.boneId === boneId && tr.property === property);
+  if (idx >= 0) {
+    const keys = tracks[idx].keys.filter((k) => Math.abs(k.time - time) >= 1e-6);
+    keys.push(key);
+    keys.sort((a, b) => a.time - b.time);
+    return tracks.map((tr, i) => (i === idx ? { ...tr, keys } : tr));
+  }
+  return [...tracks, { boneId, property, keys: [key] }];
+}
+
+/** 读某轨道在精确 time 处的关键帧值（无则 0；moveKeyframe 用）。 */
+function keyValueAt(anim: EditorAnimation, boneId: string, property: AnimProperty, time: number): number {
+  const tr = anim.tracks.find((x) => x.boneId === boneId && x.property === property);
+  const k = tr?.keys.find((kk) => Math.abs(kk.time - time) < 1e-6);
+  return k?.value ?? 0;
+}
+
+// =================================================================================
 //  插槽（slot）工具
 // =================================================================================
 
@@ -552,11 +724,18 @@ function genSlotId(): string {
   return `slot_${_slotIdCounter}`;
 }
 
+/** 动画 id 自增（一次会话内稳定）。 */
+let _animIdCounter = 0;
+function genAnimId(): string {
+  _animIdCounter++;
+  return `anim_${_animIdCounter}`;
+}
+
 /**
- * 把骨骼 / 插槽的 id 自增计数器推到已载入 id 的最大序号之后。
- * 载入工程后必须调用，否则新建的 bone_1 / slot_1 会和已载入的 id 撞号。
+ * 把骨骼 / 插槽 / 动画的 id 自增计数器推到已载入 id 的最大序号之后。
+ * 载入工程后必须调用，否则新建的 bone_1 / slot_1 / anim_1 会和已载入的 id 撞号。
  */
-function syncIdCounters(boneIds: string[], slotIds: string[]): void {
+function syncIdCounters(boneIds: string[], slotIds: string[], animIds: string[]): void {
   const maxSuffix = (ids: string[], prefix: string): number => {
     let m = 0;
     for (const id of ids) {
@@ -568,6 +747,7 @@ function syncIdCounters(boneIds: string[], slotIds: string[]): void {
   };
   _boneIdCounter = Math.max(_boneIdCounter, maxSuffix(boneIds, 'bone_'));
   _slotIdCounter = Math.max(_slotIdCounter, maxSuffix(slotIds, 'slot_'));
+  _animIdCounter = Math.max(_animIdCounter, maxSuffix(animIds, 'anim_'));
 }
 
 /** 判断一个图层是否是「可渲染的附件」（有画布且尺寸非 0）。 */
@@ -782,8 +962,13 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   skeleton: null,
   hoveredBoneId: null,
   animations: [],
+  activeAnimationId: null,
   currentTime: 0,
-  playing: true,
+  playing: false,
+  loop: true,
+  fps: 30,
+  setupPose: {},
+  keyframeLock: true,
   selectedBoneName: null,
 
   psd: null,
@@ -1296,7 +1481,42 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   setLocale: (l) => set({ locale: l }),
 
   editorTab: 'setup',
-  setEditorTab: (t) => set({ editorTab: t }),
+  // 进入 / 离开动画 tab：
+  //   - 进入：捕获当前 bones 为「设置姿态」（动画未覆盖属性的缺省值），确保存在动画，随后采样应用
+  //   - 离开：恢复设置姿态（骨骼回到进入动画 tab 前的样子，动画数据保留）
+  setEditorTab: (t) => {
+    const s = get();
+    if (t === s.editorTab) return set({ editorTab: t });
+    if (t === 'animate') {
+      const setup: Record<string, BonePose> = {};
+      for (const b of s.bones) {
+        setup[b.id] = { x: b.x, y: b.y, rotation: b.rotation, scaleX: b.scaleX, scaleY: b.scaleY };
+      }
+      let animations = s.animations;
+      if (animations.length === 0) {
+        animations = [{ id: genAnimId(), name: 'Animation', duration: 1, tracks: [] }];
+      }
+      const activeAnimationId = s.activeAnimationId && animations.some((a) => a.id === s.activeAnimationId)
+        ? s.activeAnimationId
+        : animations[0].id;
+      set({
+        editorTab: 'animate',
+        setupPose: setup,
+        animations,
+        activeAnimationId,
+        playing: false,
+      });
+      get().applyActiveAnimation();
+    } else {
+      const st = get();
+      const setup = st.setupPose;
+      const bones = st.bones.map((n) => {
+        const sp = setup[n.id];
+        return sp ? { ...n, x: sp.x, y: sp.y, rotation: sp.rotation, scaleX: sp.scaleX, scaleY: sp.scaleY } : n;
+      });
+      set({ editorTab: 'setup', bones, playing: false });
+    }
+  },
 
   projectName: 'raptor-pro',
   setProjectName: (name) => set({ projectName: name }),
@@ -1346,6 +1566,15 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       selectedBoneIds: d.selectedBoneIds,
       projectName: d.projectName,
       ...(d.editorTab ? { editorTab: d.editorTab } : {}),
+      // 动画数据（旧存档缺省为空）
+      animations: d.animations ?? [],
+      activeAnimationId: d.activeAnimationId ?? null,
+      setupPose: d.setupPose ?? {},
+      currentTime: 0,
+      playing: false,
+      loop: true,
+      fps: 30,
+      keyframeLock: true,
       // 临时态一律清零（编辑网格 / 描绘 / 拾取 / 权重绑定 / 各种选中）
       meshEditSlotId: null,
       meshSelectedVertices: [],
@@ -1365,11 +1594,16 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       historyPast: [],
       historyFuture: [],
     });
-    // id 计数器对齐（bone_ / slot_ 前缀）
+    // id 计数器对齐（bone_ / slot_ / anim_ 前缀）
     syncIdCounters(
       d.bones.map((b) => b.id),
       d.slots.map((s) => s.id),
+      (d.animations ?? []).map((a) => a.id),
     );
+    // 载入时若停在动画 tab，按当前时间（0）采样一次，画面与动画一致
+    if (get().editorTab === 'animate' && get().animations.length > 0) {
+      get().applyActiveAnimation();
+    }
     // 视口延后一拍恢复：BoneEditor 在 psd 变化时会用微任务把视口重置为默认，
     // 我们的微任务排在它后面（同一同步块里更晚入队）→ 不会被覆盖。
     if (d.viewport) {
@@ -1397,7 +1631,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   historyFuture: [],
   pushHistory: () => {
     const s = get();
-    // 深拷贝当前 bones 快照 + slotTransforms + attachmentMeshes（解构后是 plain object，可直接 JSON 化）
+    // 深拷贝当前 bones 快照 + slotTransforms + attachmentMeshes + animations（解构后是 plain object，可直接 JSON 化）
     // ★ 必须保证可选字段（mesh.bones/weights/bindPose）也被保留：
     //   JSON.stringify 会丢掉 undefined 字段 → 用 fillMeshDefaults 先把 undefined 填成 []，
     //   解析回来仍然是 []，applySkinning 会按"无权重"路径处理（不会崩）。
@@ -1408,6 +1642,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
         Object.fromEntries(Object.entries(s.attachmentMeshes).map(([k, m]) => [k, fillMeshDefaults(m)])),
       )),
       selectedBoneId: s.selectedBoneId,
+      animations: JSON.parse(JSON.stringify(s.animations)),
     };
     const past = [...s.historyPast, snap].slice(-50);  // 最多 50 步
     set({ historyPast: past, historyFuture: [] });
@@ -1425,6 +1660,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
         Object.fromEntries(Object.entries(s.attachmentMeshes).map(([k, m]) => [k, fillMeshDefaults(m)])),
       )),
       selectedBoneId: s.selectedBoneId,
+      animations: JSON.parse(JSON.stringify(s.animations)),
     };
     const future = [currentSnap, ...s.historyFuture];
     set({
@@ -1434,7 +1670,10 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       slotTransforms: prev.slotTransforms,
       attachmentMeshes: prev.attachmentMeshes,
       selectedBoneId: prev.selectedBoneId,
+      animations: prev.animations,
     });
+    // 撤销后若在动画 tab，按当前时间重新采样骨骼（保证画面与动画一致）
+    if (get().editorTab === 'animate') get().applyActiveAnimation();
   },
   redo: () => {
     const s = get();
@@ -1448,6 +1687,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
         Object.fromEntries(Object.entries(s.attachmentMeshes).map(([k, m]) => [k, fillMeshDefaults(m)])),
       )),
       selectedBoneId: s.selectedBoneId,
+      animations: JSON.parse(JSON.stringify(s.animations)),
     };
     const past = [...s.historyPast, currentSnap];
     set({
@@ -1457,7 +1697,9 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       slotTransforms: next.slotTransforms,
       attachmentMeshes: next.attachmentMeshes,
       selectedBoneId: next.selectedBoneId,
+      animations: next.animations,
     });
+    if (get().editorTab === 'animate') get().applyActiveAnimation();
   },
 
   timelineHeight: 240,
@@ -1475,10 +1717,162 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
 
   // Day 1 setters
   setSkeleton: (s) => set({ skeleton: s }),
-  addAnimation: (a) => set((state) => ({ animations: [...state.animations, a] })),
   setCurrentTime: (t) => set({ currentTime: t }),
   setPlaying: (p) => set({ playing: p }),
   setSelectedBoneName: (n) => set({ selectedBoneName: n }),
+
+  // ===== 动画（仿 Spine 动画 tab） =====
+  setActiveAnimation: (id) => set(() => ({ activeAnimationId: id, playing: false })),
+  addAnimation: (name) => {
+    const s = get();
+    const id = genAnimId();
+    s.pushHistory();
+    const anim: EditorAnimation = {
+      id,
+      name: name?.trim() || `Animation ${s.animations.length + 1}`,
+      duration: 1,
+      tracks: [],
+    };
+    set((st) => ({ animations: [...st.animations, anim], activeAnimationId: id, playing: false }));
+    return id;
+  },
+  duplicateAnimation: (id) => {
+    const s = get();
+    const src = s.animations.find((a) => a.id === id);
+    if (!src) return id;
+    const newId = genAnimId();
+    s.pushHistory();
+    set((st) => {
+      const copy: EditorAnimation = {
+        ...src,
+        id: newId,
+        name: `${src.name} copy`,
+        tracks: src.tracks.map((tr) => ({ ...tr, keys: tr.keys.map((k) => ({ ...k })) })),
+      };
+      return { animations: [...st.animations, copy], activeAnimationId: newId, playing: false };
+    });
+    return newId;
+  },
+  renameAnimation: (id, name) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    get().pushHistory();
+    set((st) => ({
+      animations: st.animations.map((a) => (a.id === id ? { ...a, name: trimmed } : a)),
+    }));
+  },
+  removeAnimation: (id) => {
+    const s = get();
+    if (s.animations.length <= 1) return;   // 至少保留一个动画
+    s.pushHistory();
+    set((st) => {
+      const animations = st.animations.filter((a) => a.id !== id);
+      const activeAnimationId = st.activeAnimationId === id ? (animations[0]?.id ?? null) : st.activeAnimationId;
+      return { animations, activeAnimationId, playing: false };
+    });
+  },
+  setAnimationDuration: (id, duration) => {
+    const d = Math.max(0.01, duration);
+    get().pushHistory();
+    set((st) => ({
+      animations: st.animations.map((a) => (a.id === id ? { ...a, duration: d } : a)),
+    }));
+  },
+  seekTo: (t) => {
+    const s = get();
+    const anim = s.animations.find((a) => a.id === s.activeAnimationId);
+    const dur = anim?.duration ?? 0;
+    const ct = dur > 0 ? Math.min(dur, Math.max(0, t)) : Math.max(0, t);
+    set({ currentTime: ct });
+    if (s.editorTab === 'animate') get().applyActiveAnimation();
+  },
+  stepFrame: (dir) => {
+    const s = get();
+    const anim = s.animations.find((a) => a.id === s.activeAnimationId);
+    const dur = anim?.duration ?? 0;
+    const dt = 1 / (s.fps || 30);
+    let t = s.currentTime + dir * dt;
+    if (dur > 0) t = Math.min(dur, Math.max(0, t));
+    s.seekTo(t);
+  },
+  togglePlay: () => {
+    const s = get();
+    const anim = s.animations.find((a) => a.id === s.activeAnimationId);
+    if (!anim || anim.duration <= 0) return;
+    if (!s.playing && s.currentTime >= anim.duration - 1e-6) s.seekTo(0);
+    set({ playing: !s.playing });
+  },
+  setLoop: (v) => set({ loop: v }),
+  toggleKeyframeLock: () => set((s) => ({ keyframeLock: !s.keyframeLock })),
+  setKeyframe: (boneId, property, time, value) => {
+    const s = get();
+    const anim = s.animations.find((a) => a.id === s.activeAnimationId);
+    if (!anim) return;
+    s.pushHistory();
+    const t = Math.max(0, time);
+    const tracks = upsertTrackKey(anim.tracks, boneId, property, t, value);
+    set((st) => ({ animations: st.animations.map((a) => (a.id === anim.id ? { ...a, tracks } : a)) }));
+    get().applyActiveAnimation();
+  },
+  removeKeyframe: (boneId, property, time) => {
+    const s = get();
+    const anim = s.animations.find((a) => a.id === s.activeAnimationId);
+    if (!anim) return;
+    const tr = anim.tracks.find((x) => x.boneId === boneId && x.property === property);
+    if (!tr || !tr.keys.some((k) => Math.abs(k.time - time) < 1e-6)) return;
+    s.pushHistory();
+    const tracks = anim.tracks
+      .map((x) => {
+        if (x.boneId !== boneId || x.property !== property) return x;
+        const keys = x.keys.filter((k) => Math.abs(k.time - time) >= 1e-6);
+        return { ...x, keys };
+      })
+      .filter((x) => x.keys.length > 0);
+    set((st) => ({ animations: st.animations.map((a) => (a.id === anim.id ? { ...a, tracks } : a)) }));
+    get().applyActiveAnimation();
+  },
+  moveKeyframe: (boneId, property, fromTime, toTime) => {
+    const s = get();
+    const anim = s.animations.find((a) => a.id === s.activeAnimationId);
+    if (!anim) return;
+    s.pushHistory();
+    const t = Math.max(0, toTime);
+    const value = keyValueAt(anim, boneId, property, fromTime);
+    // 先从原处移除
+    let tracks = anim.tracks
+      .map((x) => {
+        if (x.boneId !== boneId || x.property !== property) return x;
+        const keys = x.keys.filter((k) => Math.abs(k.time - fromTime) >= 1e-6);
+        return { ...x, keys };
+      })
+      .filter((x) => x.keys.length > 0);
+    tracks = upsertTrackKey(tracks, boneId, property, t, value);
+    set((st) => ({ animations: st.animations.map((a) => (a.id === anim.id ? { ...a, tracks } : a)) }));
+    get().applyActiveAnimation();
+  },
+  recordBoneEdits: (boneId, props) => {
+    const s = get();
+    if (s.editorTab !== 'animate' || !s.keyframeLock) return;
+    const bone = s.bones.find((b) => b.id === boneId);
+    const anim = s.animations.find((a) => a.id === s.activeAnimationId);
+    if (!bone || !anim) return;
+    const t = s.currentTime;
+    s.pushHistory();
+    let tracks = anim.tracks.map((tr) => ({ ...tr, keys: tr.keys.map((k) => ({ ...k })) }));
+    for (const p of props) {
+      tracks = upsertTrackKey(tracks, boneId, p, t, bone[p]);
+    }
+    set((st) => ({ animations: st.animations.map((a) => (a.id === anim.id ? { ...a, tracks } : a)) }));
+    get().applyActiveAnimation();
+  },
+  applyActiveAnimation: () => {
+    const s = get();
+    if (s.editorTab !== 'animate') return;
+    const anim = s.animations.find((a) => a.id === s.activeAnimationId);
+    if (!anim) return;
+    const next = sampleAnimationPose(anim, s.setupPose, s.bones, s.currentTime);
+    if (next) set({ bones: next });
+  },
 
   // Day 2 setters
   setPsd: (p) => {
@@ -1487,6 +1881,15 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     const rootId = p ? genBoneId() : null;
     // ★ 为每个可渲染图层建一个同名插槽（1 图层 = 1 插槽）
     const slots = p ? slotsFromAttachments(flattenLayers(p)) : [];
+    // ★ 仿 Spine：导入的每个插槽自动绑定到根骨（root 是层级最高的，
+    //   拖动 root 时整幅图跟着走；之后可再绑定到具体骨骼覆盖）。
+    //   ref = 绑定时 root 的世界矩阵（此刻 root 在 (0,0) → 单位矩阵）
+    const slotBindings: Record<string, SlotBinding> = {};
+    if (p && rootId) {
+      for (const sl of slots) {
+        slotBindings[sl.id] = { boneId: rootId, ref: [1, 0, 0, 1, 0, 0] };
+      }
+    }
     set({
       psd: p,
       slots,
@@ -1520,7 +1923,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       selectedBoneIds: rootId ? [rootId] : [],
       selectedSectionKey: null,
       attachingSlotId: null,
-      slotBindings: {},   // 新 PSD：清空所有绑定
+      slotBindings,
     });
   },
   bindSlot: (slotId, binding) =>
@@ -1574,10 +1977,18 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
         attachmentIds: [layer.id],
         activeAttachmentId: layer.id,
       };
+      // ★ 仿 Spine：新插槽自动绑定到根骨（root 是层级最高的，拖动 root 时新图跟着走）。
+      //   ref 用恒等矩阵 → 绑定即「吸附」到 root 当前位置（图像 = root 世界 × 图像局部），
+      //   否则 root 已在非原点时 ref 会含 root 位移，导致图像不跟 root（留在原地）。
+      const rootBone = state.bones.find((b) => b.parentId === null) ?? null;
+      const newBinding = rootBone
+        ? { [slot.id]: { boneId: rootBone.id, ref: [1, 0, 0, 1, 0, 0] } as SlotBinding }
+        : {};
       return {
         images: [...state.images, layer],
         slots: [...state.slots, slot],
         slotVisibility: { ...state.slotVisibility, [slot.id]: true },
+        slotBindings: { ...state.slotBindings, ...newBinding },
         // 选中新建的插槽
         selectedSlotId: slot.id,
         selectedSlotIds: [slot.id],
@@ -1720,6 +2131,17 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     selectedSlotIds: [],
     selectedAttachmentId: null,
     selectedRowKey: null,
+    attachingSlotId: null,
+  }),
+  // ★ 层级树顶部「动画」节点（当前动画名）被选中：高亮该行，同时清空骨骼/素材/分区选中
+  selectAnimationNode: () => set({
+    selectedRowKey: 'animation',
+    selectedBoneId: null,
+    selectedBoneIds: [],
+    selectedSlotId: null,
+    selectedSlotIds: [],
+    selectedAttachmentId: null,
+    selectedSectionKey: null,
     attachingSlotId: null,
   }),
   setViewMode: (m) => set({ viewMode: m }),

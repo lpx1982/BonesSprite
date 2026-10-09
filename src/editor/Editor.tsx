@@ -62,6 +62,19 @@ export function Editor() {
       const mod = e.metaKey || e.ctrlKey;
       if (!mod) {
         const key = e.key;
+        // Opt+P：唤醒 / 切换层级树面板（对齐 Spine 层级树快捷键）
+        // ★ 用 e.code（物理键位）而非 e.key：Mac 上 Option+P 会输出字符「π」，e.key 不是 'p'，
+        //   用 KeyP 才能稳定识别。
+        if (e.altKey && (e.code === 'KeyP' || e.key === 'p' || e.key === 'P')) {
+          e.preventDefault();
+          const s = usePixiBonesStore.getState();
+          const on = !s.showRightPanel;
+          s.toggleRightPanel();
+          const s2 = usePixiBonesStore.getState();
+          if (on) { if (!s2.viewHierarchy) s2.toggleViewHierarchy(); }
+          else { if (s2.viewHierarchy) s2.toggleViewHierarchy(); }
+          return;
+        }
         // Esc：退出「附件：设置父级」拾取 / 取消网格描绘 / 退出网格编辑
         if (key === 'Escape') {
           const s = usePixiBonesStore.getState();
@@ -194,6 +207,10 @@ function RightDock() {
   const viewGridTool = usePixiBonesStore((s) => s.viewGridTool);
   const viewWeights = usePixiBonesStore((s) => s.viewWeights);
   const viewDockOrder = usePixiBonesStore((s) => s.viewDockOrder);
+  // ★ 动画 tab 时右侧停靠区抬高到时间轴上方（底部留出 timelineHeight），
+  //   否则时间轴(z-20)会盖住面板下半部（属性块 / 树底行都点不到）。
+  const editorTab = usePixiBonesStore((s) => s.editorTab);
+  const timelineHeight = usePixiBonesStore((s) => s.timelineHeight);
 
   // 当前开着的面板；反转后 DOM 从左到右 = 从「最晚出现」到「最早出现」
   const open = [...viewDockOrder].reverse().filter((k) =>
@@ -206,8 +223,11 @@ function RightDock() {
 
   return (
     <div
-      className="absolute top-0 right-0 bottom-0 flex"
-      style={{ zIndex: 10 }}
+      className="absolute top-0 right-0 flex"
+      style={{
+        zIndex: 10,
+        bottom: editorTab === 'animate' ? timelineHeight : 0,
+      }}
     >
       {open.map((k) => (
         <Fragment key={k}>

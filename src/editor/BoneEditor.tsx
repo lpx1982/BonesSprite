@@ -74,7 +74,7 @@ export function BoneEditor() {
           axisAngle?: number;
         }
       | { kind: 'rotate'; boneId: string; startRot: number; startScreen: { x: number; y: number } }
-      | { kind: 'root-move'; boneId: string; startLocal: { x: number; y: number }; startScreen: { x: number; y: number } }
+      | { kind: 'root-move'; boneId: string; startLocal: { x: number; y: number }; startScreen: { x: number; y: number }; moveZone?: 'green' | 'red' | 'center'; axisAngle?: number }
       | { kind: 'pan'; startScreen: { x: number; y: number }; startPan: { x: number; y: number } }
       | { kind: 'create-from'; parentId: string; startWorld: { x: number; y: number }; startScreen: { x: number; y: number }; preview: Gfx }
       | {
@@ -617,6 +617,53 @@ export function BoneEditor() {
       };
 
       /**
+       * ★ 改绑到骨骼但「保持图像当前位置 / 朝向」（Spine 重新父级语义，避免吸附/跳动）。
+       *
+       * 渲染时插槽的骨骼驱动是：delta = boneWorld × ref⁻¹。
+       * 绑定前它可能已经受旧父级驱动：oldDelta = oldBoneWorld × oldRef⁻¹。
+       * 要让「刚点绑定」时画面完全不变，需要：
+       *   newBoneWorld × newRef⁻¹ = oldDelta
+       * 即：
+       *   newRef = oldDelta⁻¹ × newBoneWorld
+       *
+       * ★ 不能只改 slotTransform.tx/ty：那只对齐了平移，骨骼的旋转/缩放仍会作用到图层，
+       *   裙子等非方形图层会立刻被转成横向 / 甩到别处。
+       */
+      const boneWorldAffine = (bone: EngineBone): number[] => {
+        const e = bone.worldMatrix.elements;
+        return [e[0], e[1], e[3], e[4], e[6], e[7]];
+      };
+
+      const bindSlotKeepPosition = (slotId: string, boneId: string) => {
+        const st = usePixiBonesStore.getState();
+        const bone = boneById.get(boneId);
+        if (!bone) return;
+
+        // 1) 求绑定前该插槽实际使用的骨骼驱动矩阵 oldDelta。
+        //    未绑定 → 单位矩阵；已绑定 → oldBoneWorld × oldRef⁻¹。
+        //    ★ 网格蒙皮附件会跳过插槽骨骼驱动（见 applyBindings 的 meshSkinned），
+        //      此时骨骼绑定并不参与渲染，oldDelta 必须按单位矩阵算，否则将来移除权重会跳。
+        const slot = st.slots.find((x) => x.id === slotId);
+        const aid = slot?.activeAttachmentId ?? null;
+        const meshSkinned = !!(aid && (st.attachmentMeshes[aid]?.bones?.length ?? 0) > 0);
+        let oldDelta = [1, 0, 0, 1, 0, 0];
+        const oldBinding = meshSkinned ? undefined : st.slotBindings[slotId];
+        if (oldBinding) {
+          const oldBone = boneById.get(oldBinding.boneId);
+          const oldRefInv = invAffine(oldBinding.ref);
+          if (oldBone && oldRefInv) {
+            oldDelta = mulAffine(boneWorldAffine(oldBone), oldRefInv);
+          }
+        }
+
+        // 2) newRef = oldDelta⁻¹ × newBoneWorld，使绑定瞬间 newBoneWorld × newRef⁻¹ = oldDelta。
+        const invDelta = invAffine(oldDelta);
+        if (!invDelta) return;
+        const ref = mulAffine(invDelta, boneWorldAffine(bone));
+        st.bindSlot(slotId, { boneId, ref });
+      };
+
+      /**
        * 应用插槽 / 附件的颜色与混合模式（仿 Spine）：
        *   - 颜色：tint = 插槽色 × 附件色（逐分量相乘），都没设 = 白（不改）
        *   - 混合：附件 blend 优先，否则插槽 blend，都没设则沿用 PSD 自带的 layer.blendMode
@@ -660,13 +707,27 @@ export function BoneEditor() {
        * 图层「手柄锚点」= 图层中心（含 tx/ty）在画布上的屏幕坐标。
        * ★ 手柄的绘制 / hover 判定 / pointerdown 分区 / 旋转，全部必须用这一个锚点，
        *   否则会像之前那样「画在中心、命中在左上角」而完全错位。
+       * ★ 必须跟随骨骼：图层中心先经 wrap 矩阵（绑定骨骼 + 插槽变换）变换到世界，
+       *   再加 root 平移/缩放 —— 否则骨骼带动图像移动后，手柄/边框还停在原位置。
        */
       const attachmentAnchorScreen = (
+        slotId: string,
         layer: { left: number; top: number; width: number; height: number },
         lt: { tx: number; ty: number },
       ) => {
         const sx = root.scale.x;
         const sy = root.scale.y;
+        const m = wrapMatrixBySlot.get(slotId);
+        if (m) {
+          // ★ 只传图片中心 (w/2, h/2)（以图片左上角为原点的局部坐标）：
+          //   wrap 矩阵已包含插槽 tx/ty（applyBindings 的 slotLocal 已编码），
+          //   若再加 lt.tx/ty 会被算两遍 → 移动图片后手柄跑到外面去。
+          const px = layer.width / 2;
+          const py = layer.height / 2;
+          const wx = m[0] * px + m[2] * py + m[4];
+          const wy = m[1] * px + m[3] * py + m[5];
+          return { x: root.x + wx * sx, y: root.y + wy * sy };
+        }
         return {
           x: root.x + (layer.left + layer.width / 2 + lt.tx) * sx,
           y: root.y + (layer.top + layer.height / 2 + lt.ty) * sy,
@@ -713,7 +774,7 @@ export function BoneEditor() {
           }
         }
         // 把手柄放在图层中心（统一锚点）
-        const { x: cx, y: cy } = attachmentAnchorScreen(layer, lt);
+        const { x: cx, y: cy } = attachmentAnchorScreen(slot.id, layer, lt);
         slotHandles.x = cx;
         slotHandles.y = cy;
         // ★ 手柄跟着图层自身旋转（红轴 = 图层 X 方向、绿轴 = 图层 Y 方向），
@@ -802,10 +863,12 @@ export function BoneEditor() {
             const w = weights[row + j];
             if (w === 0) continue;
             const bn = skeletonRef ? findBoneByRefWorld(skeletonRef, bones[j]) : null;
-            let nowX = 0, nowY = 0;
+            const bindX = boneBindWorld[j * 2] ?? 0;
+            const bindY = boneBindWorld[j * 2 + 1] ?? 0;
+            let nowX = bindX, nowY = bindY;
             if (bn) { const e = bn.worldMatrix.elements; nowX = e[6]; nowY = e[7]; }
-            const dx = nowX - (boneBindWorld[j * 2] ?? 0);
-            const dy = nowY - (boneBindWorld[j * 2 + 1] ?? 0);
+            const dx = nowX - bindX;
+            const dy = nowY - bindY;
             vx += w * dx;
             vy += w * dy;
           }
@@ -1239,18 +1302,33 @@ export function BoneEditor() {
         for (const sid of selectedSlotIds) {
           const slot = slots.find((s) => s.id === sid) ?? null;
           const layer = slot?.activeAttachmentId ? byId.get(slot.activeAttachmentId) ?? null : null;
-          if (!layer || layer.width === 0 || layer.height === 0) continue;
+          if (!slot || !layer || layer.width === 0 || layer.height === 0) continue;
           // ★ 附件一旦有网格：可见范围已被裁到网格轮廓内，整图外框（原图边界）会误导
           //   → 不再画蓝框（选中提示改由 drawMeshHandles 的网格边界承担）
           if (usePixiBonesStore.getState().attachmentMeshes[layer.id]) continue;
 
-          const stageX = root.x + layer.left * root.scale.x;
-          const stageY = root.y + layer.top * root.scale.y;
-          const stageW = layer.width * root.scale.x;
-          const stageH = layer.height * root.scale.y;
+          // ★ 边框必须跟随骨骼：图片本身由 wrap 矩阵（绑定骨骼 + 插槽变换）驱动，
+          //   这里用 wrapMatrixBySlot 把图片四角变换到世界再画包围框，
+          //   否则骨骼一动图像走了、选中框还停在原位置（用户点不到图，得去找框）。
+          const m = wrapMatrixBySlot.get(slot.id);
+          const toWorld = m
+            ? (px: number, py: number) => ({ x: m[0] * px + m[2] * py + m[4], y: m[1] * px + m[3] * py + m[5] })
+            : (px: number, py: number) => ({ x: px + layer.left, y: py + layer.top });
+          const w = layer.width;
+          const h = layer.height;
+          const cs = [toWorld(0, 0), toWorld(w, 0), toWorld(0, h), toWorld(w, h)];
+          const minX = Math.min(...cs.map((c) => c.x));
+          const maxX = Math.max(...cs.map((c) => c.x));
+          const minY = Math.min(...cs.map((c) => c.y));
+          const maxY = Math.max(...cs.map((c) => c.y));
 
           highlight
-            .rect(stageX - 2, stageY - 2, stageW + 4, stageH + 4)
+            .rect(
+              root.x + minX * root.scale.x - 2,
+              root.y + minY * root.scale.y - 2,
+              (maxX - minX) * root.scale.x + 4,
+              (maxY - minY) * root.scale.y + 4,
+            )
             .stroke({ width: 2, color: 0x60a5fa, alpha: 0.9 });
         }
       };
@@ -1324,12 +1402,10 @@ export function BoneEditor() {
             const p = screenToAttachmentLocal(slot.id, l, gx, gy);
             if (p && pointInMesh(p.x, p.y, mesh)) return slot.id;
           } else {
-            const sx = root.scale.x;
-            const sy = root.scale.y;
-            if (sx === 0 || sy === 0) continue;
-            const wx = (gx - root.x) / sx;
-            const wy = (gy - root.y) / sy;
-            if (wx >= l.left && wx <= l.left + l.width && wy >= l.top && wy <= l.top + l.height) {
+            // ★ 非网格附件：同样用 wrap 矩阵反变换到附件局部坐标判断命中，
+            //   否则骨骼带动图像移动后，点图像本体命不中（得去找停在原地的框）。
+            const p = screenToAttachmentLocal(slot.id, l, gx, gy);
+            if (p && p.x >= 0 && p.x <= l.width && p.y >= 0 && p.y <= l.height) {
               return slot.id;
             }
           }
@@ -1415,7 +1491,13 @@ export function BoneEditor() {
         const boneDy = new Array(nb);
         for (let j = 0; j < nb; j++) {
           const boneNode = skeletonRef ? findBoneByRefWorld(skeletonRef, bones[j]) : null;
-          if (!boneNode) { boneDx[j] = 0; boneDy[j] = 0; continue; }
+          if (!boneNode) {
+            // ★ 查不到骨骼时不能用 (0,0)：那会让 dx = -boneBindWorld，网格直接飞走。
+            //   回退到绑定姿态 = delta 0，至少保持在原位。
+            boneDx[j] = boneBindWorld[j * 2] ?? 0;
+            boneDy[j] = boneBindWorld[j * 2 + 1] ?? 0;
+            continue;
+          }
           const e = boneNode.worldMatrix.elements;
           boneDx[j] = e[6];
           boneDy[j] = e[7];
@@ -1715,29 +1797,45 @@ export function BoneEditor() {
         const layer = slot?.activeAttachmentId
           ? allAttachmentsOf(s.psd, s.images).find((l) => l.id === slot.activeAttachmentId) ?? null
           : null;
-        if (!layer || !layer.canvas || layer.width === 0 || layer.height === 0) return;
+        if (!slot || !layer || !layer.canvas || layer.width === 0 || layer.height === 0) return;
         const sx = root.scale.x;
         const sy = root.scale.y;
-        const stageX = root.x + layer.left * sx;
-        const stageY = root.y + layer.top * sy;
-        const stageW = layer.width * sx;
-        const stageH = layer.height * sy;
+        // ★ 悬停虚线框 / 白色轮廓必须跟随骨骼 + 插槽变换：
+        //   用 wrapMatrixBySlot 把图片局部点（左上角原点 0..w, 0..h）变换到世界再转屏幕，
+        //   否则图像被骨骼 / 插槽带走了、虚线框和白色轮廓还停在原始位置（用户得去找框）。
+        const m = wrapMatrixBySlot.get(slot.id);
+        const toScr = (px: number, py: number) => {
+          if (m) {
+            const wx = m[0] * px + m[2] * py + m[4];
+            const wy = m[1] * px + m[3] * py + m[5];
+            return { x: root.x + wx * sx, y: root.y + wy * sy };
+          }
+          return { x: root.x + (px + layer.left) * sx, y: root.y + (py + layer.top) * sy };
+        };
         if (showDashedRect) {
-          drawDashedRect(
-            attachmentHover,
-            stageX - 2, stageY - 2, stageW + 4, stageH + 4,
-            6, 4, 0xFFFFFF, 2,
-          );
+          const cs = [
+            toScr(0, 0), toScr(layer.width, 0),
+            toScr(0, layer.height), toScr(layer.width, layer.height),
+          ];
+          const minX = Math.min(...cs.map((c) => c.x));
+          const maxX = Math.max(...cs.map((c) => c.x));
+          const minY = Math.min(...cs.map((c) => c.y));
+          const maxY = Math.max(...cs.map((c) => c.y));
+          drawDashedRect(attachmentHover, minX - 2, minY - 2, maxX - minX + 4, maxY - minY + 4, 6, 4, 0xFFFFFF, 2);
         }
         if (inTransform) {
-          // alpha>0 轮廓描边（沿图层 canvas 像素边界）
+          // alpha>0 轮廓描边（沿图层 canvas 像素边界，每个点经 wrap 矩阵变换跟随骨骼）
           const outline = computeAttachmentOutline(layer.canvas);
-          drawAttachmentOutline(
-            attachmentHover,
-            outline,
-            stageX, stageY, sx, sy,
-            0xFFFFFF, Math.max(1, 1 * Math.max(0.5, Math.min(sx, sy))),
-          );
+          const segs = outline.segs;
+          for (let i = 0; i + 3 < segs.length; i += 4) {
+            const p0 = toScr(segs[i + 0], segs[i + 1]);
+            const p1 = toScr(segs[i + 2], segs[i + 3]);
+            attachmentHover.moveTo(p0.x, p0.y).lineTo(p1.x, p1.y);
+          }
+          attachmentHover.stroke({
+            width: Math.max(1, Math.max(0.5, Math.min(sx, sy))),
+            color: 0xFFFFFF,
+          });
         }
       };
 
@@ -1771,11 +1869,13 @@ export function BoneEditor() {
         const baseFit = Math.min(sw / psd.width, sh / psd.height);
         const scale = Math.max(0.01, Math.min(baseFit * vp.zoom, 16));
         root.scale.set(scale, scale);
+        // ★ PSD 的 (0,0)（左上角）就是画布世界原点 (0,0)：图层坐标 = 世界坐标。
+        //   root 把 PSD 完整居中摆放在视口内，render 指向 root（= PSD 左上角），
+        //   这样标尺/十字/根骨都落在 PSD 左上角，刻度与图层坐标一一对应。
         root.x = (rw - psd.width * scale) / 2 + vp.panX;
-        root.y = rh / 2 - psd.height * scale + vp.panY;
-        // 十字应该对齐 image bottom-center（不是左上角的 root.x/y）
-        const renderX = root.x + (psd.width / 2) * scale;
-        const renderY = root.y + psd.height * scale;
+        root.y = (rh - psd.height * scale) / 2 + vp.panY;
+        const renderX = root.x;
+        const renderY = root.y;
         pushRender(renderX, renderY, scale);
       };
 
@@ -2317,17 +2417,10 @@ export function BoneEditor() {
               if (trySelectWeightVertex(ev.global.x, ev.global.y, ev.metaKey || ev.ctrlKey || ev.shiftKey)) {
                 return;
               }
-              // ★ 拾取父级模式：点击骨骼 → 把等待中的素材绑定到该骨骼，然后退出
+              // ★ 拾取父级模式：点击骨骼 → 把等待中的素材绑定到该骨骼（保持当前位置），然后退出
               const attachId = usePixiBonesStore.getState().attachingSlotId;
               if (attachId) {
-                const target = boneById.get(node.id);
-                if (target) {
-                  const el = target.worldMatrix.elements;
-                  usePixiBonesStore.getState().bindSlot(attachId, {
-                    boneId: node.id,
-                    ref: [el[0], el[1], el[3], el[4], el[6], el[7]],
-                  });
-                }
+                bindSlotKeepPosition(attachId, node.id);
                 return;
               }
               // ★ 权重「绑定模式」：点击骨骼 → 绑到当前选中网格（流程 A：先选网格）
@@ -2547,8 +2640,52 @@ export function BoneEditor() {
             let h = zeroHandles.get(node.id);
             if (!h) {
               const move = new Gfx();
-              move.eventMode = 'none';   // 纯视觉，交互一律走 jointHit
+              move.eventMode = 'none';   // 默认纯视觉；move 工具激活时改为可交互（见下方显隐块）
               drawRootMoveHandle(move);
+              // ★ 命中区覆盖整块图标：hover 到哪组箭头哪组变白，按下则沿该轴移动（对齐子骨骼 axis-arrows）
+              move.hitArea = new Rectangle(-48, -48, 96, 96);
+              move.cursor = 'move';
+              let moveHover: 'green' | 'red' | 'center' | null = null;
+              const repaintMove = (zone: 'green' | 'red' | 'center' | null) => {
+                if (moveHover === zone) return;
+                moveHover = zone;
+                (move as unknown as { __moveHover?: typeof moveHover }).__moveHover = zone;
+                move.clear();
+                drawRootMoveHandle(move, zone === 'green' ? 'green' : zone === 'red' ? 'red' : null);
+                move.cursor = zone === 'center' ? 'move'
+                  : zone === 'green' ? 'ns-resize'
+                  : zone === 'red' ? 'ew-resize'
+                  : 'move';
+              };
+              const moveLocalOf = (gx: number, gy: number) => {
+                const c = Math.cos(-move.rotation);
+                const s = Math.sin(-move.rotation);
+                const dx = gx - move.x;
+                const dy = gy - move.y;
+                return { lx: dx * c - dy * s, ly: dx * s + dy * c };
+              };
+              move.on('pointermove', (ev: FederatedPointerEvent) => {
+                const { lx, ly } = moveLocalOf(ev.global.x, ev.global.y);
+                repaintMove(detectMoveZone(lx, ly));
+              });
+              move.on('pointerleave', () => repaintMove(null));
+              move.on('pointerdown', (ev: FederatedPointerEvent) => {
+                ev.stopPropagation();
+                const store = usePixiBonesStore.getState();
+                const fresh = store.bones.find((n) => n.id === node.id) ?? node;
+                store.pushHistory();
+                const { lx, ly } = moveLocalOf(ev.global.x, ev.global.y);
+                const zone = detectMoveZone(lx, ly);
+                dragState = {
+                  kind: 'root-move',
+                  boneId: node.id,
+                  startLocal: { x: fresh.x, y: fresh.y },
+                  startScreen: { x: ev.global.x, y: ev.global.y },
+                  moveZone: zone,
+                  // 红箭头 = 沿骨方向（手柄 rotation）；绿箭头 = 垂直骨方向（+90°）
+                  axisAngle: zone === 'green' ? move.rotation + Math.PI / 2 : move.rotation,
+                };
+              });
               ikLayer.addChild(move);
               const rot = new Gfx();
               rot.eventMode = 'none';
@@ -2647,6 +2784,16 @@ export function BoneEditor() {
             }
             // 显隐可能被上面的工具分支改动，这里统一按最终可见性设置事件模式
             h.scale.eventMode = h.scale.visible ? 'static' : 'none';
+            // ★ root 移动手柄：仅 move 工具激活且可见时可交互（hover 白化 + 红/绿轴限制）；
+            //   纯 Pose 模式仍走 jointHit 的分区拖动（避免抢掉 jointHit 的悬停事件）
+            const moveInteractive = stMove.activeTool === 'move' && h.move.visible;
+            h.move.eventMode = moveInteractive ? 'static' : 'none';
+            if (!moveInteractive && (h.move as unknown as { __moveHover?: unknown }).__moveHover) {
+              // 手柄被隐藏 / 非 move 工具时复位 hover 白化，避免下次出现残留白箭头
+              (h.move as unknown as { __moveHover?: unknown }).__moveHover = null;
+              h.move.clear();
+              drawRootMoveHandle(h.move);
+            }
             // ★「旋转工具」激活时：在该骨骼处显示红色 rotate 图标
             //   - 子骨骼：用关节圆环做指示（之前的红线）
             //   - 根骨骼：用 Codex rotate.json 的环+柄图标包住根骨
@@ -2996,8 +3143,18 @@ export function BoneEditor() {
           // 根骨移动：改变自身 local (x,y)，整棵骨骼树跟着走
           const sx = root.scale.x;
           const sy = root.scale.y;
-          const dxScreen = ev.global.x - dragState.startScreen.x;
-          const dyScreen = ev.global.y - dragState.startScreen.y;
+          let dxScreen = ev.global.x - dragState.startScreen.x;
+          let dyScreen = ev.global.y - dragState.startScreen.y;
+          // ★ 轴约束（对齐子骨骼）：moveZone 非 center 时把位移投影到锁定轴上
+          //   红箭头（沿骨方向）/ 绿箭头（垂直骨方向）——两端点确定的直线，投影即可
+          const zone = dragState.moveZone ?? 'center';
+          if (zone !== 'center' && dragState.axisAngle !== undefined) {
+            const ax = Math.cos(dragState.axisAngle);
+            const ay = Math.sin(dragState.axisAngle);
+            const proj = dxScreen * ax + dyScreen * ay;
+            dxScreen = proj * ax;
+            dyScreen = proj * ay;
+          }
           const newX = dragState.startLocal.x + (sx !== 0 ? dxScreen / sx : 0);
           const newY = dragState.startLocal.y + (sy !== 0 ? dyScreen / sy : 0);
           const boneId = dragState.boneId;
@@ -3345,13 +3502,9 @@ export function BoneEditor() {
             });
             if (targetSlot) {
               const newId = usePixiBonesStore.getState().selectedBoneId;
-              const nb = newId ? boneById.get(newId) : null;
-              if (newId && nb) {
-                const el = nb.worldMatrix.elements;
-                usePixiBonesStore.getState().bindSlot(targetSlot.id, {
-                  boneId: newId,
-                  ref: [el[0], el[1], el[3], el[4], el[6], el[7]],
-                });
+              if (newId) {
+                // 保持图像当前位置：挂到新建骨骼上（重新父级不跳）
+                bindSlotKeepPosition(targetSlot.id, newId);
                 // 绑定完成：目标是一次性的 → 取消插槽选中，新骨成为当前选中
                 usePixiBonesStore.getState().selectBone(newId);
               }
@@ -3441,6 +3594,22 @@ export function BoneEditor() {
             store.setEditorMode('pose');
           }
         }
+        // ★ 动画 tab：骨骼变换拖动结束后，把最终值在 currentTime 写关键帧（一次拖动合并为一步历史）
+        const stUp = usePixiBonesStore.getState();
+        if (stUp.editorTab === 'animate' && stUp.keyframeLock) {
+          if (dragState.kind === 'tip' || dragState.kind === 'root-move') {
+            stUp.recordBoneEdits(dragState.boneId, ['x', 'y']);
+          } else if (dragState.kind === 'rotate') {
+            stUp.recordBoneEdits(dragState.boneId, ['rotation']);
+          } else if (dragState.kind === 'scale') {
+            stUp.recordBoneEdits(
+              dragState.boneId,
+              dragState.zone === 'green' ? ['scaleY']
+                : dragState.zone === 'red' ? ['scaleX']
+                  : ['scaleX', 'scaleY'],
+            );
+          }
+        }
         dragState = null;
         hideRotateCursor();
         a.canvas.style.cursor = 'default';
@@ -3484,9 +3653,9 @@ export function BoneEditor() {
         const layer = hoverSlot?.activeAttachmentId
           ? allAttachmentsOf(st.psd, st.images).find((l) => l.id === hoverSlot.activeAttachmentId) ?? null
           : null;
-        if (!layer) return;
+        if (!hoverSlot || !layer) return;
         // ★ 锚点 = 图层中心（与绘制手柄一致）
-        const { x: ax, y: ay } = attachmentAnchorScreen(layer, lt);
+        const { x: ax, y: ay } = attachmentAnchorScreen(hoverSlot.id, layer, lt);
         const c = Math.cos(-lt.rotation);
         const s = Math.sin(-lt.rotation);
         const dx = gx - ax;
@@ -3540,9 +3709,9 @@ export function BoneEditor() {
         const layer = slot?.activeAttachmentId
           ? allAttachmentsOf(st.psd, st.images).find((l) => l.id === slot.activeAttachmentId) ?? null
           : null;
-        if (!layer) return;
+        if (!slot || !layer) return;
         // 锚点 = 图层中心（与绘制 / hover 一致）
-        const { x: ax, y: ay } = attachmentAnchorScreen(layer, lt);
+        const { x: ax, y: ay } = attachmentAnchorScreen(slotId, layer, lt);
         // ★ 推一次历史快照
         st.pushHistory();
         const { zone, axisAngle, handleRotation } = slotZoneAndAxis(st.activeTool, ev.global.x, ev.global.y, ax, ay, lt);
@@ -3830,9 +3999,9 @@ export function BoneEditor() {
             const layer = slot?.activeAttachmentId
               ? allAttachmentsOf(st0p.psd, st0p.images).find((l) => l.id === slot.activeAttachmentId) ?? null
               : null;
-            if (layer) {
+            if (slot && layer) {
               // 锚点 = 图层中心（与绘制 / hover 一致）
-              const { x: ax, y: ay } = attachmentAnchorScreen(layer, lt);
+              const { x: ax, y: ay } = attachmentAnchorScreen(slot.id, layer, lt);
               // ★ 推一次历史快照（拖动期间不再入栈，结束才能回退到拖动前状态）
               st0p.pushHistory();
               const { zone, axisAngle, handleRotation } = slotZoneAndAxis(st0p.activeTool, ev.global.x, ev.global.y, ax, ay, lt);
@@ -3923,7 +4092,7 @@ export function BoneEditor() {
           return;
         }
 
-        // 有 PSD：scale = baseFit × zoom；root.x = (rw − psdW·scale)/2 + panX；root.y = rh/2 − psdH·scale + panY
+        // 有 PSD：scale = baseFit × zoom；root.x = (rw − psdW·scale)/2 + panX；root.y = (rh − psdH·scale)/2 + panY（居中）
         const margin = 40;
         const baseFit = Math.min(
           Math.max(1, rw - margin * 2) / psd.width,
@@ -3936,7 +4105,7 @@ export function BoneEditor() {
         const wx = (mx - root.x) / oldScale;
         const wy = (my - root.y) / oldScale;
         const panX = mx - wx * newScale - (rw - psd.width * newScale) / 2;
-        const panY = my - wy * newScale - (rh / 2 - psd.height * newScale);
+        const panY = my - wy * newScale - (rh - psd.height * newScale) / 2;
         setViewport({ ...curVp, zoom: newZoom, panX, panY });
         // 后续重绘（grid / 骨骼 / 悬停框 …）由 store 订阅统一处理
       };
@@ -4153,16 +4322,18 @@ export function BoneEditor() {
               : 1;
             const targetVpZoom = z / baseFit;
             // panX/panY：root.x = cssW/2 - psd.width*scale/2 + panX
-            // 要让 bbox.center 落在 cssW/2：
+            //            root.y = (cssH - psd.height*scale)/2 + panY（PSD 居中摆放）
+            // 要让 bbox.center 落在视口中心：
             //   root.x + (b.x + b.width/2) * scale = cssW/2
-            //   cssW/2 - psd.width*scale/2 + panX + (b.x + b.width/2) * scale = cssW/2
-            //   panX = (psd.width/2 - b.x - b.width/2) * scale
+            //   → panX = (psd.width/2 - b.x - b.width/2) * scale
+            //   root.y + (b.y + b.height/2) * scale = cssH/2
+            //   → panY = (psd.height/2 - b.y - b.height/2) * scale
             const scale = z;
             const panX = psd && psd.width > 0
               ? (psd.width / 2 - b.x - b.width / 2) * scale
               : -(b.x + b.width / 2) * scale;
             const panY = psd && psd.height > 0
-              ? (psd.height - b.y - b.height / 2) * scale
+              ? (psd.height / 2 - b.y - b.height / 2) * scale
               : -(b.y + b.height / 2) * scale;
             queueMicrotask(() => {
               if (!destroyed) {
@@ -4237,21 +4408,14 @@ export function BoneEditor() {
         });
       });
       // ---- 图层绑定事件（PsdPanel 分发）：绑定 / 解绑 ----
-      // 绑定：把「当前选中骨骼的世界矩阵」记进绑定表做参考基准（ref），
-      //       之后渲染用 delta = 当前矩阵 × ref⁻¹ 驱动图层 → 绑定瞬间图层不动。
+      // 绑定：保持图像当前位置（重新父级），之后骨骼动图像才跟着动。
       const onBindSlot = (e: Event) => {
         const slotId = (e as CustomEvent<{ slotId: string }>).detail?.slotId;
         if (!slotId) return;
         const st = usePixiBonesStore.getState();
         const boneId = st.selectedBoneId;
         if (!boneId) return;
-        const bone = boneById.get(boneId);
-        if (!bone) return;
-        const el = bone.worldMatrix.elements;
-        st.bindSlot(slotId, {
-          boneId,
-          ref: [el[0], el[1], el[3], el[4], el[6], el[7]],
-        });
+        bindSlotKeepPosition(slotId, boneId);
       };
       const onUnbindSlot = (e: Event) => {
         const slotId = (e as CustomEvent<{ slotId: string }>).detail?.slotId;
@@ -4927,29 +5091,6 @@ function computeAttachmentOutline(canvas: HTMLCanvasElement): OutlineSegments {
   const out: OutlineSegments = { w, h, segs: buf.subarray(0, n) };
   _outlineCache.set(canvas, out);
   return out;
-}
-
-/** 把「alpha 轮廓」按图层位置/缩放画到目标 Gfx（世界坐标系）。 */
-function drawAttachmentOutline(
-  g: Gfx,
-  outline: OutlineSegments,
-  layerLeft: number,
-  layerTop: number,
-  sx: number,
-  sy: number,
-  color: number,
-  width: number,
-) {
-  const segs = outline.segs;
-  if (segs.length === 0) return;
-  for (let i = 0; i + 3 < segs.length; i += 4) {
-    const x0 = layerLeft + segs[i + 0] * sx;
-    const y0 = layerTop + segs[i + 1] * sy;
-    const x1 = layerLeft + segs[i + 2] * sx;
-    const y1 = layerTop + segs[i + 3] * sy;
-    g.moveTo(x0, y0).lineTo(x1, y1);
-  }
-  g.stroke({ width, color });
 }
 
 function makeBone(node: BoneNode): EngineBone {

@@ -492,12 +492,15 @@ function TransformRow({
   const activeTool = usePixiBonesStore((s) => s.activeTool);
   const setActiveTool = usePixiBonesStore((s) => s.setActiveTool);
   const editorTab = usePixiBonesStore((s) => s.editorTab);
-  // 设置 tab：钥匙锁死（深灰、不可点）；
-  // 动画 tab：钥匙激活（亮绿、hover 加亮、可点击）
+  // 关键帧锁：设置 tab 锁死（深灰、不可点）；动画 tab 可开关。
+  //   true = 变换骨骼时自动在 currentTime 写关键帧（亮绿）；false = 不写（灰绿、hover 可点亮）
+  const keyframeLock = usePixiBonesStore((s) => s.keyframeLock);
+  const toggleKeyframeLock = usePixiBonesStore((s) => s.toggleKeyframeLock);
   const keyframeLocked = editorTab !== 'animate';
   // 钥匙按钮自己的 hover（动画 tab 才生效）
   const [hoverKey, setHoverKey] = useState(false);
-  const keyframeBg = !keyframeLocked && hoverKey ? T.KEYFRAME_GREEN_HOVER : T.KEYFRAME_GREEN;
+  const keyframeBg = keyframeLocked ? T.ROW_BG
+    : (keyframeLock ? (hoverKey ? T.KEYFRAME_GREEN_HOVER : T.KEYFRAME_GREEN) : T.ROW_BG);
   return (
     <div
       className="flex items-center"
@@ -625,7 +628,7 @@ function TransformRow({
       <button
         type="button"
         disabled={keyframeLocked}
-        onClick={keyframeLocked ? undefined : () => { /* TODO: 写关键帧 */ }}
+        onClick={keyframeLocked ? undefined : toggleKeyframeLock}
         onMouseEnter={() => !keyframeLocked && setHoverKey(true)}
         onMouseLeave={() => setHoverKey(false)}
         className="flex items-center justify-center shrink-0 transition-colors"
@@ -634,15 +637,17 @@ function TransformRow({
           height: T.KEYFRAME_BTN_H,
           padding: 0,
           lineHeight: 1,
-          // 设置 tab 用淡灰，动画 tab 用浅绿图标
-          color: keyframeLocked ? 'rgba(187, 187, 187, 0.35)' : '#A8F0B8',
+          // 设置 tab 用淡灰，动画 tab 且关键帧锁开启时用浅绿图标
+          color: keyframeLocked || !keyframeLock ? 'rgba(187, 187, 187, 0.35)' : '#A8F0B8',
           background: keyframeLocked ? T.ROW_BG : keyframeBg,
           border: 'none',
           // 整行紧贴：右侧关键帧按钮靠左不要圆角，与中间输入框衔接成一条直线
           borderRadius: `0 ${T.ROW_RADIUS}px ${T.ROW_RADIUS}px 0`,
           cursor: keyframeLocked ? 'not-allowed' : 'pointer',
         }}
-        title={keyframeLocked ? '关键帧（设置模式下不可用）' : '添加关键帧'}
+        title={keyframeLocked
+          ? '关键帧（设置模式下不可用）'
+          : (keyframeLock ? '关键帧锁开启：变换骨骼时自动写入关键帧（点击关闭）' : '关键帧锁关闭：变换骨骼不写入关键帧（点击开启）')}
       >
         <IconLink />
       </button>
