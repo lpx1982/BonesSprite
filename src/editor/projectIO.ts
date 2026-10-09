@@ -144,50 +144,94 @@ function normalizeMesh(m: MeshData): MeshData {
 
 let _saving = false;
 
-/** 把当前 store 的工程快照写入 IndexedDB。返回是否成功。 */
-export async function saveCurrentProject(): Promise<boolean> {
-  const s = usePixiBonesStore.getState();
-  const id = s.currentProjectId;
-  if (!id) return false;
-  if (_saving) return false;
-  _saving = true;
-  try {
-    const psd: PixiBonesPsd | null = s.psd;
-    const meshes: Record<string, MeshData> = {};
-    for (const [k, m] of Object.entries(s.attachmentMeshes)) meshes[k] = normalizeMesh(m);
+/**
+ * 已「另存为」出来、且内存里就是最新数据的工程 id。
+ * 切过去时不需要再从 IndexedDB 回读（回读会把选中态等临时状态清掉）。
+ */
+const skipLoadOnce = new Set<string>();
 
-    const snap: SerializedProject = {
-      version: PROJECT_VERSION,
-      savedAt: Date.now(),
-      name: s.projectName,
-      hasPsd: !!psd,
-      psdWidth: psd?.width ?? 0,
-      psdHeight: psd?.height ?? 0,
-      psdLayers: psd ? psd.layers.map(serializeLayer) : [],
-      images: s.images.map(serializeLayer),
-      slots: s.slots,
-      slotVisibility: s.slotVisibility,
-      slotTransforms: s.slotTransforms,
-      slotStyle: s.slotStyle,
-      attachmentStyle: s.attachmentStyle,
-      attachmentMeshes: meshes,
-      slotOrder: s.slotOrder,
-      slotBindings: s.slotBindings,
-      bones: s.bones,
-      selectedBoneId: s.selectedBoneId,
-      selectedBoneIds: s.selectedBoneIds,
-      projectName: s.projectName,
-      editorTab: s.editorTab,
-      viewport: s.viewport,
-    };
+/** 用当前 store 状态构建一份完整快照。 */
+function buildSnapshot(): SerializedProject {
+  const s = usePixiBonesStore.getState();
+  const psd: PixiBonesPsd | null = s.psd;
+  const meshes: Record<string, MeshData> = {};
+  for (const [k, m] of Object.entries(s.attachmentMeshes)) meshes[k] = normalizeMesh(m);
+  return {
+    version: PROJECT_VERSION,
+    savedAt: Date.now(),
+    name: s.projectName,
+    hasPsd: !!psd,
+    psdWidth: psd?.width ?? 0,
+    psdHeight: psd?.height ?? 0,
+    psdLayers: psd ? psd.layers.map(serializeLayer) : [],
+    images: s.images.map(serializeLayer),
+    slots: s.slots,
+    slotVisibility: s.slotVisibility,
+    slotTransforms: s.slotTransforms,
+    slotStyle: s.slotStyle,
+    attachmentStyle: s.attachmentStyle,
+    attachmentMeshes: meshes,
+    slotOrder: s.slotOrder,
+    slotBindings: s.slotBindings,
+    bones: s.bones,
+    selectedBoneId: s.selectedBoneId,
+    selectedBoneIds: s.selectedBoneIds,
+    projectName: s.projectName,
+    editorTab: s.editorTab,
+    viewport: s.viewport,
+  };
+}
+
+async function writeSnapshot(id: string, snap: SerializedProject): Promise<boolean> {
+  try {
     await idbPut(projectKey(id), snap);
     return true;
   } catch (err) {
     console.error('[projectIO] 保存失败', err);
     return false;
+  }
+}
+
+/** 把当前工程快照写入 IndexedDB（覆盖当前工程 id）。返回是否成功。 */
+export async function saveCurrentProject(): Promise<boolean> {
+  const id = usePixiBonesStore.getState().currentProjectId;
+  if (!id) return false;
+  if (_saving) return false;
+  _saving = true;
+  try {
+    return await writeSnapshot(id, buildSnapshot());
   } finally {
     _saving = false;
   }
+}
+
+/**
+ * 另存为：把当前工程另存到一个**新的工程 id + 新名字**，并切换过去。
+ * 原工程保留不动（不会被覆盖）。
+ */
+export async function saveProjectAs(name: string): Promise<boolean> {
+  const trimmed = name.trim();
+  if (!trimmed) return false;
+  const id = `proj_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+  const snap = buildSnapshot();
+  snap.name = trimmed;
+  snap.projectName = trimmed;
+  const ok = await writeSnapshot(id, snap);
+  if (!ok) return false;
+  // 新 id 的数据就是内存里这份 → 切换时跳过回读，避免清掉当前选中/编辑态
+  skipLoadOnce.add(id);
+  const st = usePixiBonesStore.getState();
+  usePixiBonesStore.setState({ currentProjectId: id, projectName: trimmed });
+  st.pushRecentProject(id, trimmed);
+  return true;
+}
+
+/** 弹窗让用户输入新工程名，然后另存为。用户取消返回 false。 */
+export async function saveProjectAsPrompt(): Promise<boolean> {
+  const st = usePixiBonesStore.getState();
+  const input = window.prompt('另存为（输入新的工程名）', `${st.projectName} 副本`);
+  if (input == null) return false;
+  return saveProjectAs(input);
 }
 
 /** 读取指定工程的快照并应用到 store。返回是否读到了数据。 */
@@ -266,6 +310,12 @@ export function useProjectPersistence(): void {
   // 1) 载入
   useEffect(() => {
     if (!projectId) return;
+    // 「另存为」刚写入的新工程：内存里就是最新数据，跳过回读
+    if (skipLoadOnce.has(projectId)) {
+      skipLoadOnce.delete(projectId);
+      readyRef.current = true;
+      return;
+    }
     let cancelled = false;
     readyRef.current = false;
     (async () => {
