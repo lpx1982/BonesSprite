@@ -779,6 +779,41 @@ export function BoneEditor() {
         return out;
       };
 
+      /**
+       * 权重模式下的「顶点（饼图）命中选择」。
+       * 权重模式下点画布应**优先选饼图（顶点）**，而不是选骨骼。
+       * 返回 true = 命中了某个饼图并已选中；false = 没命中（调用方继续其它逻辑）。
+       */
+      const trySelectWeightVertex = (gx: number, gy: number, additive: boolean): boolean => {
+        const st = usePixiBonesStore.getState();
+        if (st.editorMode !== 'weights' || st.weightBindMode) return false;
+        let aid: string | null = st.weightMeshId;
+        if (!aid) {
+          const keys = Object.keys(st.attachmentMeshes);
+          if (keys.length === 1) aid = keys[0];
+        }
+        if (!aid) return false;
+        const slot = st.slots.find((x) => x.activeAttachmentId === aid) ?? null;
+        const layer = allAttachmentsOf(st.psd, st.images).find((l) => l.id === aid) ?? null;
+        const mesh = st.attachmentMeshes[aid];
+        if (!slot || !layer || !mesh) return false;
+        const pts = skinnedVerticesScreen(slot.id, layer, mesh);
+        let hitIdx = -1;
+        let bestD = 14;   // 命中阈值：选中饼图 16 / 普通 10
+        for (let i = 0; i < pts.length; i++) {
+          const d = Math.hypot(pts[i].x - gx, pts[i].y - gy);
+          if (d < bestD) { bestD = d; hitIdx = i; }
+        }
+        if (hitIdx < 0) return false;
+        const cur = st.meshSelectedVertices;
+        const next = additive
+          ? (cur.includes(hitIdx) ? cur.filter((i) => i !== hitIdx) : [...cur, hitIdx])
+          : [hitIdx];
+        st.setMeshSelectedVertices(next);
+        drawMeshHandles();
+        return true;
+      };
+
       /** 唯一网格边 + 每条边被几个三角形共享（n=1 → 边界边；n=2 → 内部边）。 */
       const meshEdgeInfo = (mesh: MeshData) => {
         const map = new Map<number, { a: number; b: number; n: number }>();
@@ -2156,6 +2191,10 @@ export function BoneEditor() {
             wired.__downWired = true;
             jointHit.on('pointerdown', (ev: FederatedPointerEvent) => {
               ev.stopPropagation();
+              // ★ 权重模式：优先选饼图（顶点）；命中饼图则本次不选骨骼
+              if (trySelectWeightVertex(ev.global.x, ev.global.y, ev.metaKey || ev.ctrlKey || ev.shiftKey)) {
+                return;
+              }
               // ★ 拾取父级模式：点击骨骼 → 把等待中的素材绑定到该骨骼，然后退出
               const attachId = usePixiBonesStore.getState().attachingSlotId;
               if (attachId) {
@@ -3526,6 +3565,12 @@ export function BoneEditor() {
         // ★ 权重模式：单选 / ⌘加选 / 框选 顶点（饼图 = 顶点）
         const stW = usePixiBonesStore.getState();
         if (stW.editorMode === 'weights' && !stW.weightBindMode) {
+          const additive = ev.metaKey || ev.ctrlKey || ev.shiftKey;
+          // 命中饼图 → 选中顶点（骨骼命中区已优先调用同一逻辑）
+          if (trySelectWeightVertex(ev.global.x, ev.global.y, additive)) {
+            ev.stopPropagation();
+            return;
+          }
           // 目标网格：weightMeshId 优先，否则场景里唯一的网格
           let wAid: string | null = stW.weightMeshId;
           if (!wAid) {
@@ -3533,28 +3578,8 @@ export function BoneEditor() {
             if (keys.length === 1) wAid = keys[0];
           }
           const wSlot = wAid ? stW.slots.find((x) => x.activeAttachmentId === wAid) ?? null : null;
-          const wLayer = wAid ? allAttachmentsOf(stW.psd, stW.images).find((l) => l.id === wAid) ?? null : null;
-          const wMesh = wAid ? stW.attachmentMeshes[wAid] : null;
-          if (wAid && wSlot && wLayer && wMesh) {
+          if (wAid && wSlot) {
             ev.stopPropagation();
-            const pts = skinnedVerticesScreen(wSlot.id, wLayer, wMesh);
-            // 命中阈值：饼图选中 16 / 普通 10，用 14px
-            let hitIdx = -1;
-            let bestD = 14;
-            for (let i = 0; i < pts.length; i++) {
-              const d = Math.hypot(pts[i].x - ev.global.x, pts[i].y - ev.global.y);
-              if (d < bestD) { bestD = d; hitIdx = i; }
-            }
-            const additive = ev.metaKey || ev.ctrlKey || ev.shiftKey;
-            if (hitIdx >= 0) {
-              const cur = stW.meshSelectedVertices;
-              const next = additive
-                ? (cur.includes(hitIdx) ? cur.filter((i) => i !== hitIdx) : [...cur, hitIdx])
-                : [hitIdx];
-              stW.setMeshSelectedVertices(next);
-              drawMeshHandles();
-              return;
-            }
             // 空白处 → 框选顶点
             const wRect = new Gfx();
             wRect.eventMode = 'none';
