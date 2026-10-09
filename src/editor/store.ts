@@ -180,6 +180,10 @@ export interface PixiBonesState {
   toggleWeightBindMode: () => void;
   /** 权重「自动」按钮：按当前 mesh 的骨骼表重算一遍权重（用于重新绑定时刷新） */
   recomputeMeshWeights: (attachmentId: string) => void;
+  /** 手动调权重（直接模式）：把若干选中顶点对某根骨骼的权重设为 value，
+   *  其它骨骼按比例缩放到 (1-value)，保证每个顶点权重总和 = 1。
+   *  ★ 不推历史：滑块拖动时由调用方在拖动开始推一次（避免每个 onChange 都产生一步 undo）。 */
+  setVertexWeights: (attachmentId: string, boneId: string, vertexIndices: number[], value: number) => void;
   // ---- 权重工具（视图菜单「权重」）UI 状态 ----
   /** 影响（0..1）：权重工具的施加强度 */
   weightInfluence: number; setWeightInfluence: (v: number) => void;
@@ -909,6 +913,40 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       const m = s.attachmentMeshes[attachmentId];
       if (!m) return s;
       return { attachmentMeshes: { ...s.attachmentMeshes, [attachmentId]: { ...m, vertices: prevVerts } } };
+    });
+  },
+  setVertexWeights: (attachmentId, boneId, vertexIndices, value) => {
+    const st = get();
+    const mesh = st.attachmentMeshes[attachmentId];
+    if (!mesh || !mesh.bones || !mesh.weights || mesh.bones.length === 0) return;
+    const idx = mesh.bones.indexOf(boneId);
+    if (idx < 0) return;
+    const nb = mesh.bones.length;
+    const vertCount = mesh.vertices.length / 2;
+    const v = Math.min(1, Math.max(0, value));
+    const weights = mesh.weights.slice();
+    let changed = false;
+    for (const vi of vertexIndices) {
+      if (vi < 0 || vi >= vertCount) continue;
+      const row = vi * nb;
+      if (nb === 1) { weights[row] = 1; changed = true; continue; }
+      // 其它骨骼当前总和；>0 → 按比例缩放到 (1-v)，否则（全是 0）剩余均分
+      let otherSum = 0;
+      for (let i = 0; i < nb; i++) if (i !== idx) otherSum += weights[row + i];
+      if (otherSum > 0) {
+        const scale = (1 - v) / otherSum;
+        for (let i = 0; i < nb; i++) weights[row + i] = i === idx ? v : weights[row + i] * scale;
+      } else {
+        const rem = (1 - v) / (nb - 1);
+        for (let i = 0; i < nb; i++) weights[row + i] = i === idx ? v : rem;
+      }
+      changed = true;
+    }
+    if (!changed) return;
+    set((s) => {
+      const m = s.attachmentMeshes[attachmentId];
+      if (!m) return s;
+      return { attachmentMeshes: { ...s.attachmentMeshes, [attachmentId]: { ...m, weights } } };
     });
   },
   freezeMesh: (slotId, attachmentId) => set((state) => {

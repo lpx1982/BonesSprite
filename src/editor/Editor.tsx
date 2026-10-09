@@ -8,6 +8,7 @@ import { AnimationTimeline } from './AnimationTimeline';
 import { useT } from './i18n';
 import { ViewMenu } from './ViewMenu';
 import { useProjectPersistence } from './projectIO';
+import type { MeshData } from '@psd/types';
 import hideViewsIcon from './icons/hideviews.png';
 
 /**
@@ -451,6 +452,13 @@ function WeightsPanel() {
   const bones              = usePixiBonesStore((s) => s.bones);
   const unbindBoneFromMesh = usePixiBonesStore((s) => s.unbindBoneFromMesh);
   const recomputeWeights   = usePixiBonesStore((s) => s.recomputeMeshWeights);
+  const setVertexWeights   = usePixiBonesStore((s) => s.setVertexWeights);
+  const pushHistory        = usePixiBonesStore((s) => s.pushHistory);
+  // 权重模式下选中的顶点（饼图）；用于骨骼列表显示权重数值 + 滑块改权重
+  const meshSelectedVertices = usePixiBonesStore((s) => s.meshSelectedVertices);
+  // 滑块拖动状态：一次拖动只在开始时推一次历史；拖动期间不同步滑块值
+  const draggingRef = useRef(false);
+  const dragCommittedRef = useRef(false);
   /**
    * 权重视图「当前作用的网格」。
    * ★ 优先用 store.weightMeshId —— 它在「选中骨骼」时**不会**被清空，
@@ -470,6 +478,29 @@ function WeightsPanel() {
   })();
   const currentMesh = currentAttachmentId ? meshes[currentAttachmentId] ?? null : null;
   const boundBoneIds = currentMesh?.bones ?? [];
+  // 当前选中的、且绑在本网格上的骨骼（「权重」滑块只对它生效）
+  const selBoneId = boundBoneIds.find((bid) => selectedBoneIds.includes(bid)) ?? null;
+  // 选中顶点 / 选中骨骼变化时，把「权重」滑块同步成该骨骼对选中顶点的权重
+  // （单选或所有选中顶点值相同才同步；多选值不同或正在拖滑块则保持不动）
+  useEffect(() => {
+    if (draggingRef.current) return;
+    const mesh = currentMesh;
+    if (!mesh?.weights || !mesh.bones || mesh.bones.length === 0 || !selBoneId) return;
+    const verts = meshSelectedVertices;
+    if (verts.length === 0) return;
+    const idx = mesh.bones.indexOf(selBoneId);
+    if (idx < 0) return;
+    const nb = mesh.bones.length;
+    const vc = mesh.vertices.length / 2;
+    let w = -1;
+    for (const vi of verts) {
+      if (vi < 0 || vi >= vc) continue;
+      const wv = mesh.weights[vi * nb + idx];
+      if (w < 0) w = wv;
+      else if (Math.abs(w - wv) > 1e-6) return;   // 多选且值不同 → 不动滑块
+    }
+    if (w >= 0 && Math.abs(w - value) > 0.0001) setValue(w);
+  }, [currentMesh, selBoneId, meshSelectedVertices, value, setValue]);
   // 宽度由左边缘的拖动分隔条控制（store 里的 dockPanelWidths）
   const width = usePixiBonesStore((s) => s.dockPanelWidths.weights ?? DOCK_PANEL_DEFAULT_WIDTH.weights);
 
@@ -559,8 +590,21 @@ function WeightsPanel() {
             <span style={labelStyle}>权重:</span>
             <input
               type="range" className="soft-slider" min={0} max={1} step={0.01}
-              value={value} title="直接模式下设置的精确权重值"
-              onChange={(e) => setValue(parseFloat(e.target.value))}
+              value={value}
+              title="直接模式下设置的精确权重值（选中顶点后：把选中骨骼的权重设为该值，其余骨骼按比例归一）"
+              onPointerDown={() => { draggingRef.current = true; dragCommittedRef.current = false; }}
+              onPointerUp={() => { draggingRef.current = false; }}
+              onPointerCancel={() => { draggingRef.current = false; }}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                setValue(v);
+                // 有当前网格 + 选中的已绑骨骼 + 选中顶点 → 实时改权重
+                if (currentAttachmentId && selBoneId && meshSelectedVertices.length > 0) {
+                  // 一次拖动只推一次历史（避免每个 onChange 都产生一步 undo）
+                  if (!dragCommittedRef.current) { pushHistory(); dragCommittedRef.current = true; }
+                  setVertexWeights(currentAttachmentId, selBoneId, meshSelectedVertices, v);
+                }
+              }}
               style={{ flex: 1, background: trackBg(value, 0, 1) }}
             />
           </div>
@@ -632,6 +676,8 @@ function WeightsPanel() {
                   const bone = bones.find((b) => b.id === bid);
                   const color = boneColor(i);
                   const isSelected = selectedBoneIds.includes(bid);
+                  // 该骨骼对选中顶点的权重值（单选=数值；多选值不同=*；未选顶点=空）
+                  const wLabel = boneWeightLabel(currentMesh, i, meshSelectedVertices);
                   return (
                     <li
                       key={bid}
@@ -659,6 +705,10 @@ function WeightsPanel() {
                         background: color,
                       }} />
                       <span style={{ flex: 1 }}>{bone?.name ?? bid}</span>
+                      <span style={{
+                        fontSize: 10.5, color: 'var(--spine-text-dim)',
+                        minWidth: 40, textAlign: 'right', userSelect: 'none', fontVariantNumeric: 'tabular-nums',
+                      }}>{wLabel}</span>
                     </li>
                   );
                 })}
@@ -884,6 +934,26 @@ const BONE_PALETTE = [
 ];
 function boneColor(index: number): string {
   return BONE_PALETTE[index % BONE_PALETTE.length];
+}
+
+/**
+ * 某根骨骼对选中顶点的权重显示（仿 Spine 权重面板骨骼列表）。
+ *  - 单选：显示该骨骼的权重值（百分比）
+ *  - 多选：所有选中顶点值相同 → 显示该值；值不同 → 显示 `*`
+ *  - 未选中顶点 → 空字符串
+ */
+function boneWeightLabel(mesh: MeshData | null, boneIdx: number, selVerts: number[]): string {
+  if (!mesh?.weights || !mesh.bones || mesh.bones.length === 0 || selVerts.length === 0) return '';
+  const nb = mesh.bones.length;
+  const vc = mesh.vertices.length / 2;
+  let w = -1;
+  for (const vi of selVerts) {
+    if (vi < 0 || vi >= vc) continue;
+    const wv = mesh.weights[vi * nb + boneIdx];
+    if (w < 0) w = wv;
+    else if (Math.abs(w - wv) > 1e-6) return '*';
+  }
+  return w < 0 ? '' : `${(w * 100).toFixed(2)}%`;
 }
 // =================================================================================
 //  header 右上角：hideviews.png（隐藏所有视图）+ ViewMenu 组件（11 项 toggle）
