@@ -153,8 +153,18 @@ export interface PixiBonesState {
   createMesh: (attachmentId: string, cols?: number, rows?: number) => void;
   /** 把网格附件转回区域附件（删除网格数据） */
   removeMesh: (attachmentId: string) => void;
-  /** 重置：把每个顶点移回它 UV 对应的位置，消除变形 */
+  /**
+   * 重置网格（编辑网格工具栏 / 层级面板「重置」按钮）。
+   *  - 无权重：直接重置为初始矩形（2×2 网格：4 顶点 + 1 条对角线）。
+   *  - 有权重：不直接重置，写入 resetMeshRequestAttachmentId → 弹面板让用户选择。
+   */
   resetMesh: (attachmentId: string) => void;
+  /** 重置弹窗：当前请求重置的网格 id（非 null = 弹窗打开） */
+  resetMeshRequestAttachmentId: string | null;
+  /** 确认重置：mode = 'keepWeights' 保留骨骼绑定并重算 4 顶点权重 / 'clearWeights' 清除全部绑定 */
+  confirmMeshReset: (attachmentId: string, mode: 'keepWeights' | 'clearWeights') => void;
+  /** 取消重置弹窗 */
+  cancelMeshReset: () => void;
   /** 冻结：把该插槽当前的旋转 / 缩放（slotTransforms）烘焙进网格顶点，
    *  再把 rotation 归 0、scale 归 1 —— 视觉不变但变换值清零（仿 Spine 的「冻结」）。 */
   freezeMesh: (slotId: string, attachmentId: string) => void;
@@ -566,6 +576,113 @@ export function attachmentLayers(psd: PixiBonesPsd | null, images: PixiBonesLaye
 }
 
 /**
+ * 自动权重（就近主控 + 距离反比衰减，供绑定与重置「保留权重」共用）：
+ * 每顶点找最近骨做主控（0.7），剩余 0.3 按距离反比分给其它骨。
+ * 返回 weights 数组，长度 = vertices.length / 2 * boneWorlds.length。
+ */
+function computeAutoWeights(boneWorlds: Array<{ x: number; y: number }>, vertices: number[]): number[] {
+  const vertCount = vertices.length / 2;
+  const nb = boneWorlds.length;
+  const weights = new Array(vertCount * nb).fill(0);
+  for (let v = 0; v < vertCount; v++) {
+    const vx = vertices[v * 2];
+    const vy = vertices[v * 2 + 1];
+    let nearest = 0;
+    let nearestD = Infinity;
+    const dists = new Array(nb);
+    for (let i = 0; i < nb; i++) {
+      const dx = vx - boneWorlds[i].x;
+      const dy = vy - boneWorlds[i].y;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      dists[i] = d;
+      if (d < nearestD) { nearestD = d; nearest = i; }
+    }
+    // 只有一骨时直接 100%
+    if (nb === 1) { weights[v * nb + 0] = 1; continue; }
+    // 距离反比：距离差越大权重越低（最近差 = 1）
+    let sum = 0;
+    const inv: number[] = new Array(nb).fill(0);
+    for (let i = 0; i < nb; i++) {
+      if (i === nearest) continue;
+      const inv_i = 1 / ((dists[i] - nearestD) + 1);
+      inv[i] = inv_i;
+      sum += inv_i;
+    }
+    weights[v * nb + nearest] = 0.7;
+    if (sum > 0) {
+      const rem = 0.3 / sum;
+      for (let i = 0; i < nb; i++) {
+        if (i === nearest) continue;
+        weights[v * nb + i] = inv[i] * rem;
+      }
+    } else {
+      // 其它骨距离都一样 → 均分 0.3
+      const rem = 0.3 / (nb - 1);
+      for (let i = 0; i < nb; i++) {
+        if (i === nearest) continue;
+        weights[v * nb + i] = rem;
+      }
+    }
+  }
+  return weights;
+}
+
+/**
+ * 把网格重置为初始矩形（2×2 网格：4 顶点 + 1 条对角线，与 createMesh(2,2) 一致）。
+ *  - 'clearWeights'：同时删除骨骼绑定与权重（不留任何绑定字段）
+ *  - 'keepWeights'：保留 bones / boneBindWorld，对新的 4 顶点自动重算权重
+ * 推一次历史；同时清空选中顶点（索引可能越界）。
+ */
+function applyMeshReset(getState: () => PixiBonesState, attachmentId: string, mode: 'keepWeights' | 'clearWeights') {
+  const st = getState();
+  const mesh = st.attachmentMeshes[attachmentId];
+  if (!mesh) return;
+  const layer = attachmentLayers(st.psd, st.images).find((l) => l.id === attachmentId);
+  if (!layer) return;
+  const w = layer.width;
+  const h = layer.height;
+  // 初始矩形：顶点按「左→右、上→下」（0,0)(w,0)(0,h)(w,h)；对角线切成 2 个三角形
+  const vertices = [0, 0, w, 0, 0, h, w, h];
+  const uvs = [0, 0, 1, 0, 0, 1, 1, 1];
+  const indices = [0, 1, 2, 1, 3, 2];
+  st.pushHistory();
+  if (mode === 'keepWeights' && mesh.bones && mesh.bones.length > 0) {
+    const bones = mesh.bones.slice();
+    const nb = bones.length;
+    const boneWorlds: Array<{ x: number; y: number }> = [];
+    for (let i = 0; i < nb; i++) {
+      const b = st.bones.find((x) => x.id === bones[i]);
+      boneWorlds.push({
+        x: mesh.boneBindWorld?.[i * 2] ?? b?.x ?? 0,
+        y: mesh.boneBindWorld?.[i * 2 + 1] ?? b?.y ?? 0,
+      });
+    }
+    const weights = computeAutoWeights(boneWorlds, vertices);
+    usePixiBonesStore.setState((s) => ({
+      attachmentMeshes: {
+        ...s.attachmentMeshes,
+        [attachmentId]: {
+          vertices, uvs, indices,
+          bones, weights,
+          bindPose: vertices.slice(),
+          boneBindWorld: mesh.boneBindWorld?.slice(),
+        },
+      },
+      meshSelectedVertices: [],
+    }));
+  } else {
+    // 清除权重：不保留任何绑定字段
+    usePixiBonesStore.setState((s) => ({
+      attachmentMeshes: {
+        ...s.attachmentMeshes,
+        [attachmentId]: { vertices, uvs, indices },
+      },
+      meshSelectedVertices: [],
+    }));
+  }
+}
+
+/**
  * 为一批附件生成「1 图层 = 1 插槽」的初始插槽列表（导入时用）。
  * 每个插槽只持有 1 个附件，且该附件默认激活。
  */
@@ -702,21 +819,26 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       ...(state.weightMeshId === attachmentId ? { weightMeshId: null } : {}),
     };
   }),
-  // 重置 = 把顶点移回 UV 位置（uv × 图层尺寸）→ 消除变形，拓扑不变
-  resetMesh: (attachmentId) => set((state) => {
-    const mesh = state.attachmentMeshes[attachmentId];
-    if (!mesh) return state;
-    const layer = attachmentLayers(state.psd, state.images).find((l) => l.id === attachmentId);
-    if (!layer) return state;
-    const vertices = mesh.vertices.slice();
-    for (let i = 0; i + 1 < mesh.uvs.length; i += 2) {
-      vertices[i] = mesh.uvs[i] * layer.width;
-      vertices[i + 1] = mesh.uvs[i + 1] * layer.height;
+  // 重置网格：无权重 → 直接重置为初始矩形；有权重 → 弹面板让用户选择（由 confirmMeshReset 执行）
+  resetMesh: (attachmentId) => {
+    const mesh = get().attachmentMeshes[attachmentId];
+    if (!mesh) return;
+    const hasWeights = !!(mesh.bones && mesh.bones.length > 0);
+    if (hasWeights) {
+      set({ resetMeshRequestAttachmentId: attachmentId });
+      return;
     }
-    return {
-      attachmentMeshes: { ...state.attachmentMeshes, [attachmentId]: { ...mesh, vertices } },
-    };
-  }),
+    applyMeshReset(get, attachmentId, 'clearWeights');
+  },
+  confirmMeshReset: (attachmentId, mode) => {
+    applyMeshReset(get, attachmentId, mode);
+    // 关闭弹窗（若期间网格已被删除/切换，不再误关其它请求）
+    if (get().resetMeshRequestAttachmentId === attachmentId) {
+      set({ resetMeshRequestAttachmentId: null });
+    }
+  },
+  cancelMeshReset: () => set({ resetMeshRequestAttachmentId: null }),
+  resetMeshRequestAttachmentId: null,
   setMeshVertices: (attachmentId, vertices) => set((state) => {
     const mesh = state.attachmentMeshes[attachmentId];
     if (!mesh) return state;
@@ -769,54 +891,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       });
       return;
     }
-    const vertCount = mesh.vertices.length / 2;
-    const nb = bones.length;
-    const weights = new Array(vertCount * nb).fill(0);
-    for (let v = 0; v < vertCount; v++) {
-      const vx = mesh.vertices[v * 2];
-      const vy = mesh.vertices[v * 2 + 1];
-      // 找最近骨
-      let nearest = 0;
-      let nearestD = Infinity;
-      const dists = new Array(nb);
-      for (let i = 0; i < nb; i++) {
-        const dx = vx - world[i].x;
-        const dy = vy - world[i].y;
-        const d = Math.sqrt(dx * dx + dy * dy);
-        dists[i] = d;
-        if (d < nearestD) { nearestD = d; nearest = i; }
-      }
-      // 距离反比（只有一骨时直接 100%）
-      if (nb === 1) {
-        weights[v * nb + 0] = 1;
-        continue;
-      }
-      // 主控 0.7 + 距离反比衰减到 0.3
-      let sum = 0;
-      const inv: number[] = new Array(nb).fill(0);
-      for (let i = 0; i < nb; i++) {
-        if (i === nearest) continue;
-        const inv_i = 1 / ((dists[i] - nearestD) + 1); // 距离差越大权重越低；最近差 = 1
-        inv[i] = inv_i;
-        sum += inv_i;
-      }
-      // 主控 = 0.7
-      weights[v * nb + nearest] = 0.7;
-      if (sum > 0) {
-        const rem = 0.3 / sum;
-        for (let i = 0; i < nb; i++) {
-          if (i === nearest) continue;
-          weights[v * nb + i] = inv[i] * rem;
-        }
-      } else {
-        // 其它骨距离都一样 → 全部均分 0.3
-        const rem = 0.3 / (nb - 1);
-        for (let i = 0; i < nb; i++) {
-          if (i === nearest) continue;
-          weights[v * nb + i] = rem;
-        }
-      }
-    }
+    // 就近主控 + 距离反比衰减（与「重置→保留权重」共用同一算法）
+    const weights = computeAutoWeights(world, mesh.vertices);
     const bindPose = bindPoseVertices ? bindPoseVertices.slice() : mesh.vertices.slice();
     // ★ 记下绑定时每个骨骼的 world 坐标位置（去重后顺序）。
     //   world 数组在去重时已按 bones 顺序填好（优先用调用方传入的 boneWorlds，否则 local fallback）。

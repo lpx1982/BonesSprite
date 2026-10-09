@@ -918,7 +918,7 @@ export function HierarchyPanel() {
             if (!selectedSlotId) return;
             setMeshEditSlot(meshEditSlotId === selectedSlotId ? null : selectedSlotId);
           }}
-          onResetMesh={selectedSlotId ? () => { pushHistory(); resetMesh(selectedAttachment.id); } : undefined}
+          onResetMesh={selectedSlotId ? () => resetMesh(selectedAttachment.id) : undefined}
           onFreeze={selectedSlotId ? () => { pushHistory(); freezeMesh(selectedSlotId, selectedAttachment.id); } : undefined}
           vertexCount={attachmentMeshes[selectedAttachment.id]
             ? Math.floor(attachmentMeshes[selectedAttachment.id].vertices.length / 2)
@@ -2009,7 +2009,7 @@ function AttachmentPropsBlock(props: AttachmentPropsBlockProps) {
               onClick={onResetMesh ?? (() => {})}
               icon="↺"
               label="重置"
-              title="把顶点移回 UV 位置，消除变形"
+              title="重置为初始矩形（4 个顶点 + 1 条对角线）；已绑定骨骼时会弹出面板询问如何处理权重"
               disabled={!onResetMesh}
               pro
             />

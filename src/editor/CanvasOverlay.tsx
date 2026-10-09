@@ -250,6 +250,8 @@ export function CanvasOverlay() {
 
       {/* 网格编辑浮动面板（勾选「网格」+ 点「编辑网格」后出现） */}
       <MeshEditPanel />
+      {/* 重置网格弹窗：网格已绑定骨骼时点「重置」出现（从网格编辑工具栏或层级面板触发） */}
+      <ResetMeshDialog />
     </div>
   );
 }
@@ -770,7 +772,7 @@ function MeshEditPanel() {
           ><MeshIconNew />新建</button>
           <button
             style={meshBtnStyle(false, false)}
-            title="把顶点移回 UV 位置，消除变形"
+            title="重置为初始矩形（4 个顶点 + 1 条对角线）；已绑定骨骼时会弹出面板询问如何处理权重"
             onClick={() => resetMesh(attachmentId)}
           ><MeshIconReset />重置</button>
           <button
@@ -1098,6 +1100,92 @@ function TraceDialog() {
           ><TraceIconConfirm />确定</button>
         </div>
       </div>
+      </div>
+    </div>
+  ), document.body);
+}
+
+// =================================================================================
+//  重置网格弹窗（有权重时）：网格已绑定骨骼，点「重置」会改变拓扑（还原为初始矩形），
+//  因此先弹窗让用户选择如何处理权重：
+//    - 保留权重：重置为初始矩形（4 顶点 + 1 条对角线），保留骨骼绑定并自动重算权重
+//    - 清除权重：重置为初始矩形，删除所有骨骼绑定与权重
+//  ★ 无权重时不会弹（store.resetMesh 直接重置）。
+// =================================================================================
+function ResetMeshDialog() {
+  const attachmentId = usePixiBonesStore((s) => s.resetMeshRequestAttachmentId);
+  const confirm = usePixiBonesStore((s) => s.confirmMeshReset);
+  const cancel = usePixiBonesStore((s) => s.cancelMeshReset);
+  const meshes = usePixiBonesStore((s) => s.attachmentMeshes);
+  const bones = usePixiBonesStore((s) => s.bones);
+  if (!attachmentId) return null;
+  const mesh = meshes[attachmentId] ?? null;
+  const boneNames = (mesh?.bones ?? [])
+    .map((bid) => bones.find((b) => b.id === bid)?.name ?? bid)
+    .join('、');
+  const resetBtnStyle: React.CSSProperties = {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    width: '100%', height: 30, borderRadius: 3, cursor: 'pointer',
+    border: '1px solid #5a5a5a', background: '#3a3a3a', color: '#e6e6e6', fontSize: 12.5,
+  };
+  return createPortal((
+    <div
+      role="presentation"
+      onClick={cancel}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 300,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'rgba(0,0,0,0.45)',
+      }}
+    >
+      <div
+        role="dialog" aria-label="重置网格"
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 400, background: '#303032', color: '#dcdcdc',
+          border: '1px solid #1b1b1b', borderRadius: 5,
+          boxShadow: '0 12px 32px rgba(0,0,0,0.62)', userSelect: 'none',
+        }}
+      >
+        {/* 标题栏 */}
+        <div
+          className="flex items-center"
+          style={{
+            height: 30, background: '#3f3f3f',
+            padding: '0 10px 0 14px', borderBottom: '1px solid #262626',
+            borderTopLeftRadius: 5, borderTopRightRadius: 5,
+          }}
+        >
+          <span style={{ fontSize: 13.5, fontWeight: 500 }}>重置网格</span>
+          <button
+            type="button" title="取消"
+            onClick={cancel}
+            style={{
+              marginLeft: 'auto', background: 'transparent', border: 'none',
+              color: '#b9b9b9', cursor: 'pointer', fontSize: 17, lineHeight: 1, padding: 0,
+            }}
+          >✕</button>
+        </div>
+        {/* 提示 + 选择 */}
+        <div style={{ padding: '14px 16px 16px' }}>
+          <div style={{ fontSize: 12.5, lineHeight: 1.8 }}>
+            该网格已绑定骨骼：{boneNames}。<br />
+            重置会把网格还原为初始矩形（4 个顶点 + 1 条对角线）。<br />
+            请选择如何处理权重：
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 14 }}>
+            <button
+              type="button" title="保留骨骼绑定，自动重算新顶点的权重"
+              onClick={() => confirm(attachmentId, 'keepWeights')}
+              style={resetBtnStyle}
+            >保留权重</button>
+            <button
+              type="button" title="删除所有骨骼绑定与权重"
+              onClick={() => confirm(attachmentId, 'clearWeights')}
+              style={resetBtnStyle}
+            >清除权重</button>
+          </div>
+        </div>
       </div>
     </div>
   ), document.body);
