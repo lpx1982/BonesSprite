@@ -913,11 +913,10 @@ export function BoneEditor() {
             });
           }
 
-          // 顶点手柄 / 软选择着色：★ 只在「编辑网格」时显示
-          if (isEditing) {
-            // 软选择着色（仅编辑态 + 勾选软选择 + 有选中顶点）：
-            //   选中顶点 = 青色；受软选择影响的顶点在「青色 ↔ 深蓝」之间按权重取色
-            const softOn = s.meshSoftSelect && selected.size > 0;
+          // 顶点手柄：★ 编辑 / 选中 / 线框 时都显示（对齐 Spine：有顶点、无三角）。
+          //   软选择着色只在编辑态有意义（softW 为 null 时走普通白点）。
+          {
+            const softOn = isEditing && s.meshSoftSelect && selected.size > 0;
             const softW = softOn
               ? computeSoftWeights(mesh, [...selected], s.meshSoftSize, s.meshSoftFeather, s.meshSoftHull)
               : null;
@@ -927,15 +926,15 @@ export function BoneEditor() {
             for (let i = 0; i < pts.length; i++) {
               const p = pts[i];
               if (!p) continue;
-              const sel = selected.has(i);
+              const sel = isEditing && selected.has(i);
               const sw = softW ? softW[i] : 0;
               const softHit = !sel && sw > 0.001;
-              const r = sel ? 5 : softHit ? 4 : 3.5;
+              const r = sel ? 5 : softHit ? 4 : (isEditing ? 3.5 : 2.5);
               const color = sel ? SEL_COLOR : softHit ? lerpColor(SOFT_DARK, SEL_COLOR, sw) : 0xFFFFFF;
               meshHandles.circle(p.x, p.y, r);
-              meshHandles.fill({ color, alpha: 1 });
+              meshHandles.fill({ color, alpha: isEditing ? 1 : 0.65 });
               meshHandles.circle(p.x, p.y, r);
-              meshHandles.stroke({ width: 1, color: 0x1E6FBF, alpha: 1 });
+              meshHandles.stroke({ width: 1, color: 0x1E6FBF, alpha: isEditing ? 1 : 0.5 });
             }
           }
         }
@@ -1552,7 +1551,8 @@ export function BoneEditor() {
         // 网格编辑模式下不显示变换工具的悬停白框（避免和网格描绘/顶点混淆）
         const inTransform = s.editorMode === 'idle' && s.activeTool !== null && !s.meshEditSlotId;
         const showOutline = inTransform;
-        const showDashedRect = inCreateCmd || inTransform;
+        // ★ 白色虚线外框只在「创建 + ⌘」时画；变换工具悬停只保留内部的图像边缘白线（不画外侧虚线框）
+        const showDashedRect = inCreateCmd;
         if (!showDashedRect && !showOutline) return;
         const slotId = topSlotAt(gx, gy);
         if (!slotId) return;
