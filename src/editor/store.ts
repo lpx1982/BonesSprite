@@ -1274,6 +1274,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     traceLivePreview: false,
     traceSnapshot: null,
     traceRequestId: s.traceRequestId + 1,
+    // ★ 描绘确定后同样立即展示裁切（与「新建」闭合一致）：自动勾选「变形」
+    meshDeformed: true,
   })),
   /** 「取消」：触发 snapshot 恢复（BoneEditor 订阅 traceRestoreRequestId 后用 traceSnapshot 把网格还原）。
    *  注意：traceSnapshot 留给订阅者读，订阅者恢复完自己清；这里只关弹窗 + 关预览 + 推恢复请求。 */

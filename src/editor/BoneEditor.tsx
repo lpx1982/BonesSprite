@@ -1682,6 +1682,9 @@ export function BoneEditor() {
         s.pushHistory();
         s.setMeshData(attachmentId, { vertices, uvs, indices });
         s.setMeshSelectedVertices([]);
+        // ★ 闭合即展示裁切：即使之前未勾「变形」（完整原图），
+        //   新建轮廓闭合后也自动切到「变形」视图 —— 路径外图像立即裁掉（对齐既定规则）。
+        if (!s.meshDeformed) s.setMeshDeformed(true);
       };
 
       /**
