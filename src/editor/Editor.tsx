@@ -678,7 +678,13 @@ function WeightsPanel() {
                 if (bindMode) { toggleBind(); return; }
                 // 进入绑定模式前：把「当前网格」登记到 weightMeshId，
                 // 画布上该网格会变成「只显示选中蓝外轮廓」并出现顶部提示条。
-                if (currentAttachmentId) setWeightMesh(currentAttachmentId);
+                let target = currentAttachmentId;
+                if (!target) {
+                  // 兜底：场景里只有一个网格时自动用它（避免"拾取骨骼没反应"）
+                  const keys = Object.keys(usePixiBonesStore.getState().attachmentMeshes);
+                  if (keys.length === 1) target = keys[0];
+                }
+                if (target) setWeightMesh(target);
                 // 有「当前网格」→ 流程 A（点骨骼往上绑）；否则流程 B（先选骨骼再点网格）
                 toggleBind();
               }}

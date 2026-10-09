@@ -2162,12 +2162,17 @@ export function BoneEditor() {
               const stBind = usePixiBonesStore.getState();
               if (stBind.weightBindMode) {
                 // 目标网格：优先用权重视图登记的「当前网格」（选骨骼不会清它），
-                // 再退回当前选中附件 / 单选插槽。
-                const currentAid = stBind.weightMeshId
+                // 再退回当前选中附件 / 单选插槽；
+                // 最后兜底：场景里只有一个网格时自动用它。
+                let currentAid: string | null = stBind.weightMeshId
                   ?? stBind.selectedAttachmentId
                   ?? (stBind.selectedSlotIds.length === 1
                         ? stBind.slots.find((x) => x.id === stBind.selectedSlotIds[0])?.activeAttachmentId ?? null
                         : null);
+                if (!currentAid) {
+                  const keys = Object.keys(stBind.attachmentMeshes);
+                  if (keys.length === 1) currentAid = keys[0];
+                }
                 if (currentAid) {
                   const mesh = stBind.attachmentMeshes[currentAid];
                   // 已有 → 累加，否则 = 新绑
@@ -2186,7 +2191,9 @@ export function BoneEditor() {
                     }
                   }
                   stBind.bindBonesToMesh(currentAid, merged, undefined, boneWorlds);
-                  // 不退出绑定模式，让用户继续点别的骨骼
+                  // ★ 反馈：选中这根骨，权重面板骨骼列表 / 层级树会高亮它，
+                  //   避免「点了没反应」的错觉（不退出绑定模式，可继续点其它骨）
+                  stBind.selectBone(node.id);
                   return;
                 }
                 // 没选网格 → 不做事（用户该走流程 B：先选骨骼再点网格）
