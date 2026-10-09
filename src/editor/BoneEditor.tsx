@@ -1000,12 +1000,12 @@ export function BoneEditor() {
           if (!layer) continue;
 
           // ★ 顶点显示位置与实际渲染保持一致（对齐 Spine）：
-          //   有权重 → 蒙皮位置；编辑中勾「变形」→ 拖过的顶点位置；
-          //   其余（退出编辑 / 未勾变形）→ UV 位置（未变形，只裁切）。
+          //   有权重 → 蒙皮位置；**编辑中** → 真实顶点位置（命中/拖动都基于它，保证可拖）；
+          //   非编辑态（无权重）→ UV 位置（与「退出后只裁切不变形」的渲染一致）。
           const hasWeights = !!(mesh.bones && mesh.bones.length > 0);
           const pts = hasWeights
             ? skinnedVerticesScreen(slot.id, layer, mesh)
-            : (isEditing && s.meshDeformed)
+            : isEditing
               ? meshVerticesScreen(slot.id, layer, mesh)
               : uvVerticesScreen(slot.id, layer, mesh);
           const edges = meshEdgeInfo(mesh);
