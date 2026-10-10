@@ -141,6 +141,7 @@ function normalizeMesh(m: MeshData): MeshData {
     weights: m.weights ?? [],
     bindPose: m.bindPose ?? [],
     boneBindWorld: m.boneBindWorld ?? [],
+    boneBindMatrices: m.boneBindMatrices ?? [],
   };
 }
 

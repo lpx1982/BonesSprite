@@ -7,6 +7,7 @@ import { TopMenu } from './TopMenu';
 import { AnimationTimeline } from './AnimationTimeline';
 import { useT } from './i18n';
 import { ViewMenu } from './ViewMenu';
+import { PromptDialog } from './PromptDialog';
 import { useProjectPersistence } from './projectIO';
 import type { MeshData } from '@psd/types';
 import hideViewsIcon from './icons/hideviews.png';
@@ -75,12 +76,15 @@ export function Editor() {
           else { if (s2.viewHierarchy) s2.toggleViewHierarchy(); }
           return;
         }
-        // Esc：退出「附件：设置父级」拾取 / 取消网格描绘 / 退出网格编辑
+        // Esc：退出「附件：设置父级」拾取 / IK 目标拾取 / 取消网格描绘 / 退出网格编辑
         if (key === 'Escape') {
           const s = usePixiBonesStore.getState();
           if (s.attachingSlotId) {
             e.preventDefault();
             s.cancelAttach();
+          } else if (s.ikPickBoneId) {
+            e.preventDefault();
+            s.cancelIkPick();
           } else if (s.weightBindMode) {
             // 退出权重绑定模式
             e.preventDefault();
@@ -192,8 +196,118 @@ export function Editor() {
         <BottomToolbar />
         {/* 动画 tab 时显示底部时间轴（占位 UI） */}
         {editorTab === 'animate' && <AnimationTimeline />}
+        {/* IK 约束创建流程：顶部横幅 + PICK 光标 + 命名弹窗 */}
+        <IkPickOverlay />
       </main>
     </div>
+  );
+}
+
+// =================================================================================
+//  IK 约束创建流程（仿 Spine）
+//    1. 选中骨 → 属性面板「新建」→「约束 → IK 约束」→ 进入拾取模式（ikPickBoneId 非 null）
+//    2. 屏幕上方显示「新建 ik 约束：选择目标」横幅；鼠标旁显示 PICK
+//    3. 点击画布上一根骨 = 拾取目标骨（ikPickTargetBoneId 非 null）→ 弹命名对话框
+//    4. 确认 → 创建约束 → 清空拾取态并选中新约束
+// =================================================================================
+function IkPickOverlay() {
+  const ikPickBoneId = usePixiBonesStore((s) => s.ikPickBoneId);
+  const ikPickTargetBoneId = usePixiBonesStore((s) => s.ikPickTargetBoneId);
+  const constraints = usePixiBonesStore((s) => s.constraints);
+  const bones = usePixiBonesStore((s) => s.bones);
+  const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
+
+  // PICK 光标跟随鼠标
+  useEffect(() => {
+    if (!ikPickBoneId) { setCursor(null); return; }
+    const onMove = (e: MouseEvent) => setCursor({ x: e.clientX, y: e.clientY });
+    window.addEventListener('mousemove', onMove);
+    return () => window.removeEventListener('mousemove', onMove);
+  }, [ikPickBoneId]);
+
+  if (ikPickTargetBoneId) {
+    // 已拾取目标 → 弹命名对话框
+    const sNow = usePixiBonesStore.getState();
+    const constrainedName = bones.find((b) => b.id === ikPickBoneId)?.name ?? '';
+    const childName = sNow.ikPickChildBoneId
+      ? bones.find((b) => b.id === sNow.ikPickChildBoneId)?.name ?? ''
+      : '';
+    const defaultName = `IK ${constraints.length + 1}`;
+    return (
+      <PromptDialog
+        open
+        title="新建 IK 约束"
+        message={
+          childName
+            ? `受约束骨「${constrainedName} + ${childName}」→ 目标骨。为此约束输入一个新名称:`
+            : `受约束骨「${constrainedName}」→ 目标骨。为此约束输入一个新名称:`
+        }
+        initialValue={defaultName}
+        select="all"
+        confirmLabel="确定"
+        cancelLabel="取消"
+        onCancel={() => usePixiBonesStore.getState().cancelIkPick()}
+        onConfirm={(value) => {
+          const s = usePixiBonesStore.getState();
+          const name = value.trim() || defaultName;
+          // ★ 双骨 IK：ikPickChildBoneId 非 null 时创建 parent + child 两骨约束
+          const id = s.addIkConstraint(s.ikPickBoneId!, s.ikPickTargetBoneId!, s.ikPickChildBoneId, name);
+          s.cancelIkPick();
+          if (id) s.selectConstraint(id);
+        }}
+      />
+    );
+  }
+
+  if (!ikPickBoneId) return null;
+
+  return (
+    <>
+      {/* 顶部横幅：新建 ik 约束：选择目标 */}
+      <div
+        className="fixed z-[9997] pointer-events-none"
+        style={{
+          top: 0, left: 0, right: 0,
+          display: 'flex', justifyContent: 'center',
+          paddingTop: 8,
+        }}
+      >
+        <div
+          style={{
+            background: 'var(--spine-accent-dim)',
+            color: '#fff',
+            fontSize: 13,
+            fontWeight: 600,
+            padding: '4px 14px',
+            borderRadius: 4,
+            border: '1px solid var(--spine-accent)',
+            boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+          }}
+        >
+          新建 ik 约束：选择目标
+        </div>
+      </div>
+      {/* 鼠标旁 PICK 文字（对齐 Spine：出现在指针左侧） */}
+      {cursor && (
+        <div
+          className="fixed z-[9997] pointer-events-none"
+          style={{
+            left: Math.max(4, cursor.x - 62),
+            top: cursor.y + 8,
+            color: '#fff',
+            fontSize: 11,
+            fontWeight: 700,
+            textShadow: '0 1px 3px rgba(0,0,0,0.9)',
+            background: 'rgba(0,0,0,0.55)',
+            padding: '1px 6px',
+            borderRadius: 3,
+            letterSpacing: 1,
+          }}
+        >
+          PICK
+        </div>
+      )}
+    </>
   );
 }
 

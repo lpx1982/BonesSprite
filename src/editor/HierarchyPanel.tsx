@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, DOCK_PANEL_DEFAULT_WIDTH, type BoneNode, type SlotBinding, type IkConstraintDef } from './store';
 import { type PixiBonesLayer, type PixiBonesSlot } from '@psd/index';
 import { importAssetFile } from './importAsset';
+import { PromptDialog } from './PromptDialog';
 
 /** 附件大预览悬停延迟（ms）。2 秒 = Spine 行为。 */
 const HOVER_PREVIEW_DELAY = 2000;
@@ -53,7 +54,7 @@ interface TreeRow {
    * slot  = 插槽行（◉ 插槽名），其下挂它全部附件行
    * asset = 附件行（🖼 图片名）
    */
-  kind: 'project' | 'bone' | 'section' | 'asset' | 'slot' | 'animation';
+  kind: 'project' | 'bone' | 'section' | 'asset' | 'slot' | 'animation' | 'constraint';
   /** 缩进层级：project=0，根骨/分区=1，更深 = 子骨 / 插槽 / 附件 */
   depth: number;
   /** 是否是同层最后一个（决定连线画「└」还是「├」） */
@@ -63,6 +64,8 @@ interface TreeRow {
   slot?: PixiBonesSlot;
   /** 附件行（kind='asset'）对应的数据 */
   asset?: PixiBonesLayer;
+  /** 约束行（kind='constraint'）对应的数据 */
+  constraint?: IkConstraintDef;
   /** 附件行所属的插槽 id */
   slotId?: string;
   /** 附件行是否是所属插槽「当前显示」的附件 */
@@ -163,9 +166,15 @@ export function HierarchyPanel() {
   const removeSlot = usePixiBonesStore((s) => s.removeSlot);
   // ===== IK 约束（仿 Spine「约束」分区）=====
   const constraints = usePixiBonesStore((s) => s.constraints);
+  const selectedConstraintId = usePixiBonesStore((s) => s.selectedConstraintId);
+  const selectConstraint = usePixiBonesStore((s) => s.selectConstraint);
   const addIkConstraint = usePixiBonesStore((s) => s.addIkConstraint);
   const removeConstraint = usePixiBonesStore((s) => s.removeConstraint);
   const renameConstraint = usePixiBonesStore((s) => s.renameConstraint);
+  const renameBone = usePixiBonesStore((s) => s.renameBone);
+  const renameSlot = usePixiBonesStore((s) => s.renameSlot);
+  const renameAttachment = usePixiBonesStore((s) => s.renameAttachment);
+  const renameAnimation = usePixiBonesStore((s) => s.renameAnimation);
   const setConstraintTarget = usePixiBonesStore((s) => s.setConstraintTarget);
   const setConstraintMix = usePixiBonesStore((s) => s.setConstraintMix);
   const setConstraintBendDirection = usePixiBonesStore((s) => s.setConstraintBendDirection);
@@ -173,6 +182,113 @@ export function HierarchyPanel() {
   const importInputRef = useRef<HTMLInputElement>(null);
   // 刷新（清缩略图缓存后强制重渲染）
   const [, setRefreshTick] = useState(0);
+
+  // ===== 重命名对话框（Spine 风格）=====
+  // 双击层级树行的骨/插槽/附件/动画/约束节点 → 弹窗，输入新名字后回写 store。
+  // 用一个对象统一驱动弹窗内容，避免每个 kind 都各搞一个 useState。
+  const [pendingRename, setPendingRename] = useState<{
+    title: string;
+    message: string;
+    initialValue: string;
+    onConfirm: (value: string) => void;
+  } | null>(null);
+  const closeRename = () => setPendingRename(null);
+
+  /**
+   * 构造每一行的双击重命名回调。
+   * - 未支持的 kind（section / project / …）→ 返回 undefined → TreeRow 不响应双击。
+   * - 各 kind 命名风格对齐 Spine：
+   *     重命名骨骼   "重命名骨骼"            "为此骨骼输入一个新名称:"
+   *     重命名插槽   "重命名插槽"            "为此插槽输入一个新名称:"
+   *     重命名图片   "重命名图片"            "为此图片输入一个新名称:"
+   *     重命名动画   "重命名动画"            "为此动画输入一个新名称:"
+   *     重命名约束   "重命名约束"            "为此约束输入一个新名称:"
+   * 注：约束本身已有内联 onRename 路径，此处仍挂双击以便用户从「约束」分区直接触发弹窗（对齐 Spine）。
+   */
+  const buildRenameHandler = (r: TreeRow): (() => void) | undefined => {
+    if (r.kind === 'bone' && r.node) {
+      const id = r.node.id;
+      return () => {
+        // 重新读 store，拿到当前最新名字（防止期间被外部改名）
+        const cur = usePixiBonesStore.getState().bones.find((x) => x.id === id);
+        if (!cur) return;
+        setPendingRename({
+          title: '重命名骨骼',
+          message: '为此骨骼输入一个新名称:',
+          initialValue: cur.name,
+          onConfirm: (v) => { renameBone(id, v); closeRename(); },
+        });
+      };
+    }
+    if (r.kind === 'slot' && r.slot) {
+      const id = r.slot.id;
+      return () => {
+        const cur = usePixiBonesStore.getState().slots.find((x) => x.id === id);
+        if (!cur) return;
+        setPendingRename({
+          title: '重命名插槽',
+          message: '为此插槽输入一个新名称:',
+          initialValue: cur.name,
+          onConfirm: (v) => { renameSlot(id, v); closeRename(); },
+        });
+      };
+    }
+    if (r.kind === 'asset' && r.asset) {
+      const id = r.asset.id;
+      return () => {
+        const cur = usePixiBonesStore.getState().images.find((x) => x.id === id);
+        if (!cur) return;
+        setPendingRename({
+          title: '重命名图片',
+          message: '为此图片输入一个新名称:',
+          initialValue: cur.name,
+          onConfirm: (v) => { renameAttachment(id, v); closeRename(); },
+        });
+      };
+    }
+    if (r.kind === 'animation') {
+      // 双击动画节点 → 重命名当前动画
+      const aid = activeAnimationId;
+      return () => {
+        if (!aid) return;
+        const cur = usePixiBonesStore.getState().animations.find((x) => x.id === aid);
+        if (!cur) return;
+        setPendingRename({
+          title: '重命名动画',
+          message: '为此动画输入一个新名称:',
+          initialValue: cur.name,
+          onConfirm: (v) => { renameAnimation(aid, v); closeRename(); },
+        });
+      };
+    }
+    if (r.kind === 'constraint' && r.constraint) {
+      // 双击约束行 → 重命名约束
+      const id = r.constraint.id;
+      return () => {
+        const cur = usePixiBonesStore.getState().constraints.find((x) => x.id === id);
+        if (!cur) return;
+        setPendingRename({
+          title: '重命名约束',
+          message: '为此约束输入一个新名称:',
+          initialValue: cur.name,
+          onConfirm: (v) => { renameConstraint(id, v); closeRename(); },
+        });
+      };
+    }
+    return undefined;
+  };
+
+  // 约束行的双击 handler（在 ConstraintsSectionPropsBlock 内单独挂；保持职责分离）
+  const openConstraintRename = (id: string) => {
+    const cur = usePixiBonesStore.getState().constraints.find((x) => x.id === id);
+    if (!cur) return;
+    setPendingRename({
+      title: '重命名约束',
+      message: '为此约束输入一个新名称:',
+      initialValue: cur.name,
+      onConfirm: (v) => { renameConstraint(id, v); closeRename(); },
+    });
+  };
   // ===== 大预览（hover 附件图标 2s 后弹出该素材的大图） =====
   const [preview, setPreview] = useState<{ url: string; layerId: string; x: number; y: number } | null>(null);
   const previewTimerRef = useRef<number | null>(null);
@@ -461,13 +577,17 @@ export function HierarchyPanel() {
           const isDrawOrderNode = d.section.key === 'drawOrder';
           // ★ 「动画」分区下挂当前动画节点（仿 Spine：动画列在分区里）
           const isAnimNode = d.section.key === 'animations';
+          // ★ 「约束」分区下挂每条约束（仿 Spine：小图标行）
+          const isConstraintsNode = d.section.key === 'constraints';
           const sectionKey = 'section:' + d.section.key;
           const isCollapsed = collapsed.has(sectionKey);
           const kids = (isImagesNode || isDrawOrderNode)
             ? orderedSlots
             : isAnimNode && animations.length > 0
               ? [ANIM_KEY]
-              : [];
+              : isConstraintsNode
+                ? constraints.map((c) => 'constraint:' + c.id)
+                : [];
           out.push({
             key: sectionKey,
             kind: 'section',
@@ -487,6 +607,21 @@ export function HierarchyPanel() {
               icon: '🎬',
               label: currentAnimName,
               collapsible: false,
+            });
+          }
+          // 「约束」分区：列出全部 IK 约束（小图标行，仿 Spine）
+          if (isConstraintsNode && !isCollapsed) {
+            constraints.forEach((c, j) => {
+              out.push({
+                key: 'constraint:' + c.id,
+                kind: 'constraint',
+                depth: depth + 1,
+                isLast: j === constraints.length - 1,
+                constraint: c,
+                icon: '🪢',
+                label: c.name,
+                collapsible: false,
+              });
             });
           }
           // 「图片」分区 = 素材库：列出全部附件（点它 = 选中所属插槽）
@@ -864,7 +999,12 @@ export function HierarchyPanel() {
                       drop={drop}
                       row={r}
                       selectedBoneId={selectedBoneId}
-                      onSelect={selectBone}
+                      onSelect={(id) => {
+                        // ★ 拾取 IK 目标模式：点骨行 = 选为目标骨
+                        const st = usePixiBonesStore.getState();
+                        if (st.ikPickBoneId) { st.setIkPickTarget(id); return; }
+                        selectBone(id);
+                      }}
                       onAddChild={(id) => addBone(id)}
                       collapsed={collapsed}
                       onToggleCollapse={toggleCollapsed}
@@ -876,6 +1016,8 @@ export function HierarchyPanel() {
                       onActivateAttachment={setActiveAttachment}
                       selectedSectionKey={selectedSectionKey}
                       onSelectSection={selectSection}
+                      selectedConstraintId={selectedConstraintId}
+                      onSelectConstraint={selectConstraint}
                       onSelectAnimation={selectAnimationNode}
                       slotBindings={slotBindings}
                       boneNameById={new Map(bones.map((b) => [b.id, b.name]))}
@@ -885,6 +1027,7 @@ export function HierarchyPanel() {
                       onAssetHoverEnter={onAssetHoverEnter}
                       onAssetHoverMove={onAssetHoverMove}
                       onAssetHoverLeave={onAssetHoverLeave}
+                      onRequestRename={buildRenameHandler(r)}
                     />
                     );
                   })}
@@ -918,6 +1061,14 @@ export function HierarchyPanel() {
           onLength={(l) => setBoneLength(selectedBone.id, l)}
           onParent={(pid) => setBoneParent(selectedBone.id, pid)}
           onAddChild={() => addBone(selectedBone.id)}
+          onCreateIk={() => {
+            // 「新建 → 约束 → IK 约束」：进入拾取模式，等用户点目标骨（对齐 Spine）
+            // ★ 支持双骨 IK：用户多选了两根骨（selectedBoneIds）时，
+            //   第一根 = 受约束骨（boneId），第二根 = 子骨（childBoneId）
+            const st = usePixiBonesStore.getState();
+            const ids = st.selectedBoneIds.length >= 2 ? st.selectedBoneIds : [selectedBone.id];
+            st.startIkPick(ids[0], ids[1] ?? null);
+          }}
           onDelete={() => {
             if (confirm(`删除 "${selectedBone.name}" 及其子骨？`)) removeBone(selectedBone.id);
           }}
@@ -992,6 +1143,7 @@ export function HierarchyPanel() {
           onAdd={(boneId, targetBoneId, childBoneId) => addIkConstraint(boneId, targetBoneId, childBoneId)}
           onRemove={(id) => removeConstraint(id)}
           onRename={(id, name) => renameConstraint(id, name)}
+          onRenamePopup={(id) => openConstraintRename(id)}
           onTarget={(id, targetId) => setConstraintTarget(id, targetId)}
           onMix={(id, mix) => setConstraintMix(id, mix)}
           onBend={(id, dir) => setConstraintBendDirection(id, dir)}
@@ -1036,6 +1188,20 @@ export function HierarchyPanel() {
             }}
           />
         </div>,
+        document.body,
+      )}
+
+      {/* ===== 重命名弹窗（Spine 风格，蓝色斜切标题 + 自动选中输入） =====
+          Portal 到 body，避开 <aside> 内的 stacking context / overflow 影响。 */}
+      {pendingRename && createPortal(
+        <PromptDialog
+          open
+          title={pendingRename.title}
+          message={pendingRename.message}
+          initialValue={pendingRename.initialValue}
+          onConfirm={pendingRename.onConfirm}
+          onCancel={closeRename}
+        />,
         document.body,
       )}
     </aside>
@@ -1142,6 +1308,9 @@ interface TreeRowViewProps {
   /** 分区节点（约束 / 图片 / …）相关 */
   selectedSectionKey: string | null;
   onSelectSection: (key: string) => void;
+  /** 当前选中的 IK 约束 id（约束行高亮） */
+  selectedConstraintId: string | null;
+  onSelectConstraint: (id: string) => void;
   /** 层级树顶部的「动画」节点被点击 */
   onSelectAnimation: () => void;
   slotBindings: Record<string, SlotBinding>;
@@ -1156,15 +1325,18 @@ interface TreeRowViewProps {
   onAssetHoverEnter?: (layer: PixiBonesLayer, clientX: number, clientY: number) => void;
   onAssetHoverMove?: (clientX: number, clientY: number) => void;
   onAssetHoverLeave?: () => void;
+  /** 双击该行触发重命名弹窗（Spine 行为）。不传 = 该行不支持重命名。 */
+  onRequestRename?: () => void;
 }
 
 function TreeRowView(props: TreeRowViewProps) {
   const {
     row, selectedBoneId, onSelect, onAddChild, collapsed, onToggleCollapse, search, C,
     selectedRowKey, onSelectSlot, onSelectAttachment,
-    onActivateAttachment, selectedSectionKey, onSelectSection, onSelectAnimation,
+    onActivateAttachment, selectedSectionKey, onSelectSection, selectedConstraintId, onSelectConstraint, onSelectAnimation,
     slotBindings, boneNameById, onImport, drag, drop,
     onAssetHoverEnter, onAssetHoverMove, onAssetHoverLeave,
+    onRequestRename,
   } = props;
   const isBone = row.kind === 'bone';
   /** 附件行（🖼） */
@@ -1174,6 +1346,8 @@ function TreeRowView(props: TreeRowViewProps) {
   const isSlot = row.kind === 'slot';
   /** 顶部「动画」节点（🎬 当前动画名） */
   const isAnim = row.kind === 'animation';
+  /** IK 约束行（🪢，挂在「约束」分区下） */
+  const isConstraint = row.kind === 'constraint';
   /** 分区原始 key（'section:images' → 'images'） */
   const sectionKey = isSection && row.key.startsWith('section:') ? row.key.slice('section:'.length) : null;
   const node = row.node;
@@ -1186,7 +1360,8 @@ function TreeRowView(props: TreeRowViewProps) {
   const isSelected =
     (isBone && !!node && selectedBoneId === node.id) ||
     ((isSlot || isAsset || isAnim) && row.key === selectedRowKey) ||
-    (isSection && sectionKey !== null && selectedSectionKey === sectionKey);
+    (isSection && sectionKey !== null && selectedSectionKey === sectionKey) ||
+    (isConstraint && !!row.constraint && selectedConstraintId === row.constraint.id);
 
   // 绑定信息（按插槽查；附件行显示它所属插槽的绑定）
   const binding = assetSlotId ? slotBindings[assetSlotId] : (slot ? slotBindings[slot.id] : undefined);
@@ -1200,7 +1375,7 @@ function TreeRowView(props: TreeRowViewProps) {
 
   const isCollapsed = collapsed.has(row.key);
   const thumb = isAsset && asset ? attachmentThumb(asset) : null;
-  const clickable = isBone || isAsset || isSection || isSlot || isAnim;
+  const clickable = isBone || isAsset || isSection || isSlot || isAnim || isConstraint;
 
   /** 绑定/解绑「该行对应的插槽」 */
   const doBindToggle = () => {
@@ -1260,6 +1435,13 @@ function TreeRowView(props: TreeRowViewProps) {
           if (assetSlotId) onActivateAttachment(assetSlotId, asset.id);
           onSelectAttachment(assetSlotId, asset.id, row.key);
         }
+        else if (isConstraint && row.constraint) onSelectConstraint(row.constraint.id);
+      }}
+      onDoubleClick={(e) => {
+        // ★ 双击 = 触发重命名（Spine 行为）
+        // 阻止默认文本选择（按住拖动选中状态下双击会引发文本选中）
+        e.preventDefault();
+        onRequestRename?.();
       }}
     >
       {/* 缩进 + 折线连线：深度 = 画几列 */}
@@ -1390,6 +1572,140 @@ function Highlight({ text, q, C }: { text: string; q: string; C: any }) {
 }
 
 // =================================================================================
+//  Spine 风格「新建」下拉菜单（骨骼属性面板底部按钮触发）
+//   - 深灰菜单 + 图标 + 悬停高亮（参考 Spine New 菜单）
+//   - 带子菜单的项（如 约束）hover 展开二级菜单
+//   - 未实现的功能用「(未实现)」占位文字显示，点击无操作
+// =================================================================================
+interface NewMenuEntry {
+  icon: string;
+  label: string;
+  /** 已实现 → 点击执行；缺省 = 未实现占位 */
+  action?: () => void;
+  /** 子菜单项（hover 展开） */
+  children?: NewMenuEntry[];
+}
+
+function SpineNewMenu({
+  x, y, items, onClose, C,
+}: {
+  /** 菜单左上角固定定位（viewport 坐标） */
+  x: number;
+  y: number;
+  items: NewMenuEntry[];
+  onClose: () => void;
+  C: any;
+}) {
+  const [child, setChild] = useState<{ parent: NewMenuEntry; left: number; top: number } | null>(null);
+  const ITEM_H = 24;
+  const W = 170;
+
+  // Esc = 关闭
+  useEffect(() => {
+    if (!onClose) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <>
+      {createPortal(
+        <div
+          className="fixed z-[9998] shadow-2xl"
+          style={{ left: x, top: y, minWidth: W, background: C.panel, border: '1px solid ' + C.border, borderRadius: 4, padding: '4px 0', fontSize: 12 }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          {items.map((it, idx) => {
+            const enabled = !!it.action || !!it.children?.length;
+            return (
+              <button
+                key={it.label}
+                type="button"
+                className="w-full flex items-center gap-2 text-left"
+                style={{
+                  height: ITEM_H,
+                  padding: '0 10px',
+                  background: 'transparent',
+                  border: 'none',
+                  color: enabled ? C.text : C.dim,
+                  cursor: enabled ? 'pointer' : 'default',
+                  fontSize: 12,
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'rgba(255,255,255,0.06)';
+                  if (it.children?.length) {
+                    // 子菜单向左侧弹出（菜单通常在右侧面板，往左避免溢出屏幕）
+                    setChild({ parent: it, left: x - W - 6, top: y + 4 + idx * ITEM_H });
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'transparent';
+                  // 若已展开子菜单则保留（hover 进入子菜单不关闭）
+                  if (child?.parent !== it) setChild(null);
+                }}
+                onClick={() => {
+                  if (it.children?.length) return; // 子菜单通过 hover 展开
+                  if (!it.action) return;
+                  onClose();
+                  it.action();
+                }}
+              >
+                <span className="w-4 shrink-0 text-center" style={{ color: enabled ? C.accent : C.dim }}>{it.icon}</span>
+                <span className="flex-1 truncate">{it.label}</span>
+                {!enabled && <span className="text-[10px] shrink-0" style={{ color: C.dim }}>(未实现)</span>}
+                {!!it.children?.length && <span className="text-[10px]" style={{ color: C.dim }}>▶</span>}
+              </button>
+            );
+          })}
+        </div>,
+        document.body,
+      )}
+      {/* 二级菜单（约束 → IK/路径/变换） */}
+      {child && createPortal(
+        <div
+          className="fixed z-[9999] shadow-2xl"
+          style={{ left: child.left, top: child.top, minWidth: W, background: C.panel, border: '1px solid ' + C.border, borderRadius: 4, padding: '4px 0', fontSize: 12 }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          {child.parent.children!.map((sub) => {
+            const enabled = !!sub.action;
+            return (
+              <button
+                key={sub.label}
+                type="button"
+                className="w-full flex items-center gap-2 text-left"
+                style={{
+                  height: ITEM_H,
+                  padding: '0 10px',
+                  background: 'transparent',
+                  border: 'none',
+                  color: enabled ? C.text : C.dim,
+                  cursor: enabled ? 'pointer' : 'default',
+                  fontSize: 12,
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                onClick={() => {
+                  if (!sub.action) return;
+                  onClose();
+                  sub.action();
+                }}
+              >
+                <span className="w-4 shrink-0 text-center" style={{ color: enabled ? C.accent : C.dim }}>{sub.icon}</span>
+                <span className="flex-1 truncate">{sub.label}</span>
+                {!enabled && <span className="text-[10px] shrink-0" style={{ color: C.dim }}>(未实现)</span>}
+              </button>
+            );
+          })}
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+// =================================================================================
 //  选中骨的属性块（Spine 风格底部：继承 / 旋转 / 缩放 / 反射 checkbox + 长度输入）
 // =================================================================================
 interface BonePropsBlockProps {
@@ -1400,6 +1716,8 @@ interface BonePropsBlockProps {
   onLength: (l: number) => void;
   onParent: (pid: string | null) => void;
   onAddChild: () => void;
+  /** 「新建」菜单：创建 IK 约束（目标骨由父级决定） */
+  onCreateIk?: () => void;
   onDelete: () => void;
   onToggleIsolate: () => void;
   isolated: boolean;
@@ -1407,7 +1725,7 @@ interface BonePropsBlockProps {
 }
 
 function BonePropsBlock(props: BonePropsBlockProps) {
-  const { node, parentOptions, onMove, onRotate, onLength, onParent, onAddChild, onDelete, onToggleIsolate, isolated, C } = props;
+  const { node, parentOptions, onMove, onRotate, onLength, onParent, onAddChild, onCreateIk, onDelete, onToggleIsolate, isolated, C } = props;
   const rotDeg = (node.rotation * 180) / Math.PI;
   // 输入框统一样式
   const inputStyle: React.CSSProperties = {
@@ -1418,6 +1736,44 @@ function BonePropsBlock(props: BonePropsBlockProps) {
     padding: '2px 6px',
     fontSize: 11,
   };
+  // ===== 「新建」下拉菜单（Spine 风格）=====
+  const newBtnRef = useRef<HTMLButtonElement | null>(null);
+  const [newMenu, setNewMenu] = useState<{ x: number; y: number } | null>(null);
+  // 打开菜单：按钮在面板底部 → 优先向上展开
+  const openNewMenu = () => {
+    const el = newBtnRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const MENU_H = 7 * 24 + 8; // 估算：7 项 × 24px + 上下 padding
+    const up = r.top > MENU_H + 40;
+    setNewMenu({ x: r.left, y: up ? r.top - MENU_H : r.bottom });
+  };
+  // 点击外部 / 切换选中骨 → 关闭菜单
+  useEffect(() => {
+    if (!newMenu) return;
+    const onDocDown = (e: MouseEvent) => {
+      if (newBtnRef.current && !newBtnRef.current.contains(e.target as Node)) setNewMenu(null);
+    };
+    document.addEventListener('mousedown', onDocDown);
+    return () => document.removeEventListener('mousedown', onDocDown);
+  }, [newMenu]);
+  // 新建菜单项：骨骼 / 插槽 / 皮肤 / 网格 / 约束(子菜单) / 事件 / 音频
+  const newMenuItems: NewMenuEntry[] = [
+    { icon: '🦴', label: '骨骼', action: onAddChild },
+    { icon: '◉', label: '插槽' }, // 未实现
+    { icon: '🧴', label: '皮肤' }, // 未实现
+    { icon: '▦', label: '网格' }, // 未实现
+    {
+      icon: '🪢', label: '约束',
+      children: [
+        { icon: '🪝', label: 'IK 约束', action: onCreateIk },
+        { icon: '⤳', label: '路径约束' }, // 未实现
+        { icon: '⇄', label: '变换约束' }, // 未实现
+      ],
+    },
+    { icon: '🎬', label: '事件' }, // 未实现
+    { icon: '🔊', label: '音频' }, // 未实现
+  ];
   return (
     <div style={{ borderTop: '1px solid ' + C.border, background: C.panelDk }}>
       {/* 第一行：骨名 + 图标按钮 */}
@@ -1518,10 +1874,10 @@ function BonePropsBlock(props: BonePropsBlockProps) {
         </select>
       </div>
 
-      {/* 第六行：底部操作按钮（新建 / 父级 / 拆分 / 皮肤） */}
+      {/* 第六行：底部操作按钮（新建 ▾ / 父级 / 拆分 / 皮肤） */}
       <div className="px-2 pb-2 grid grid-cols-4 gap-1 text-[10px]">
-        <button onClick={onAddChild} className="rounded px-1 py-1 flex items-center justify-center gap-0.5" style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border, cursor: 'pointer' }} onMouseEnter={(e) => (e.currentTarget.style.background = C.toolbar)} onMouseLeave={(e) => (e.currentTarget.style.background = C.panel)}>
-          <span style={{ color: C.accent }}>+</span> 新建
+        <button ref={newBtnRef} onClick={openNewMenu} className="rounded px-1 py-1 flex items-center justify-center gap-0.5" style={{ background: newMenu ? C.toolbar : C.panel, color: C.text, border: '1px solid ' + C.border, cursor: 'pointer' }} onMouseEnter={(e) => (e.currentTarget.style.background = C.toolbar)} onMouseLeave={(e) => { if (!newMenu) e.currentTarget.style.background = C.panel; }} title="新建骨骼 / 插槽 / 约束 …">
+          <span style={{ color: C.accent }}>+</span> 新建 <span style={{ color: C.dim, fontSize: 9 }}>▾</span>
         </button>
         <button className="rounded px-1 py-1 flex items-center justify-center gap-0.5" style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border, cursor: 'pointer' }} onMouseEnter={(e) => (e.currentTarget.style.background = C.toolbar)} onMouseLeave={(e) => (e.currentTarget.style.background = C.panel)}>
           <span>↗</span> 父级
@@ -1534,6 +1890,17 @@ function BonePropsBlock(props: BonePropsBlockProps) {
           <span className="absolute -top-1 -right-1 text-[8px] px-0.5 font-bold" style={{ background: C.warning, color: '#000', borderRadius: 2 }}>PRO</span>
         </button>
       </div>
+
+      {/* 「新建」下拉菜单（Spine 风格，portal 到 body） */}
+      {newMenu && (
+        <SpineNewMenu
+          x={newMenu.x}
+          y={newMenu.y}
+          items={newMenuItems}
+          onClose={() => setNewMenu(null)}
+          C={C}
+        />
+      )}
     </div>
   );
 }
@@ -2162,6 +2529,8 @@ interface ConstraintsSectionPropsBlockProps {
   onAdd: (boneId: string, targetBoneId: string, childBoneId: string | null) => void;
   onRemove: (id: string) => void;
   onRename: (id: string, name: string) => void;
+  /** 双击行触发弹窗重命名（Spine 行为；与 onRename 同时存在不冲突） */
+  onRenamePopup?: (id: string) => void;
   onTarget: (id: string, targetBoneId: string) => void;
   onMix: (id: string, mix: number) => void;
   onBend: (id: string, dir: 1 | -1) => void;
@@ -2170,8 +2539,10 @@ interface ConstraintsSectionPropsBlockProps {
 }
 
 function ConstraintsSectionPropsBlock(props: ConstraintsSectionPropsBlockProps) {
-  const { constraints, bones, onAdd, onRemove, onRename, onTarget, onMix, onBend, onMove, C } = props;
-  const [selectedId, setSelectedId] = useState<string | null>(constraints[0]?.id ?? null);
+  const { constraints, bones, onAdd, onRemove, onRename, onRenamePopup, onTarget, onMix, onBend, onMove, C } = props;
+  // ★ 选中态收敛到 store：树里的约束行点击 → selectConstraint → 这里同步高亮
+  const selectedId = usePixiBonesStore((s) => s.selectedConstraintId);
+  const selectConstraint = usePixiBonesStore((s) => s.selectConstraint);
   const [newBone, setNewBone] = useState(bones[0]?.id ?? '');
   const [newChild, setNewChild] = useState('');
   const [newTarget, setNewTarget] = useState(bones[0]?.id ?? '');
@@ -2201,7 +2572,9 @@ function ConstraintsSectionPropsBlock(props: ConstraintsSectionPropsBlockProps) 
         {constraints.map((c, i) => (
           <div
             key={c.id}
-            onClick={() => setSelectedId(c.id)}
+            onClick={() => selectConstraint(c.id)}
+            // ★ 双击 = 弹窗重命名（Spine 行为），与「name」输入框 onBlur 互不干扰（点击触发 onBlur 但 name 未变 → noop）
+            onDoubleClick={(e) => { e.preventDefault(); e.stopPropagation(); onRenamePopup?.(c.id); }}
             className="flex items-center gap-1 rounded px-1.5 py-1 text-[11px] cursor-pointer select-none"
             style={{
               background: selectedId === c.id ? C.accentDk : 'transparent',
@@ -2231,7 +2604,7 @@ function ConstraintsSectionPropsBlock(props: ConstraintsSectionPropsBlockProps) 
               className="w-4 h-4 flex items-center justify-center rounded text-[10px]"
               style={{ background: 'transparent', border: 'none', color: C.warning, cursor: 'pointer' }}
               title="删除约束"
-              onClick={(e) => { e.stopPropagation(); onRemove(c.id); setSelectedId((cur) => (cur === c.id ? null : cur)); }}
+              onClick={(e) => { e.stopPropagation(); onRemove(c.id); if (selectedId === c.id) usePixiBonesStore.getState().selectSection('constraints'); }}
             >✕</button>
           </div>
         ))}

@@ -3,6 +3,7 @@ import { usePixiBonesStore } from './store';
 import { useT, type Locale } from './i18n';
 import { saveCurrentProject, saveProjectAsPrompt } from './projectIO';
 import { importDataFromFiles } from '../exporters/importDataFlow';
+import { PromptDialog } from './PromptDialog';
 import logoImg from '/logo.png';
 import folderIcon from './icons/folder.png';
 import saveIcon from './icons/save.png';
@@ -95,11 +96,14 @@ export function TopMenu() {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const closeProject = usePixiBonesStore((s) => s.closeProject);
+  const newProject = usePixiBonesStore((s) => s.newProject);
   const { t, locale } = useT();
   const setLocale = usePixiBonesStore((s) => s.setLocale);
   const [hoverSettings, setHoverSettings] = useState(false);
   const [settingsRowRect, setY] = useState<{ top: number; left: number } | null>(null);
   const settingsRowRef = useRef<HTMLButtonElement>(null);
+  // ★ 新建项目对话框（Spine 风格 PromptDialog，输入项目名）
+  const [newProjectOpen, setNewProjectOpen] = useState(false);
 
   // 点击外部关闭（仅关闭主菜单，不干扰子菜单 hover）
   useEffect(() => {
@@ -134,6 +138,13 @@ export function TopMenu() {
 
   const onItemClick = (item: MenuItem) => {
     if (item.isLanguageSubmenu) return; // 设置项只弹子菜单，不关闭
+    // ★ 新建项目：打开命名对话框（不执行其它 action）
+    if (item.labelKey === 'menu.new_project') {
+      setNewProjectOpen(true);
+      setOpen(false);
+      setHoverSettings(false);
+      return;
+    }
     if (item.action) item.action();
     else console.log(`[TopMenu] ${t(item.labelKey)} (功能未实现)`);
     setOpen(false);
@@ -303,6 +314,24 @@ export function TopMenu() {
           onMouseEnter={() => setHoverSettings(true)}
           onMouseLeave={() => setHoverSettings(false)}
           t={t}
+        />
+      )}
+
+      {/* ★ 新建项目对话框（Spine 风格 PromptDialog）：输入项目名 → newProject(name) */}
+      {newProjectOpen && (
+        <PromptDialog
+          open
+          title={t('menu.new_project')}
+          message={t('welcome.name_placeholder')}
+          initialValue=""
+          select="none"
+          confirmLabel={t('welcome.confirm')}
+          cancelLabel={t('welcome.cancel')}
+          onCancel={() => setNewProjectOpen(false)}
+          onConfirm={(value) => {
+            newProject(value);
+            setNewProjectOpen(false);
+          }}
         />
       )}
     </div>

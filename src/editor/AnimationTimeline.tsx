@@ -21,7 +21,7 @@
  *  - 撤销/重做、动画管理（增/删/重命名/复制）
  *  - 自动关键帧：开关决定拖骨骼时是否自动写关键帧（红色录制按钮 = 开）
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useT } from './i18n';
 import { usePixiBonesStore, ANIM_PROPERTIES, type AnimProperty, type BoneNode } from './store';
 
@@ -130,7 +130,6 @@ export function AnimationTimeline() {
   const redo = usePixiBonesStore((s) => s.redo);
   const selectBone = usePixiBonesStore((s) => s.selectBone);
   const toggleKeyframeLock = usePixiBonesStore((s) => s.toggleKeyframeLock);
-  const setConstraintMixKeyframe = usePixiBonesStore((s) => s.setConstraintMixKeyframe);
   const removeConstraintMixKeyframe = usePixiBonesStore((s) => s.removeConstraintMixKeyframe);
 
   const anim = animations.find((a) => a.id === activeAnimationId) ?? animations[0] ?? null;
@@ -170,7 +169,15 @@ export function AnimationTimeline() {
   const toggleCollapsed = (id: string) => setCollapsed((m) => ({ ...m, [id]: !m[id] }));
 
   // =============== 树形轨道模型 ===============
-  const tree = useMemo(() => buildBoneTree(bones, anim, constraints, constraintRuntimeMix), [bones, anim, constraints, constraintRuntimeMix]);
+  // ★ 依赖用「骨骼 id 序列」而非 bones 引用：播放采样只改 x/y/rotation 数值、
+  //   不改变 id/name/parent → id 序列不变 → tree 不重算 → 时间轴轨道行（memo 子组件）
+  //   在播放时完全不重渲染（这是时间轴流畅的关键）。
+  const bonesIdsKey = bones.map((b) => b.id).join('|');
+  const tree = useMemo(
+    () => buildBoneTree(bones, anim, constraints, constraintRuntimeMix),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [bonesIdsKey, anim, constraints, constraintRuntimeMix],
+  );
 
   // =============== 播放循环 ===============
   useEffect(() => {
@@ -224,24 +231,82 @@ export function AnimationTimeline() {
 
   // =============== 标尺 seek ===============
   const rulerRef = useRef<HTMLDivElement>(null);
-  const seekFromClientX = (clientX: number) => {
+  // ★ useCallback 稳定化：Ruler 是 memo 组件，onPointerDown / seekFromClientX 必须引用稳定，
+  //   否则每次渲染（播放时每帧）都会让 Ruler 重渲（270 个 div 白白重建）。
+  const seekFromClientX = useCallback((clientX: number) => {
     const rect = rulerRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const t = Math.max(0, Math.min(duration, (clientX - rect.left) / PX_PER_FRAME / fps));
+    const t = Math.max(0, Math.min(duration, (clientX - rect.left) / pxPerFrame / fps));
     seekTo(t);
-  };
+  }, [duration, pxPerFrame, fps, seekTo]);
   const seekRef = useRef(false);
+  // 标尺按下：开始 seek（在 seekRef 声明后定义，避免 TDZ）
+  const rulerPointerDownCb = useCallback((e: React.PointerEvent) => {
+    seekRef.current = true;
+    seekFromClientX(e.clientX);
+  }, [seekFromClientX]);
+  // ★ 加依赖数组：之前无依赖导致每次渲染都 add/remove window 监听器（播放时每帧一次）。
+  //   现在只在 duration / pxPerFrame / fps 变化时重建（都不频繁）。
   useEffect(() => {
     const onMove = (e: MouseEvent) => { if (seekRef.current) seekFromClientX(e.clientX); };
     const onUp = () => { seekRef.current = false; };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
-  });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [duration, pxPerFrame, fps]);
 
   // =============== 关键帧拖动 ===============
   const [dragKey, setDragKey] = useState<{ boneId: string; property: AnimProperty; fromTime: number; isConstraint?: boolean } | null>(null);
   const [dragTime, setDragTime] = useState(0);
+
+  // =============== 稳定回调（memo 子组件要求 props 引用稳定，播放时才不会整树重渲）===============
+  const dragStartCb = useCallback((boneId: string, prop: AnimProperty, fromTime: number, isC?: boolean) => {
+    setDragKey({ boneId, property: prop, fromTime, isConstraint: isC });
+    setDragTime(fromTime);
+  }, []);
+  const dragMoveCb = useCallback((t: number) => setDragTime(t), []);
+  const dragEndCb = useCallback((t: number) => {
+    if (dragKey) {
+      if (dragKey.isConstraint) {
+        // 约束 mix 轨道走专用的 move（保留 constraintMix 标记）
+        const st = usePixiBonesStore.getState();
+        const a = st.animations.find((x) => x.id === st.activeAnimationId);
+        if (a) {
+          const tr = a.tracks.find((x) => x.boneId === dragKey.boneId && x.property === 'mix' && x.constraintMix);
+          if (tr) {
+            const k = tr.keys.find((kk) => Math.abs(kk.time - dragKey.fromTime) < 1e-6);
+            if (k) { st.setConstraintMixKeyframe(dragKey.boneId, t, k.value); st.removeConstraintMixKeyframe(dragKey.boneId, dragKey.fromTime); }
+          }
+        }
+      } else {
+        moveKeyframe(dragKey.boneId, dragKey.property, dragKey.fromTime, t);
+      }
+    }
+    setDragKey(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dragKey]);
+  const clickRowCb = useCallback((boneId: string, prop: AnimProperty, isC?: boolean) => {
+    // 点击轨道空白写关键帧（值从 store 实时读，避免闭包依赖 bones 导致回调每帧变化）
+    if (dragKey) return;
+    const st = usePixiBonesStore.getState();
+    const t = st.currentTime;
+    if (isC) {
+      const def = st.constraints.find((c) => c.id === boneId);
+      const cur = st.constraintRuntimeMix[boneId] ?? def?.mix ?? 1;
+      st.setConstraintMixKeyframe(boneId, t, cur);
+    } else {
+      const b = st.bones.find((x) => x.id === boneId);
+      if (b) st.setKeyframe(boneId, prop, t, b[prop as Exclude<AnimProperty, 'mix'>]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dragKey]);
+  const selectBoneCb = useCallback((id: string) => selectBone(id), [selectBone]);
+  const removeKeyCb = useCallback((boneId: string, prop: AnimProperty, t: number, isC?: boolean) => {
+    if (isC) removeConstraintMixKeyframe(boneId, t);
+    else removeKeyframe(boneId, prop, t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // =============== 渲染 ===============
   const frameOf = (time: number) => Math.floor(time * fps);
@@ -388,36 +453,13 @@ export function AnimationTimeline() {
 
           {/* 右：时间轴（标尺 + 关键帧）—— 用固定宽度的绝对布局，方便每行叠加 */}
           <div style={{ marginLeft: LEFT_W, position: 'relative' }}>
-            {/* 标尺 sticky 顶部 */}
-            <div
-              ref={rulerRef}
-              onPointerDown={(e) => { seekRef.current = true; seekFromClientX(e.clientX); }}
-              style={{
-                position: 'sticky', top: 0, zIndex: 3, height: RULER_H,
-                background: 'var(--spine-bg-panel-dark)', borderBottom: '1px solid var(--spine-border)',
-                fontSize: 10, color: 'var(--spine-text-dim)', userSelect: 'none',
-                display: 'flex',
-              }}
-            >
-              {Array.from({ length: totalFrames + 1 }, (_, f) => {
-                const isLabel = f % rulerStep(pxPerFrame) === 0;
-                return (
-                  <div
-                    key={f}
-                    style={{
-                      width: pxPerFrame, flex: 'none',
-                      // 标签帧画竖线 + 顶部加粗；非标签帧完全不画（避免密集竖线挤一起）
-                      borderRight: isLabel ? '1px solid var(--spine-text-dim)' : 'none',
-                      position: 'relative', boxSizing: 'border-box',
-                    }}
-                  >
-                    {isLabel && (
-                      <span style={{ position: 'absolute', top: 1, left: 2, lineHeight: '18px' }}>{f}</span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+            {/* 标尺 sticky 顶部（memo：播放时 270+ 格子不重建） */}
+            <Ruler
+              totalFrames={totalFrames}
+              pxPerFrame={pxPerFrame}
+              innerRef={rulerRef}
+              onPointerDown={rulerPointerDownCb}
+            />
 
             {/* 关键帧：每个骨头 + 它的属性各自一行 */}
             {showTree && tree.map((n) => (
@@ -425,52 +467,17 @@ export function AnimationTimeline() {
                 key={n.bone.id}
                 node={n}
                 depth={0}
-                bones={bones}
-                constraints={constraints}
-                constraintRuntimeMix={constraintRuntimeMix}
                 duration={duration}
                 fps={fps}
                 pxPerFrame={pxPerFrame}
                 dragKey={dragKey}
                 dragTime={dragTime}
-                onDragStart={(boneId, prop, fromTime, isC) => { setDragKey({ boneId, property: prop, fromTime, isConstraint: isC }); setDragTime(fromTime); }}
-                onDragMove={(t) => setDragTime(t)}
-                onDragEnd={(t) => {
-                  if (dragKey) {
-                    if (dragKey.isConstraint) {
-                      // 约束 mix 轨道走专用的 move（保留 constraintMix 标记）
-                      const a = usePixiBonesStore.getState().animations.find((x) => x.id === usePixiBonesStore.getState().activeAnimationId);
-                      if (a) {
-                        const tr = a.tracks.find((x) => x.boneId === dragKey.boneId && x.property === 'mix' && x.constraintMix);
-                        if (tr) {
-                          const k = tr.keys.find((kk) => Math.abs(kk.time - dragKey.fromTime) < 1e-6);
-                          if (k) { setConstraintMixKeyframe(dragKey.boneId, t, k.value); removeConstraintMixKeyframe(dragKey.boneId, dragKey.fromTime); }
-                        }
-                      }
-                    } else {
-                      moveKeyframe(dragKey.boneId, dragKey.property, dragKey.fromTime, t);
-                    }
-                  }
-                  setDragKey(null);
-                }}
-                onClickRow={(boneId, prop, isC) => {
-                  // 点击轨道空白写关键帧
-                  if (dragKey) return;
-                  const t = usePixiBonesStore.getState().currentTime;
-                  if (isC) {
-                    const def = constraints.find((c) => c.id === boneId);
-                    const cur = constraintRuntimeMix[boneId] ?? def?.mix ?? 1;
-                    setConstraintMixKeyframe(boneId, t, cur);
-                  } else {
-                    const b = bones.find((x) => x.id === boneId);
-                    if (b) setKeyframe(boneId, prop, t, b[prop as Exclude<AnimProperty, 'mix'>]);
-                  }
-                }}
-                onSelectBone={(id) => selectBone(id)}
-                onRemoveKey={(boneId, prop, t, isC) => {
-                  if (isC) removeConstraintMixKeyframe(boneId, t);
-                  else removeKeyframe(boneId, prop, t);
-                }}
+                onDragStart={dragStartCb}
+                onDragMove={dragMoveCb}
+                onDragEnd={dragEndCb}
+                onClickRow={clickRowCb}
+                onSelectBone={selectBoneCb}
+                onRemoveKey={removeKeyCb}
               />
             ))}
 
@@ -478,7 +485,7 @@ export function AnimationTimeline() {
             <div
               style={{
                 position: 'absolute', top: 0, bottom: 0,
-                left: currentTime * fps * PX_PER_FRAME, width: 1,
+                left: currentTime * fps * pxPerFrame, width: 1,
                 background: '#5BFF5B', pointerEvents: 'none', zIndex: 5,
                 boxShadow: '0 0 4px rgba(91,255,91,0.5)',
               }}
@@ -601,8 +608,51 @@ function rulerStep(pxPerFrame: number): number {
   return candidates[candidates.length - 1];
 }
 
+/** 标尺（时间刻度条）：memo 化。只依赖 totalFrames / pxPerFrame（播放时不变），
+ *  播放头（父组件里的绿线）单独渲染，因此播放时标尺的 270+ 个格子完全不会重建。 */
+const Ruler = memo(function Ruler({
+  totalFrames, pxPerFrame, innerRef, onPointerDown,
+}: {
+  totalFrames: number;
+  pxPerFrame: number;
+  innerRef: React.RefObject<HTMLDivElement>;
+  onPointerDown: (e: React.PointerEvent) => void;
+}) {
+  return (
+    <div
+      ref={innerRef}
+      onPointerDown={onPointerDown}
+      style={{
+        position: 'sticky', top: 0, zIndex: 3, height: RULER_H,
+        background: 'var(--spine-bg-panel-dark)', borderBottom: '1px solid var(--spine-border)',
+        fontSize: 10, color: 'var(--spine-text-dim)', userSelect: 'none',
+        display: 'flex',
+      }}
+    >
+      {Array.from({ length: totalFrames + 1 }, (_, f) => {
+        const isLabel = f % rulerStep(pxPerFrame) === 0;
+        return (
+          <div
+            key={f}
+            style={{
+              width: pxPerFrame, flex: 'none',
+              // 标签帧画竖线 + 顶部加粗；非标签帧完全不画（避免密集竖线挤一起）
+              borderRight: isLabel ? '1px solid var(--spine-text-dim)' : 'none',
+              position: 'relative', boxSizing: 'border-box',
+            }}
+          >
+            {isLabel && (
+              <span style={{ position: 'absolute', top: 1, left: 2, lineHeight: '18px' }}>{f}</span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+});
+
 // =============== 子组件：轨道树（左侧） ===============
-function BoneTree({
+const BoneTree = memo(function BoneTree({
   nodes, depth, collapsed, onToggle, onSelectBone,
 }: {
   nodes: BoneNodeT[];
@@ -683,7 +733,7 @@ function BoneTree({
       })}
     </>
   );
-}
+});
 
 // 骨 id → 扁平索引（用于颜色）；用模块级缓存避免每次重新算
 let _bonesFlat: string[] = [];
@@ -726,15 +776,12 @@ function BonePropLabels({ props, depth }: { props: PropKey[]; depth: number }) {
 }
 
 /** 属性 → 关键帧竖线颜色（Spine 风格：每种属性不同色）。 */
-function BoneRow({
-  node, depth, bones, constraints, constraintRuntimeMix, duration, fps, dragKey, dragTime, pxPerFrame,
+const BoneRow = memo(function BoneRow({
+  node, depth, duration, fps, dragKey, dragTime, pxPerFrame,
   onDragStart, onDragMove, onDragEnd, onClickRow, onSelectBone, onRemoveKey,
 }: {
   node: BoneNodeT;
   depth: number;
-  bones: BoneNode[];
-  constraints: ReturnType<typeof usePixiBonesStore.getState>['constraints'];
-  constraintRuntimeMix: Record<string, number>;
   duration: number;
   fps: number;
   pxPerFrame: number;
@@ -789,9 +836,6 @@ function BoneRow({
           key={c.bone.id}
           node={c}
           depth={depth + 1}
-          bones={bones}
-          constraints={constraints}
-          constraintRuntimeMix={constraintRuntimeMix}
           duration={duration}
           fps={fps}
           pxPerFrame={pxPerFrame}
@@ -807,9 +851,9 @@ function BoneRow({
       ))}
     </>
   );
-}
+});
 
-function PropRow({
+const PropRow = memo(function PropRow({
   boneId, property, isConstraint, keys, fps, duration, dragKey, dragTime, pxPerFrame,
   onDragStart, onDragMove, onDragEnd, onClickRow, onRemoveKey,
 }: {
@@ -858,12 +902,12 @@ function PropRow({
             }}
             onPointerMove={(e) => {
               if (!dragKey) return;
-              const t = Math.max(0, Math.min(duration, (e.clientX - (e.currentTarget.parentElement!.getBoundingClientRect().left)) / PX_PER_FRAME / fps));
+              const t = Math.max(0, Math.min(duration, (e.clientX - (e.currentTarget.parentElement!.getBoundingClientRect().left)) / pxPerFrame / fps));
               onDragMove(t);
             }}
             onPointerUp={(e) => {
               if (!dragKey) return;
-              const t = Math.max(0, Math.min(duration, (e.clientX - (e.currentTarget.parentElement!.getBoundingClientRect().left)) / PX_PER_FRAME / fps));
+              const t = Math.max(0, Math.min(duration, (e.clientX - (e.currentTarget.parentElement!.getBoundingClientRect().left)) / pxPerFrame / fps));
               onDragEnd(t);
             }}
             onDoubleClick={(e) => {
@@ -883,7 +927,7 @@ function PropRow({
       })}
     </div>
   );
-}
+});
 
 // =============== 通用小部件 ===============
 function IconBtn({

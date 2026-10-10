@@ -298,8 +298,10 @@ export interface PixiBonesState {
    *  - bindPoseVertices：可选，传入则用它作为 bindPose；不传则用当前 vertices 的副本
    *  - boneWorlds：可选，每根骨骼在**绑定时**的 world 坐标 (x,y,...)，长度 = boneIds.length*2。
    *    必须与 boneIds 去重后的顺序一致。不传则退化用 bones[].x/y（local，仅根骨骼/单层时准确）。
-   *  调用后写：mesh.bones / mesh.weights / mesh.bindPose / mesh.boneBindWorld，并推一次历史。 */
-  bindBonesToMesh: (attachmentId: string, boneIds: string[], bindPoseVertices?: number[], boneWorlds?: number[]) => void;
+   *  - boneMatrices：可选，每根骨骼在**绑定时**的完整世界矩阵（6 元/骨 [a,b,c,d,tx,ty]），
+   *    长度 = boneIds.length*6。存在时蒙皮用完整 LBS（旋转/缩放/平移都正确，对齐 Spine）。
+   *  调用后写：mesh.bones / mesh.weights / mesh.bindPose / mesh.boneBindWorld / mesh.boneBindMatrices，并推一次历史。 */
+  bindBonesToMesh: (attachmentId: string, boneIds: string[], bindPoseVertices?: number[], boneWorlds?: number[], boneMatrices?: number[]) => void;
   /** 给指定网格解绑一根骨骼（若该骨不再被任何顶点引用，同时从 mesh.bones 中移除） */
   unbindBoneFromMesh: (attachmentId: string, boneId: string) => void;
   /** 「绑定模式」：true 时 BoneEditor 把「点骨骼」解释成「绑到当前网格」，
@@ -451,6 +453,10 @@ export interface PixiBonesState {
   selectedSectionKey: string | null;
   /** 选中分区节点（如 'images'）。会清掉骨骼 / 素材选中态。 */
   selectSection: (key: string | null) => void;
+  /** 当前选中的 IK 约束 id（「约束」分区里高亮；也用于树行高亮）。 */
+  selectedConstraintId: string | null;
+  /** 选中一个 IK 约束（并切到「约束」分区）。 */
+  selectConstraint: (id: string) => void;
   /** 选中层级树顶部的「动画」节点（当前动画名），清空骨骼/素材/分区选中 */
   selectAnimationNode: () => void;
   viewMode: ViewMode;
@@ -475,12 +481,18 @@ export interface PixiBonesState {
   // ---- IK 约束（仿 Spine 3.8，顺序 = 应用顺序）----
   /** IK 约束列表。数组顺序即应用顺序（层级树「约束」节点里可拖拽调整）。 */
   constraints: IkConstraintDef[];
-  /** 新建一条 IK 约束：boneId = 受约束骨，targetBoneId = 目标骨，childBoneId 可选（双骨 IK）。 */
-  addIkConstraint: (boneId: string, targetBoneId: string, childBoneId?: string | null) => string;
+  /** 新建一条 IK 约束：boneId = 受约束骨，targetBoneId = 目标骨，childBoneId 可选（双骨 IK）。name 可自定义（默认 "IK N"）。 */
+  addIkConstraint: (boneId: string, targetBoneId: string, childBoneId?: string | null, name?: string) => string;
   /** 删除约束（id 不存在则忽略） */
   removeConstraint: (id: string) => void;
   /** 重命名约束 */
   renameConstraint: (id: string, name: string) => void;
+  /** 重命名骨骼（层级树行上双击触发） */
+  renameBone: (id: string, name: string) => void;
+  /** 重命名插槽 */
+  renameSlot: (id: string, name: string) => void;
+  /** 重命名素材附件（PixiBonesLayer） */
+  renameAttachment: (id: string, name: string) => void;
   /** 改目标骨 */
   setConstraintTarget: (id: string, targetBoneId: string) => void;
   /** 改混合程度 0..1 */
@@ -489,6 +501,22 @@ export interface PixiBonesState {
   setConstraintBendDirection: (id: string, dir: 1 | -1) => void;
   /** 调整顺序：把 id 对应约束移到新索引（数组索引，0 = 最先应用） */
   moveConstraint: (id: string, toIndex: number) => void;
+
+  // ---- IK 约束创建流程（仿 Spine：选骨 → 新建 → IK → 拾取目标 → 弹窗命名）----
+  /** 正在等待拾取 IK 目标骨（非 null = 「新建 ik 约束：选择目标」拾取模式）。 */
+  ikPickBoneId: string | null;
+  /** 双骨 IK 的第二根受约束骨（用户多选时；单骨为 null）。 */
+  ikPickChildBoneId: string | null;
+  /** 已拾取的目标骨 id（触发命名弹窗；确认后创建约束并清空）。 */
+  ikPickTargetBoneId: string | null;
+  /** 进入拾取模式：boneId = 第一根受约束骨，childBoneId = 第二根（双骨 IK，可空）。 */
+  startIkPick: (boneId: string, childBoneId?: string | null) => void;
+  /** 取消拾取模式 */
+  cancelIkPick: () => void;
+  /** 拾取到目标骨：记录目标，触发命名弹窗 */
+  setIkPickTarget: (targetBoneId: string) => void;
+  /** 点空白画布：创建一根新的目标骨「target n」（父级 = root，长度 0 = 可拖手柄）并设为目标。 */
+  createIkTargetBone: (worldX: number, worldY: number) => string;
 
   // ---- UI state ----
   showLeftPanel: boolean;
@@ -526,6 +554,8 @@ export interface PixiBonesState {
   /** 当前打开的工程 id。null = 在欢迎页（未进入编辑器） */
   currentProjectId: string | null;
   openProject:    (id: string, name: string) => void;
+  /** 新建项目：清空当前工程全部数据，重置为「只有一个 root 骨 + 一个默认动画」的全新工程。 */
+  newProject: (name: string) => void;
   /** 载入一份已保存的工程数据（一次性覆盖全部工程态 + 清撤销栈），供 projectIO 调用 */
   applyProjectData: (d: ProjectData) => void;
   closeProject:   () => void;
@@ -671,6 +701,7 @@ function fillMeshDefaults(m: MeshData): MeshData {
     weights: m.weights ?? [],
     bindPose: m.bindPose ?? [],
     boneBindWorld: m.boneBindWorld ?? [],
+    boneBindMatrices: m.boneBindMatrices ?? [],
   };
 }
 
@@ -710,6 +741,21 @@ function sampleConstraintMixes(anim: EditorAnimation, t: number): Record<string,
     out[tr.boneId] = sampleTrackValue(tr.keys, t, 1);
   }
   return out;
+}
+
+/**
+ * ★ 动画 tab 下，用「已更新轨道的动画」在 currentTime 采样骨骼姿态 + 约束 mix，
+ * 返回可直接展开进 set() 的补丁（一次 set 完成，避免 applyActiveAnimation 的二次 set
+ * 触发二次 subscribe → 播放 / 编辑时少一半全量重画）。
+ */
+function buildAnimPatch(s: PixiBonesState, anim: EditorAnimation): Partial<PixiBonesState> {
+  if (s.editorTab !== 'animate') return {};
+  const patch: Partial<PixiBonesState> = {};
+  const next = sampleAnimationPose(anim, s.setupPose, s.bones, s.currentTime);
+  if (next) patch.bones = next;
+  const mixes = sampleConstraintMixes(anim, s.currentTime);
+  if (Object.keys(mixes).length > 0) patch.constraintRuntimeMix = mixes;
+  return patch;
 }
 
 /**
@@ -922,6 +968,7 @@ function applyMeshReset(getState: () => PixiBonesState, attachmentId: string, mo
           bones, weights,
           bindPose: vertices.slice(),
           boneBindWorld: mesh.boneBindWorld?.slice(),
+          boneBindMatrices: mesh.boneBindMatrices?.slice(),
         },
       },
       meshSelectedVertices: [],
@@ -1206,7 +1253,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
    * - weights 长度 = vertices.length / 2 * nb
    *   每个顶点占 nb 段，依次为对 bones[0..nb-1] 的权重。
    */
-  bindBonesToMesh: (attachmentId, boneIds, bindPoseVertices, boneWorlds) => {
+  bindBonesToMesh: (attachmentId, boneIds, bindPoseVertices, boneWorlds, boneMatrices) => {
     const st = get();
     const mesh = st.attachmentMeshes[attachmentId];
     if (!mesh) return;
@@ -1214,6 +1261,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     const seen = new Set<string>();
     const bones: string[] = [];
     const world: Array<{ x: number; y: number }> = [];
+    const mats: number[] = [];   // 完整绑定矩阵（6 元/骨），与 bones 去重后顺序一致
     for (let k = 0; k < boneIds.length; k++) {
       const id = boneIds[k];
       if (!id || seen.has(id)) continue;
@@ -1226,6 +1274,9 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
         const b = st.bones.find((x) => x.id === id)!;
         world.push({ x: b.x, y: b.y });   // fallback：local x/y
       }
+      if (boneMatrices && k * 6 + 5 < boneMatrices.length) {
+        for (let m2 = 0; m2 < 6; m2++) mats.push(boneMatrices[k * 6 + m2]);
+      }
     }
     if (bones.length === 0) {
       // 没有任何有效骨 → 解绑
@@ -1233,7 +1284,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       set((s) => {
         const m = s.attachmentMeshes[attachmentId];
         if (!m) return s;
-        const { bones: _, weights: __, bindPose: ___, boneBindWorld: ____, ...rest } = m;
+        const { bones: _, weights: __, bindPose: ___, boneBindWorld: ____, boneBindMatrices: _____, ...rest } = m;
         return { attachmentMeshes: { ...s.attachmentMeshes, [attachmentId]: rest } };
       });
       return;
@@ -1248,6 +1299,16 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       boneBindWorld[i * 2] = world[i].x;
       boneBindWorld[i * 2 + 1] = world[i].y;
     }
+    // ★ 完整绑定矩阵：传入则存（供 LBS 蒙皮）；缺省时用单位矩阵 + 平移作为近似
+    const boneBindMatrices: number[] = mats.length === bones.length * 6
+      ? mats
+      : (() => {
+          const out: number[] = [];
+          for (let i = 0; i < bones.length; i++) {
+            out.push(1, 0, 0, 1, world[i].x, world[i].y);
+          }
+          return out;
+        })();
     st.pushHistory();
     set((s) => {
       const m = s.attachmentMeshes[attachmentId];
@@ -1255,7 +1316,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       return {
         attachmentMeshes: {
           ...s.attachmentMeshes,
-          [attachmentId]: { ...m, bones, weights, bindPose, boneBindWorld },
+          [attachmentId]: { ...m, bones, weights, bindPose, boneBindWorld, boneBindMatrices },
         },
         // ★ 绑定后把权重视图的「当前网格」切到这里，面板立即列出刚绑的骨骼
         weightMeshId: attachmentId,
@@ -1277,15 +1338,19 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       const newBones = m.bones.filter((_, i) => i !== idx);
       if (newBones.length === 0) {
         // 全部解绑 → 回到无权重状态
-        const { bones: _b, weights: _w, bindPose: _bp, boneBindWorld: _bbw, ...rest } = m;
+        const { bones: _b, weights: _w, bindPose: _bp, boneBindWorld: _bbw, boneBindMatrices: _bbm, ...rest } = m;
         return { attachmentMeshes: { ...s.attachmentMeshes, [attachmentId]: rest } };
       }
       const newWeights = new Array(vertCount * newBones.length).fill(0);
       const newBoneBindWorld: number[] = [];
+      const newBoneBindMatrices: number[] = [];
       for (let i = 0; i < nb; i++) {
         if (i === idx) continue;
         newBoneBindWorld.push(m.boneBindWorld?.[i * 2] ?? 0);
         newBoneBindWorld.push(m.boneBindWorld?.[i * 2 + 1] ?? 0);
+        for (let k = 0; k < 6; k++) {
+          newBoneBindMatrices.push(m.boneBindMatrices?.[i * 6 + k] ?? (k === 0 || k === 3 ? 1 : 0));
+        }
       }
       for (let v = 0; v < vertCount; v++) {
         const oldRow = v * nb;
@@ -1308,7 +1373,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       return {
         attachmentMeshes: {
           ...s.attachmentMeshes,
-          [attachmentId]: { ...m, bones: newBones, weights: newWeights, boneBindWorld: newBoneBindWorld },
+          [attachmentId]: { ...m, bones: newBones, weights: newWeights, boneBindWorld: newBoneBindWorld, boneBindMatrices: newBoneBindMatrices },
         },
       };
     });
@@ -1330,7 +1395,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       if (!m) return s;
       return { attachmentMeshes: { ...s.attachmentMeshes, [attachmentId]: { ...m, vertices: bindSource } } };
     });
-    st.bindBonesToMesh(attachmentId, mesh.bones, mesh.bindPose, mesh.boneBindWorld);
+    st.bindBonesToMesh(attachmentId, mesh.bones, mesh.bindPose, mesh.boneBindWorld, mesh.boneBindMatrices);
     // 还原 vertices 到原值（bindBones 之后 mesh.vertices 是 bindSource 的副本）
     set((s) => {
       const m = s.attachmentMeshes[attachmentId];
@@ -1466,7 +1531,11 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   selectedBoneIds: [],
 
   constraints: [],
-  addIkConstraint: (boneId, targetBoneId, childBoneId = null) => {
+  selectedConstraintId: null,
+  ikPickBoneId: null,
+  ikPickChildBoneId: null,
+  ikPickTargetBoneId: null,
+  addIkConstraint: (boneId, targetBoneId, childBoneId = null, name) => {
     const s = get();
     if (!s.bones.some((b) => b.id === boneId)) return '';
     if (!s.bones.some((b) => b.id === targetBoneId)) return '';
@@ -1475,7 +1544,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     s.pushHistory();
     const def: IkConstraintDef = {
       id,
-      name: `IK ${s.constraints.length + 1}`,
+      name: name?.trim() || `IK ${s.constraints.length + 1}`,
       boneId,
       childBoneId: childBoneId ?? null,
       targetBoneId,
@@ -1483,6 +1552,80 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       mix: 1,
     };
     set((st) => ({ constraints: [...st.constraints, def] }));
+    return id;
+  },
+  startIkPick: (boneId, childBoneId = null) => {
+    // 只允许选中的骨骼作为受约束骨；进入拾取模式等待点目标骨
+    const s = get();
+    if (!s.bones.some((b) => b.id === boneId)) return;
+    // ★ Spine 双骨 IK：第二根骨必须是第一根骨的直接子骨。
+    //   用户多选顺序可能不对（先点子后点父），自动纠正。
+    if (childBoneId) {
+      const child = s.bones.find((b) => b.id === childBoneId);
+      if (!child) {
+        childBoneId = null;
+      } else if (child.parentId !== boneId) {
+        // 交换：childBoneId 其实是父骨 → 把它当 boneId，原 boneId 当子骨
+        const parent = s.bones.find((b) => b.id === boneId);
+        if (parent && parent.parentId === childBoneId) {
+          [boneId, childBoneId] = [childBoneId, boneId];
+        } else {
+          childBoneId = null; // 两骨不是父子关系 → 回退单骨 IK
+        }
+      }
+    }
+    set({ ikPickBoneId: boneId, ikPickChildBoneId: childBoneId, ikPickTargetBoneId: null });
+  },
+  cancelIkPick: () => set({ ikPickBoneId: null, ikPickChildBoneId: null, ikPickTargetBoneId: null }),
+  setIkPickTarget: (targetBoneId) => {
+    const s = get();
+    if (!s.ikPickBoneId) return; // 不在拾取模式
+    if (!s.bones.some((b) => b.id === targetBoneId)) return;
+    if (targetBoneId === s.ikPickBoneId || targetBoneId === s.ikPickChildBoneId) return; // 目标骨不能是受约束骨自己
+    set({ ikPickTargetBoneId: targetBoneId });
+  },
+  // 仿 Spine：点空白画布 → 新建一根「target n」骨（挂在 root 骨下 / 长度 0 = 可拖手柄），设为目标
+  createIkTargetBone: (worldX, worldY) => {
+    const s = get();
+    // target 序号：统计已有以 "target" 开头的骨名 → target 1 / target 2 …
+    const n = s.bones.filter((b) => /^target\b/i.test(b.name)).length + 1;
+    const id = genBoneId();
+    // ★ 引擎骨架只支持一个根骨（parentId === null），多根骨不会被绘制。
+    //   目标骨必须挂在现有根骨下（对齐 Spine：层级树里 target 出现在 root 之下）。
+    const rootBone = s.bones.find((b) => b.parentId === null);
+    const parentId = rootBone ? rootBone.id : null;
+    // 把世界坐标 (worldX, worldY) 换算成相对父骨（根骨）的 local 坐标：
+    //   local = S⁻¹ · R⁻¹ · (world - rootOrigin)
+    let lx = worldX, ly = worldY;
+    if (rootBone) {
+      const dx = worldX - rootBone.x;
+      const dy = worldY - rootBone.y;
+      const rot = rootBone.rotation;
+      const cosR = Math.cos(-rot), sinR = Math.sin(-rot);
+      const rx = dx * cosR - dy * sinR;
+      const ry = dx * sinR + dy * cosR;
+      lx = rootBone.scaleX !== 0 ? rx / rootBone.scaleX : rx;
+      ly = rootBone.scaleY !== 0 ? ry / rootBone.scaleY : ry;
+    }
+    s.pushHistory();
+    set((st) => ({
+      bones: [
+        ...st.bones,
+        {
+          id,
+          name: `target ${n}`,
+          parentId,
+          x: lx, y: ly,
+          rotation: 0, scaleX: 1, scaleY: 1,
+          length: 0,               // 长度 0 → 画布上只是一个可拖动的小手柄
+          slotId: null,
+        },
+      ],
+      // 选中新目标骨，便于画布拖动 / 层级树高亮
+      selectedBoneId: id,
+      selectedBoneIds: [id],
+      ikPickTargetBoneId: id,
+    }));
     return id;
   },
   removeConstraint: (id) => {
@@ -1497,6 +1640,49 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     get().pushHistory();
     set((st) => ({
       constraints: st.constraints.map((c) => (c.id === id ? { ...c, name: trimmed } : c)),
+    }));
+  },
+  /**
+   * 重命名一根骨骼。空字符串忽略；与现有同名也忽略。
+   * 推入撤销栈（pushHistory），便于 Cmd+Z。
+   */
+  renameBone: (id, name) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const s = get();
+    const b = s.bones.find((x) => x.id === id);
+    if (!b || b.name === trimmed) return;
+    s.pushHistory();
+    set((st) => ({
+      bones: st.bones.map((x) => (x.id === id ? { ...x, name: trimmed } : x)),
+    }));
+  },
+  /**
+   * 重命名一个插槽。空字符串忽略；同名忽略。
+   * 不入撤销栈：HistorySnapshot 暂未含 slots 字段，避免"撤销只回骨不回名"的半残体验。
+   */
+  renameSlot: (id, name) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const s = get();
+    const sl = s.slots.find((x) => x.id === id);
+    if (!sl || sl.name === trimmed) return;
+    set((st) => ({
+      slots: st.slots.map((x) => (x.id === id ? { ...x, name: trimmed } : x)),
+    }));
+  },
+  /**
+   * 重命名一个素材附件（PixiBonesLayer）。空字符串忽略；同名忽略。
+   * 不入撤销栈（同上，HistorySnapshot 暂未含 images）。
+   */
+  renameAttachment: (id, name) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const s = get();
+    const a = s.images.find((x) => x.id === id);
+    if (!a || a.name === trimmed) return;
+    set((st) => ({
+      images: st.images.map((x) => (x.id === id ? { ...x, name: trimmed } : x)),
     }));
   },
   setConstraintTarget: (id, targetBoneId) => {
@@ -1692,6 +1878,86 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       }));
     }
   },
+  /**
+   * 新建项目：清空当前工程**全部**数据，重置为一个全新工程（只有一个 root 骨 + 一个默认动画）。
+   * 与 openProject 的区别：openProject 只在 bones 为空时建 root（从欢迎页进入用），
+   * 而 newProject 无条件清空当前工程（编辑器里「主菜单 → 新建项目」用）。
+   */
+  newProject: (name) => {
+    const trimmed = name.trim() || 'untitled';
+    const id = `proj-${Date.now().toString(36)}`;
+    const rootId = genBoneId();
+    // 重置所有工程数据 + 清掉各种编辑中/拾取中的临时态
+    set({
+      currentProjectId: id,
+      projectName: trimmed,
+      // —— 素材 / 插槽 / 绑定 ——
+      psd: null,
+      images: [],
+      slots: [],
+      slotVisibility: {},
+      slotTransforms: {},
+      slotStyle: {},
+      attachmentStyle: {},
+      attachmentMeshes: {},
+      slotOrder: [],
+      slotBindings: {},
+      // —— 骨骼 ——
+      bones: [{
+        id: rootId,
+        name: 'root',
+        parentId: null,
+        x: 0, y: 0,
+        rotation: 0,
+        scaleX: 1, scaleY: 1,
+        length: 0,
+        slotId: null,
+      }],
+      selectedBoneId: rootId,
+      selectedBoneIds: [rootId],
+      // —— 动画 ——
+      animations: [{ id: genAnimId(), name: 'Animation', duration: 1, tracks: [] }],
+      activeAnimationId: null,
+      setupPose: {},
+      constraintRuntimeMix: {},
+      currentTime: 0,
+      playing: false,
+      // —— IK 约束 ——
+      constraints: [],
+      selectedConstraintId: null,
+      // —— 各种选中态清零 ——
+      selectedSlotId: null,
+      selectedSlotIds: [],
+      selectedAttachmentId: null,
+      selectedRowKey: null,
+      selectedSectionKey: null,
+      // —— 编辑中 / 拾取中的临时态一律清零 ——
+      meshEditSlotId: null,
+      meshSelectedVertices: [],
+      meshNewPolygon: null,
+      meshWireframe: {},
+      attachingSlotId: null,
+      ikPickBoneId: null,
+      ikPickChildBoneId: null,
+      ikPickTargetBoneId: null,
+      weightBindMode: false,
+      weightMeshId: null,
+      traceDialogOpen: false,
+      traceLivePreview: false,
+      traceSnapshot: null,
+      // —— 撤销栈清空（新项目是新起点，不允许撤销回旧工程）——
+      historyPast: [],
+      historyFuture: [],
+    });
+    // id 计数器对齐（新项目只有 1 根骨 / 1 个动画，无插槽）
+    syncIdCounters(
+      [rootId],
+      [],
+      [get().animations[0]?.id].filter((x): x is string => !!x),
+    );
+    _constraintIdCounter = 0;
+    get().pushRecentProject(id, trimmed);
+  },
   closeProject:     () => set({ currentProjectId: null, selectedBoneId: null, selectedBoneIds: [] }),
   /**
    * 载入一份已保存的工程：一次性覆盖全部工程态，并清掉撤销栈与各种"编辑中"临时状态。
@@ -1731,6 +1997,9 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       meshSelectedVertices: [],
       meshNewPolygon: null,
       attachingSlotId: null,
+      ikPickBoneId: null,
+      ikPickChildBoneId: null,
+      ikPickTargetBoneId: null,
       weightBindMode: false,
       weightMeshId: null,
       traceDialogOpen: false,
@@ -1948,8 +2217,20 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     const anim = s.animations.find((a) => a.id === s.activeAnimationId);
     const dur = anim?.duration ?? 0;
     const ct = dur > 0 ? Math.min(dur, Math.max(0, t)) : Math.max(0, t);
-    set({ currentTime: ct });
-    if (s.editorTab === 'animate') get().applyActiveAnimation();
+    if (s.editorTab === 'animate' && anim && dur > 0) {
+      // ★ 合并为一次 set：currentTime + bones + constraintRuntimeMix 一起写。
+      //   原来 set(currentTime) + applyActiveAnimation→set(bones) 触发**两次** subscribe
+      //   （播放时每帧 2 次全量重画）。现在只触发一次。
+      const next = sampleAnimationPose(anim, s.setupPose, s.bones, ct);
+      const mixes = sampleConstraintMixes(anim, ct);
+      set({
+        currentTime: ct,
+        ...(next ? { bones: next } : {}),
+        ...(Object.keys(mixes).length > 0 ? { constraintRuntimeMix: mixes } : {}),
+      });
+    } else {
+      set({ currentTime: ct });
+    }
   },
   stepFrame: (dir) => {
     const s = get();
@@ -1976,8 +2257,12 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     s.pushHistory();
     const t = Math.max(0, time);
     const tracks = upsertTrackKey(anim.tracks, boneId, property, t, value);
-    set((st) => ({ animations: st.animations.map((a) => (a.id === anim.id ? { ...a, tracks } : a)) }));
-    get().applyActiveAnimation();
+    // ★ 合并采样进同一次 set（避免 applyActiveAnimation 二次 set → 二次 subscribe）
+    const withAnim = { ...anim, tracks };
+    set((st) => ({
+      animations: st.animations.map((a) => (a.id === anim.id ? withAnim : a)),
+      ...buildAnimPatch(s, withAnim),
+    }));
   },
   removeKeyframe: (boneId, property, time) => {
     const s = get();
@@ -1993,8 +2278,11 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
         return { ...x, keys };
       })
       .filter((x) => x.keys.length > 0);
-    set((st) => ({ animations: st.animations.map((a) => (a.id === anim.id ? { ...a, tracks } : a)) }));
-    get().applyActiveAnimation();
+    const withAnim = { ...anim, tracks };
+    set((st) => ({
+      animations: st.animations.map((a) => (a.id === anim.id ? withAnim : a)),
+      ...buildAnimPatch(s, withAnim),
+    }));
   },
   moveKeyframe: (boneId, property, fromTime, toTime) => {
     const s = get();
@@ -2017,8 +2305,11 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     if (isConstraintTrack) {
       tracks = tracks.map((tr) => (tr.boneId === boneId && tr.property === property ? { ...tr, constraintMix: true } : tr));
     }
-    set((st) => ({ animations: st.animations.map((a) => (a.id === anim.id ? { ...a, tracks } : a)) }));
-    get().applyActiveAnimation();
+    const withAnim = { ...anim, tracks };
+    set((st) => ({
+      animations: st.animations.map((a) => (a.id === anim.id ? withAnim : a)),
+      ...buildAnimPatch(s, withAnim),
+    }));
   },
   recordBoneEdits: (boneId, props) => {
     const s = get();
@@ -2032,19 +2323,20 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     for (const p of props) {
       tracks = upsertTrackKey(tracks, boneId, p, t, bone[p]);
     }
-    set((st) => ({ animations: st.animations.map((a) => (a.id === anim.id ? { ...a, tracks } : a)) }));
-    get().applyActiveAnimation();
+    const withAnim = { ...anim, tracks };
+    set((st) => ({
+      animations: st.animations.map((a) => (a.id === anim.id ? withAnim : a)),
+      ...buildAnimPatch(s, withAnim),
+    }));
   },
   applyActiveAnimation: () => {
     const s = get();
     if (s.editorTab !== 'animate') return;
     const anim = s.animations.find((a) => a.id === s.activeAnimationId);
     if (!anim) return;
-    const next = sampleAnimationPose(anim, s.setupPose, s.bones, s.currentTime);
-    if (next) set({ bones: next });
-    // 采样约束 mix 轨道 → 运行时值（渲染 IK 时覆盖 constraints[].mix）
-    const mixes = sampleConstraintMixes(anim, s.currentTime);
-    if (Object.keys(mixes).length > 0) set({ constraintRuntimeMix: mixes });
+    // ★ 合并 bones + constraintRuntimeMix 进同一次 set（避免二次 subscribe）
+    const patch = buildAnimPatch(s, anim);
+    if (Object.keys(patch).length > 0) set(patch);
   },
   setConstraintMixKeyframe: (constraintId, time, value) => {
     const s = get();
@@ -2055,8 +2347,11 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     // 复用 upsertTrackKey：constraintMix 轨道 boneId = 约束 id，property = 'mix'
     const tracks = upsertTrackKey(anim.tracks, constraintId, 'mix' as AnimProperty, t, value)
       .map((tr) => (tr.boneId === constraintId && tr.property === 'mix' ? { ...tr, constraintMix: true } : tr));
-    set((st) => ({ animations: st.animations.map((a) => (a.id === anim.id ? { ...a, tracks } : a)) }));
-    get().applyActiveAnimation();
+    const withAnim = { ...anim, tracks };
+    set((st) => ({
+      animations: st.animations.map((a) => (a.id === anim.id ? withAnim : a)),
+      ...buildAnimPatch(s, withAnim),
+    }));
   },
   removeConstraintMixKeyframe: (constraintId, time) => {
     const s = get();
@@ -2070,8 +2365,11 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
         return { ...x, keys };
       })
       .filter((x) => x.keys.length > 0);
-    set((st) => ({ animations: st.animations.map((a) => (a.id === anim.id ? { ...a, tracks } : a)) }));
-    get().applyActiveAnimation();
+    const withAnim = { ...anim, tracks };
+    set((st) => ({
+      animations: st.animations.map((a) => (a.id === anim.id ? withAnim : a)),
+      ...buildAnimPatch(s, withAnim),
+    }));
   },
 
   // Day 2 setters
@@ -2331,8 +2629,24 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     selectedSlotIds: [],
     selectedAttachmentId: null,
     selectedRowKey: null,
+    selectedConstraintId: null,
     attachingSlotId: null,
   }),
+  selectConstraint: (id) => {
+    const s = get();
+    if (!s.constraints.some((c) => c.id === id)) return;
+    set({
+      selectedConstraintId: id,
+      selectedSectionKey: 'constraints',
+      selectedBoneId: null,
+      selectedBoneIds: [],
+      selectedSlotId: null,
+      selectedSlotIds: [],
+      selectedAttachmentId: null,
+      selectedRowKey: null,
+      attachingSlotId: null,
+    });
+  },
   // ★ 层级树顶部「动画」节点（当前动画名）被选中：高亮该行，同时清空骨骼/素材/分区选中
   selectAnimationNode: () => set({
     selectedRowKey: 'animation',

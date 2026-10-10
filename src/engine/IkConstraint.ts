@@ -94,14 +94,18 @@ function solveTwoBone(skeleton: Skeleton, ctx: IkSolveContext): void {
   if (!child) { solveSingleBone(skeleton, ctx); return; }
 
   const pa = worldPos(parent);      // 关节 A（parent 原点）
-  const pb = worldPos(child);       // 关节 B（parent 末端 = child 原点）
+  const pb = worldPos(child);       // 关节 B（child 原点 = parent 末端）
   const tip = worldTip(child);      // C（child 末端）
   const t = worldPos(target);       // 目标点
 
-  const a = parent.length;          // 第一节长度
-  const b = child.length;           // 第二节长度
-  const ab = Math.sqrt((pb.x - pa.x) ** 2 + (pb.y - pa.y) ** 2);
-  const at = Math.sqrt((t.x - pa.x) ** 2 + (t.y - pa.y) ** 2);
+  // ★ 用「实际世界长度」作为三角形边长（对齐 Spine：a = child.length × worldScaleX，
+  //   b = parent.length × worldScaleX）。直接测世界距离能自动包含 scale / shear，
+  //   避免骨骼缩放时余弦定理算错角。
+  const a = Math.hypot(pb.x - pa.x, pb.y - pa.y);    // 第一节实际长度（A→B）
+  const b = Math.hypot(tip.x - pb.x, tip.y - pb.y);  // 第二节实际长度（B→C）
+  const at = Math.hypot(t.x - pa.x, t.y - pa.y);     // A→T 距离
+
+  if (a <= 0 || b <= 0 || at <= 0) { solveSingleBone(skeleton, ctx); return; }
 
   // 余弦定理：求 parent 应转过的角度（∠A 的变化）
   // 三角形 APT 中：边 AT 对面是 angle 1（在 A 点）
@@ -111,26 +115,20 @@ function solveTwoBone(skeleton: Skeleton, ctx: IkSolveContext): void {
 
   // 当前 parent 指向 target 的角度
   const parentToTarget = Math.atan2(t.y - pa.y, t.x - pa.x);
-  // 当前 parent 的世界旋转角
-  const parentRot = worldRotation(parent);
   // parent 应旋转到：指向 target 且按 bendDirection 弯曲
-  //   bendDirection=1（逆时针）：parent 指向 target 再逆时针偏 angle1
-  //   即 targetRot = parentToTarget + bendDirection * angle1
-  const desiredParentRot = parentToTarget + bendDirection * angle1;
+  // ★ Y 轴翻转修正：本引擎是 Pixi 屏幕坐标系（Y 向下），Spine 编辑器是 Y 向上，
+  //   atan2 的角度方向恰好相反 → bendDirection 的视觉弯曲方向镜像。
+  //   这里取「- bendDirection」让视觉表现与 Spine 编辑器一致。
+  const desiredParentRot = parentToTarget - bendDirection * angle1;
 
   // 应用 mix 并写回 parent
   setWorldRotation(skeleton, parent, desiredParentRot, mix);
 
   // 现在 parent 已旋转，child 的世界位置变化了，需要重算
-  const p2 = worldPos(parent);
   const c2 = worldPos(child);
 
-  // 三角形 BC: child 应旋转使 C 指向 T
+  // child 应旋转使 C 指向 T（指向 target = 末端精确落在 target 上）
   const cToT = Math.atan2(t.y - c2.y, t.x - c2.x);
-  const childRot = worldRotation(child);
-  // 期望 child 世界旋转 = 指向 target
-  // 弯曲：child 相对 parent 的旋转由 bendDirection 决定，
-  // 我们让 child 直接指向 target（C→T 方向），这样末端精确落在 target 上
   setWorldRotation(skeleton, child, cToT, mix);
 }
 
