@@ -3708,12 +3708,20 @@ export function BoneEditor() {
           a.stage.removeChild(rect);
           rect.destroy();
         } else if (dragState.kind === 'pan') {
-          // 创建模式下「单击右键」= 自动回到姿势模式（拖动平移不算单击）
+          // 右键释放（拖动平移不算单击）
           const dx = ev.global.x - dragState.startScreen.x;
           const dy = ev.global.y - dragState.startScreen.y;
           const store = usePixiBonesStore.getState();
-          if (Math.hypot(dx, dy) <= 4 && store.editorMode === 'create') {
-            store.setEditorMode('pose');
+          if (Math.hypot(dx, dy) <= 4) {
+            // ★ 单击右键空白处 = 回到上一个激活的工具（对齐 Spine：7 个工具
+            //   姿势/权重/创建/旋转/移动/缩放/倾斜 之间来回切换）
+            const st2 = usePixiBonesStore.getState();
+            if (st2.prevTool) {
+              st2.setTool(st2.prevTool);
+            } else {
+              // 没有上一个工具（首次激活某个工具）→ 回到 pose
+              st2.setTool('pose');
+            }
           }
         }
         // ★ 动画 tab：骨骼变换拖动结束后，把最终值在 currentTime 写关键帧（一次拖动合并为一步历史）

@@ -7,6 +7,9 @@ import type { Locale } from './i18n';
 export type ViewMode = 'editor' | 'demo';
 export type EditorTab = 'setup' | 'animate';
 
+/** 7 个可切换的工具：姿势 / 权重 / 创建 / 旋转 / 移动 / 缩放 / 倾斜（对齐 Spine） */
+export type EditorTool = 'pose' | 'weights' | 'create' | 'rotate' | 'move' | 'scale' | 'shear';
+
 // =================================================================================
 //  动画数据模型（可序列化，随工程保存 / 载入）
 //    Spine 语义：每根骨骼按「属性」分轨道，每条轨道一串关键帧。
@@ -579,6 +582,8 @@ export interface PixiBonesState {
   viewIssues:         boolean; toggleViewIssues:         () => void;
   viewPreview:        boolean; toggleViewPreview:        () => void;
   viewAllHidden:      boolean; setViewAllHidden:         (v: boolean) => void;
+  /** "隐藏所有视图"前一刻已经开启的面板（viewDockOrder 的子集）—— 用于再次点击按钮时全部恢复 */
+  lastOpenedDockOrder: string[];
   /**
    * 右侧停靠区里「视图面板」的**首次出现顺序**（仿 Spine 停靠规则）：
    * 越早出现的越靠右，后出现的依次往左排。
@@ -593,6 +598,16 @@ export interface PixiBonesState {
   transformSpace: 'local' | 'world';
   /** 工具栏上「旋转 / 移动 / 缩放 / 倾斜」四张卡片的当前激活工具 */
   activeTool: 'rotate' | 'move' | 'scale' | 'shear' | null;
+  /** 上一个被激活的 transform 工具（用于右键空白处回退）。
+   *  由 setActiveTool setter 自动维护：每次切到新工具时把上一个记下来。 */
+  prevActiveTool: 'rotate' | 'move' | 'scale' | 'shear' | null;
+  /** 7 个工具的统一定义（姿势/权重/创建/旋转/移动/缩放/倾斜）。
+   *  用于右键空白处在"最近两个工具"之间来回切换（对齐 Spine）。 */
+  setTool: (t: EditorTool) => void;
+  /** 上一次 setTool 切走的工具（右键空白处回退用）。 */
+  prevTool: EditorTool | null;
+  /** 当前激活的工具（由 editorMode + activeTool 推导，快捷读取）。 */
+  currentTool: EditorTool;
   /** 当前项目名（默认 raptor-pro，可被 setProjectName 覆盖，如导入 PSD 后用文件名） */
   projectName: string;
   setProjectName: (name: string) => void;
@@ -699,6 +714,16 @@ function genBoneId(): string {
 // ---- 工具：在 bones 数组里找节点 ----
 function findBone(nodes: BoneNode[], id: string): BoneNode | null {
   return nodes.find((n) => n.id === id) ?? null;
+}
+
+/** 由 editorMode + activeTool 推导出"当前 7 个工具之一"（setTool / setActiveTool / setEditorMode 共用） */
+function currentToolOf(
+  editorMode: 'idle' | 'pose' | 'weights' | 'create',
+  activeTool: 'rotate' | 'move' | 'scale' | 'shear' | null,
+): EditorTool {
+  if (activeTool) return activeTool;
+  if (editorMode === 'idle') return 'pose'; // idle 且无 activeTool 视为 pose
+  return editorMode as EditorTool;
 }
 
 /** 收集某骨及其所有后代 id（用于级联删除）。 */
@@ -1814,6 +1839,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   viewIssues:      false, toggleViewIssues:      () => set((s) => ({ viewIssues:     !s.viewIssues })),
   viewPreview:     false, toggleViewPreview:     () => set((s) => ({ viewPreview:    !s.viewPreview })),
   viewAllHidden:   false, setViewAllHidden:      (v) => set({ viewAllHidden: v }),
+  lastOpenedDockOrder: [],
   viewDockOrder: [],
   dockPanelWidths: { ...DOCK_PANEL_DEFAULT_WIDTH },
   setDockPanelWidth: (key, w) => set((s) => ({ dockPanelWidths: { ...s.dockPanelWidths, [key]: w } })),
@@ -1867,6 +1893,9 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   editorMode: 'idle',
     transformSpace: 'local',
     activeTool: 'rotate',
+    prevActiveTool: null,
+    currentTool: 'rotate',
+    prevTool: null,
   viewport: { panX: 0, panY: 0, zoom: 1 },
   render: { x: 0, y: 0, scale: 1 },
   /** 图层 → 骨骼 的绑定表：key = slotId。语义见 SlotBinding 注释。 */
@@ -2022,6 +2051,9 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       weightsRestorePending: false,
       viewGridToolMinimized: false,
       viewWeightsMinimized: false,
+      lastOpenedDockOrder: [],
+      viewAllHidden: false,
+      prevActiveTool: null,
     });
     // id 计数器对齐（新项目只有 1 根骨 / 1 个动画，无插槽）
     syncIdCounters(
@@ -2742,27 +2774,68 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
 //   - 选 mode ⇒ editorMode = m，activeTool = null
 //   - 选 transform tool ⇒ activeTool = t，editorMode = 'idle'
 // 调用方不需要关心互斥，store 自动保证两者只有一个高亮。
-setEditorMode: (m) => set({
-  editorMode: m,
-  activeTool: null,
-  // ★ 姿势模式下画布上的图层不可选：进入 pose 时清空图层选中（避免高亮残留）
-  ...(m === 'pose'
-    ? { selectedSlotId: null, selectedSlotIds: [], selectedAttachmentId: null, selectedRowKey: null }
-    : {}),
+setTool: (t) => set((s) => {
+  // ★ 7 个工具的统一切换（对齐 Spine：右键在最近两个工具之间来回切换）
+  //   - 切到不同的工具：把当前工具记为 prevTool
+  //   - 切到相同工具：no-op，不更新 prevTool（保持"上一工具"稳定）
+  const cur = currentToolOf(s.editorMode, s.activeTool);
+  const prev = t === cur ? s.prevTool : cur;
+  // 按工具类型分别设置 editorMode / activeTool
+  const isMode = t === 'pose' || t === 'weights' || t === 'create';
+  return {
+    currentTool: t,
+    prevTool: prev,
+    editorMode: (isMode ? t : 'idle') as 'pose' | 'weights' | 'create' | 'idle',
+    activeTool: (isMode ? null : t) as 'rotate' | 'move' | 'scale' | 'shear' | null,
+    // ★ 进入 pose 或激活变换工具时：清空图层选中（避免高亮残留）
+    ...((t === 'pose' || !isMode)
+      ? { selectedSlotId: null, selectedSlotIds: [], selectedAttachmentId: null, selectedRowKey: null }
+      : {}),
+  };
 }),
-setActiveTool: (t) => set((s) => ({
-  activeTool: t,
-  // 选 transform tool 时退出 pose/weights/create；其他情况保持现状
-  editorMode: t !== null ? 'idle' as const : 'pose' as const,
-  // 关闭 transform tool ⇒ 回到 pose ⇒ 同样清空图层选中
-  ...(t === null
-    ? { selectedSlotId: null, selectedSlotIds: [], selectedAttachmentId: null, selectedRowKey: null }
-    : {}),
-  // ★ 激活变换工具时：若骨骼与图层同时被选中，以骨骼为主（清掉图层）
-  ...(t !== null && s.selectedBoneIds.length > 0
-    ? { selectedSlotId: null, selectedSlotIds: [], selectedAttachmentId: null, selectedRowKey: null }
-    : {}),
-})),
+setEditorMode: (m) => set((s) => {
+  const cur = currentToolOf(s.editorMode, s.activeTool);
+  const prev = m === cur ? s.prevTool : cur;
+  return {
+    editorMode: m,
+    activeTool: null,
+    currentTool: m as EditorTool,
+    prevTool: prev,
+    // ★ 姿势模式下画布上的图层不可选：进入 pose 时清空图层选中（避免高亮残留）
+    ...(m === 'pose'
+      ? { selectedSlotId: null, selectedSlotIds: [], selectedAttachmentId: null, selectedRowKey: null }
+      : {}),
+  };
+}),
+setActiveTool: (t) => set((s) => {
+  // ★ 维护"上一个工具"：仅当切换到不同的 transform tool 时记录，
+  //   这样右键空白处可以回退到前一个。
+  //   - 从 A 切到 B（A≠null）：把 A 记为 prev
+  //   - 从 B 切到 null：保留 prev 不变（再按右键还能回到 B）
+  //   - 切到相同的工具：no-op，不更新 prev
+  let prev = s.prevActiveTool;
+  if (t !== null && t !== s.activeTool && s.activeTool !== null) {
+    prev = s.activeTool;
+  }
+  const cur = currentToolOf(s.editorMode, s.activeTool);
+  const nextTool: EditorTool = t ?? 'pose';
+  return {
+    activeTool: t,
+    prevActiveTool: prev,
+    currentTool: nextTool,
+    prevTool: t === cur ? s.prevTool : cur,
+    // 选 transform tool 时退出 pose/weights/create；其他情况保持现状
+    editorMode: t !== null ? 'idle' as const : 'pose' as const,
+    // 关闭 transform tool ⇒ 回到 pose ⇒ 同样清空图层选中
+    ...(t === null
+      ? { selectedSlotId: null, selectedSlotIds: [], selectedAttachmentId: null, selectedRowKey: null }
+      : {}),
+    // ★ 激活变换工具时：若骨骼与图层同时被选中，以骨骼为主（清掉图层）
+    ...(t !== null && s.selectedBoneIds.length > 0
+      ? { selectedSlotId: null, selectedSlotIds: [], selectedAttachmentId: null, selectedRowKey: null }
+      : {}),
+  };
+}),
   setTransformSpace: (s) => set({ transformSpace: s }),
   setViewport: (v) => set({ viewport: v }),
   setRender: (r) => set({ render: r }),

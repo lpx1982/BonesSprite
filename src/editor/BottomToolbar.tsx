@@ -80,9 +80,8 @@ const T = {
  */
 export function BottomToolbar() {
   const editorMode = usePixiBonesStore((s) => s.editorMode);
-  const setEditorMode = usePixiBonesStore((s) => s.setEditorMode);
+  const setTool = usePixiBonesStore((s) => s.setTool);
   const activeTool = usePixiBonesStore((s) => s.activeTool);
-  const setActiveTool = usePixiBonesStore((s) => s.setActiveTool);
   const transformSpace = usePixiBonesStore((s) => s.transformSpace);
   const setTransformSpace = usePixiBonesStore((s) => s.setTransformSpace);
   const bones = usePixiBonesStore((s) => s.bones);
@@ -250,24 +249,32 @@ export function BottomToolbar() {
             icon={<IconPose />}
             label={t('toolbar.mode_pose')}
             active={editorMode === 'pose'}
-            onClick={() => setEditorMode('pose')}
+            onClick={() => {
+              const st = usePixiBonesStore.getState();
+              // 点击当前激活的工具 = 保持 pose（只有"右键空白处"才回退到上一个工具）
+              if (st.currentTool !== 'pose') setTool('pose');
+            }}
           />
           <ModeButton
             icon={<IconWeights />}
             label={t('toolbar.mode_weights')}
             active={editorMode === 'weights'}
             onClick={() => {
-              setEditorMode('weights');
-              // ★ 底部「权重」按钮也打开右侧权重面板（与视图菜单「权重」同效果）
               const st = usePixiBonesStore.getState();
-              if (!st.viewWeights) st.toggleViewWeights();
+              if (st.currentTool !== 'weights') setTool('weights');
+              // ★ 底部「权重」按钮也打开右侧权重面板（与视图菜单「权重」同效果）
+              const st2 = usePixiBonesStore.getState();
+              if (!st2.viewWeights) st2.toggleViewWeights();
             }}
           />
           <ModeButton
             icon={<IconCreate />}
             label={t('toolbar.mode_create')}
             active={editorMode === 'create'}
-            onClick={() => setEditorMode('create')}
+            onClick={() => {
+              const st = usePixiBonesStore.getState();
+              if (st.currentTool !== 'create') setTool('create');
+            }}
           />
         </Card>
           {/* 卡片 2：transform 值（4 行） */}
@@ -494,8 +501,7 @@ function TransformRow({
   // 钥匙按钮自身锁死与否取决于外部 editorTab（设置 / 动画）
   const [hoverLeft, setHoverLeft] = useState(false);
   const [hoverMid, setHoverMid] = useState(false);
-  const activeTool = usePixiBonesStore((s) => s.activeTool);
-  const setActiveTool = usePixiBonesStore((s) => s.setActiveTool);
+  const setTool = usePixiBonesStore((s) => s.setTool);
   const editorTab = usePixiBonesStore((s) => s.editorTab);
   // 关键帧锁：设置 tab 锁死（深灰、不可点）；动画 tab 可开关。
   //   true = 变换骨骼时自动在 currentTime 写关键帧（亮绿）；false = 不写（灰绿、hover 可点亮）
@@ -530,9 +536,12 @@ function TransformRow({
           hover={hoverable && hoverLeft}
           onHoverChange={hoverable ? setHoverLeft : () => {}}
           onClick={() => {
-            // 工具栏点击 = 切换 activeTool；点击激活中的那个则取消激活（再点一下恢复 Pose 自由拖动）
-            const k = transformType ?? activeTool;
-            setActiveTool(activeTool === k ? null : k);
+            // 工具栏点击 = 切到该工具；点击当前已激活的 = 什么都不做（保持当前）。
+            // 只有"右键空白处"才回退到上一个工具。
+            const k = transformType;
+            const st = usePixiBonesStore.getState();
+            if (st.currentTool === k) return;
+            setTool(k);
           }}
           height={T.ROW_HEIGHT}
           minWidth={T.LABEL_BOX_WIDTH}

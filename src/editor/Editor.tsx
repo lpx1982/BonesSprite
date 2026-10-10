@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState, type CSSProperties } from 'react';
-import { usePixiBonesStore, DOCK_PANEL_DEFAULT_WIDTH, DOCK_PANEL_MIN_WIDTH, DOCK_RESIZER_WIDTH } from './store';
+import { usePixiBonesStore, DOCK_PANEL_DEFAULT_WIDTH, DOCK_PANEL_MIN_WIDTH, DOCK_RESIZER_WIDTH, type EditorTool } from './store';
 import { HierarchyPanel } from './HierarchyPanel';
 import { BoneEditor } from './BoneEditor';
 import { BottomToolbar } from './BottomToolbar';
@@ -45,23 +45,70 @@ export function Editor() {
   const viewWeightsMinimized  = usePixiBonesStore((s) => s.viewWeightsMinimized);
   const setViewGridToolMinimized = usePixiBonesStore((s) => s.setViewGridToolMinimized);
   const setViewWeightsMinimized  = usePixiBonesStore((s) => s.setViewWeightsMinimized);
-  // hideviews 总开关：开启时把 10 个单项 toggle 全部关掉
-  const toggleAll = () => setViewAllHidden(!viewAllHidden);
+  // hideviews 总开关：开启时把 10 个单项 toggle 全部关掉；再次点击 = 全部恢复
+  const toggleAll = () => {
+    const cur = usePixiBonesStore.getState();
+    if (!viewAllHidden) {
+      // 当前 → 全部隐藏：先把"已开启的面板"快照下来，下次点击恢复
+      const opened: string[] = [];
+      if (cur.viewHierarchy) opened.push('hierarchy');
+      if (cur.viewWeights)   opened.push('weights');
+      if (cur.viewSkin)      opened.push('skin');
+      if (cur.viewGridTool)  opened.push('grid_tool');
+      if (cur.viewColor)     opened.push('color');
+      if (cur.viewAnimation) opened.push('animation');
+      if (cur.viewIndicators) opened.push('indicators');
+      if (cur.viewOutline)   opened.push('outline');
+      if (cur.viewIssues)    opened.push('issues');
+      if (cur.viewPreview)   opened.push('preview');
+      cur.lastOpenedDockOrder = opened;
+      cur.viewAllHidden = true;
+      // 触发 useEffect（依赖 viewAllHidden）去执行关面板的实际逻辑
+      cur.setViewAllHidden(true);
+    } else {
+      // 已隐藏 → 全部恢复：按快照把 view 标记 / dock / 最小化状态全部还原
+      const toOpen = cur.lastOpenedDockOrder;
+      cur.viewAllHidden = false;
+      cur.setViewAllHidden(false);
+      const reopen = (k: string) => {
+        if (k === 'hierarchy' && !cur.viewHierarchy) cur.toggleViewHierarchy();
+        if (k === 'hierarchy' && !cur.showRightPanel) cur.toggleRightPanel();
+        if (k === 'grid_tool' && !cur.viewGridTool) cur.toggleViewGridTool();
+        if (k === 'weights' && !cur.viewWeights) cur.toggleViewWeights();
+        if (k === 'skin' && !cur.viewSkin) cur.toggleViewSkin();
+        if (k === 'color' && !cur.viewColor) cur.toggleViewColor();
+        if (k === 'animation' && !cur.viewAnimation) cur.toggleViewAnimation();
+        if (k === 'indicators' && !cur.viewIndicators) cur.toggleViewIndicators();
+        if (k === 'outline' && !cur.viewOutline) cur.toggleViewOutline();
+        if (k === 'issues' && !cur.viewIssues) cur.toggleViewIssues();
+        if (k === 'preview' && !cur.viewPreview) cur.toggleViewPreview();
+      };
+      toOpen.forEach(reopen);
+      cur.setViewGridToolMinimized(false);
+      cur.setViewWeightsMinimized(false);
+    }
+  };
 
   // 当 viewAllHidden 从 false→true 时，自动关掉所有单项
   useEffect(() => {
     if (!viewAllHidden) return;
     const s = usePixiBonesStore.getState();
-    if (s.viewWeights)    s.toggleViewWeights();
-    if (s.viewSkin)       s.toggleViewSkin();
-    if (s.viewGridTool)   s.toggleViewGridTool();
-    if (s.viewColor)      s.toggleViewColor();
-    if (s.viewAnimation)  s.toggleViewAnimation();
-    if (s.viewHierarchy)  s.toggleViewHierarchy();
-    if (s.viewIndicators) s.toggleViewIndicators();
-    if (s.viewOutline)    s.toggleViewOutline();
-    if (s.viewIssues)     s.toggleViewIssues();
-    if (s.viewPreview)    s.toggleViewPreview();
+    // 层级树面板：关 view 标记 + 折叠 dock + 清最小化（让"全部隐藏"彻底生效）
+    if (s.viewHierarchy) {
+      s.toggleViewHierarchy();
+      if (s.showRightPanel) s.toggleRightPanel();
+    }
+    if (s.viewWeights)         s.toggleViewWeights();
+    if (s.viewSkin)            s.toggleViewSkin();
+    if (s.viewGridTool)        s.toggleViewGridTool();
+    if (s.viewColor)           s.toggleViewColor();
+    if (s.viewAnimation)       s.toggleViewAnimation();
+    if (s.viewIndicators)      s.toggleViewIndicators();
+    if (s.viewOutline)         s.toggleViewOutline();
+    if (s.viewIssues)          s.toggleViewIssues();
+    if (s.viewPreview)         s.toggleViewPreview();
+    s.setViewGridToolMinimized(false);
+    s.setViewWeightsMinimized(false);
   }, [viewAllHidden]);
 
   // 全局键盘快捷键：Cmd+Z / Ctrl+Z 撤销，Cmd+Shift+Z / Ctrl+Y 重做
@@ -87,6 +134,30 @@ export function Editor() {
           if (on) { if (!s2.viewHierarchy) s2.toggleViewHierarchy(); }
           else { if (s2.viewHierarchy) s2.toggleViewHierarchy(); }
           return;
+        }
+        // 工具卡片快捷键（仿 Spine 风格）：7 个工具统一走 setTool，
+        //   这样右键空白处能在最近两个工具之间来回切换。
+        //   R = 旋转 / M = 移动 / S = 缩放 / Z = 倾斜
+        //   B = 姿势 / G = 权重 / N = 创建
+        // ★ 用 e.code 物理键位，避免 IME / 中文输入法的干扰
+        if (!e.altKey && !e.shiftKey) {
+          const toolByCode: Record<string, EditorTool> = {
+            KeyR: 'rotate', KeyM: 'move', KeyS: 'scale', KeyZ: 'shear',
+            KeyB: 'pose', KeyG: 'weights', KeyN: 'create',
+          };
+          const tool = toolByCode[e.code];
+          if (tool) {
+            e.preventDefault();
+            const s = usePixiBonesStore.getState();
+            // 同一个工具再按一次 = 什么都不做（保持当前工具）。
+            // 只有"右键空白处"才回退到上一个工具。
+            if (s.currentTool === tool) return;
+            s.setTool(tool);
+            // 切到 weights 时自动打开权重视图（仿 Spine，底部卡片行为一致）
+            const s2 = usePixiBonesStore.getState();
+            if (tool === 'weights' && !s2.viewWeights) s2.toggleViewWeights();
+            return;
+          }
         }
         // Esc：退出「附件：设置父级」拾取 / IK 目标拾取 / 取消网格描绘 / 退出网格编辑
         if (key === 'Escape') {
@@ -188,33 +259,47 @@ export function Editor() {
         {/* header 右上角：hideviews / views 视图菜单（层级树面板由 views 菜单控制） */}
         <div className="ml-auto flex items-center gap-1">
           {/* ★ 视图面板"被最小化"的图标条：每个面板独立显示
-              点击 = 还原对应面板（动画由面板自身的 useEffect 播放） */}
-          {viewHierarchy && !showRightPanel && (
+              点击 = 还原对应面板（动画由面板自身的 useEffect 播放）
+              显示条件：
+                - 正常状态：单面板被用户主动最小化（view 标记仍 true + 被 minimized / showRightPanel false）
+                - 全隐藏状态（viewAllHidden）：所有面板都视为"已隐藏"，显示缩略图让用户点回 */}
+          {(viewHierarchy && !showRightPanel || viewAllHidden) && (
             <MinimizedIcon
               panelKey="hierarchy"
               paths={PANEL_ICONS.hierarchy.paths}
               color={PANEL_ICONS.hierarchy.color}
-              onClick={() => { setHierarchyRestorePending(true); toggleRightPanel(); }}
+              onClick={() => {
+                setHierarchyRestorePending(true);
+                toggleRightPanel();
+                // 如果处于"全隐藏"状态，先恢复 view 标记
+                if (!viewHierarchy) usePixiBonesStore.getState().toggleViewHierarchy();
+              }}
             />
           )}
-          {viewGridTool && viewGridToolMinimized && <MinimizedIcon
-            panelKey="grid_tool"
-            paths={PANEL_ICONS.grid_tool.paths}
-            color={PANEL_ICONS.grid_tool.color}
-            onClick={() => {
-              setGridRestorePending(true);
-              setViewGridToolMinimized(false);
-            }}
-          />}
-          {viewWeights && viewWeightsMinimized && <MinimizedIcon
-            panelKey="weights"
-            paths={PANEL_ICONS.weights.paths}
-            color={PANEL_ICONS.weights.color}
-            onClick={() => {
-              setWeightsRestorePending(true);
-              setViewWeightsMinimized(false);
-            }}
-          />}
+          {(viewGridTool && viewGridToolMinimized || viewAllHidden) && (
+            <MinimizedIcon
+              panelKey="grid_tool"
+              paths={PANEL_ICONS.grid_tool.paths}
+              color={PANEL_ICONS.grid_tool.color}
+              onClick={() => {
+                setGridRestorePending(true);
+                setViewGridToolMinimized(false);
+                if (!viewGridTool) usePixiBonesStore.getState().toggleViewGridTool();
+              }}
+            />
+          )}
+          {(viewWeights && viewWeightsMinimized || viewAllHidden) && (
+            <MinimizedIcon
+              panelKey="weights"
+              paths={PANEL_ICONS.weights.paths}
+              color={PANEL_ICONS.weights.color}
+              onClick={() => {
+                setWeightsRestorePending(true);
+                setViewWeightsMinimized(false);
+                if (!viewWeights) usePixiBonesStore.getState().toggleViewWeights();
+              }}
+            />
+          )}
           <button
             className="spine-btn-icon"
             onClick={toggleAll}
