@@ -4584,6 +4584,9 @@ export function BoneEditor() {
         ) {
           drawBones(state.bones, state.selectedBoneId, state.selectedBoneIds);
           drawSlotHandles(state.psd, state.images, state.slots, state.selectedSlotId, state.activeTool, state.slotTransforms);
+          // ★ 骨骼移动后选中框也要跟随（drawHighlight 用 wrapMatrixBySlot 变换四角画边框；
+          //   漏掉会导致图片跟着骨骼走了、蓝色选中框还停在原位置）
+          drawHighlight(state.psd, state.images, state.slots, state.selectedSlotIds);
           updateAttachmentHover(lastPointer.x, lastPointer.y, state.editorMode === 'create' && metaDown);
           prev = state;
           return;
