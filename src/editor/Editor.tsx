@@ -33,6 +33,9 @@ export function Editor() {
   const projectName = usePixiBonesStore((s) => s.projectName);
   const viewAllHidden   = usePixiBonesStore((s) => s.viewAllHidden);
   const setViewAllHidden= usePixiBonesStore((s) => s.setViewAllHidden);
+  // 「隐藏所有视图」时实际收起的面板（= 当时打开的面板快照），
+  //   没打开过的面板不会出现在 header 缩略图里
+  const lastOpenedDockOrder = usePixiBonesStore((s) => s.lastOpenedDockOrder);
   const viewHierarchy = usePixiBonesStore((s) => s.viewHierarchy);
   const toggleRightPanel = usePixiBonesStore((s) => s.toggleRightPanel);
   const setHierarchyRestorePending = usePixiBonesStore((s) => s.setHierarchyRestorePending);
@@ -263,7 +266,7 @@ export function Editor() {
               显示条件：
                 - 正常状态：单面板被用户主动最小化（view 标记仍 true + 被 minimized / showRightPanel false）
                 - 全隐藏状态（viewAllHidden）：所有面板都视为"已隐藏"，显示缩略图让用户点回 */}
-          {(viewHierarchy && !showRightPanel || viewAllHidden) && (
+          {(viewHierarchy && !showRightPanel || (viewAllHidden && lastOpenedDockOrder.includes('hierarchy'))) && (
             <MinimizedIcon
               panelKey="hierarchy"
               paths={PANEL_ICONS.hierarchy.paths}
@@ -276,7 +279,7 @@ export function Editor() {
               }}
             />
           )}
-          {(viewGridTool && viewGridToolMinimized || viewAllHidden) && (
+          {(viewGridTool && viewGridToolMinimized || (viewAllHidden && lastOpenedDockOrder.includes('grid_tool'))) && (
             <MinimizedIcon
               panelKey="grid_tool"
               paths={PANEL_ICONS.grid_tool.paths}
@@ -288,7 +291,7 @@ export function Editor() {
               }}
             />
           )}
-          {(viewWeights && viewWeightsMinimized || viewAllHidden) && (
+          {(viewWeights && viewWeightsMinimized || (viewAllHidden && lastOpenedDockOrder.includes('weights'))) && (
             <MinimizedIcon
               panelKey="weights"
               paths={PANEL_ICONS.weights.paths}

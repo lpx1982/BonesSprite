@@ -1,4 +1,5 @@
 import { useMemo, useRef, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { usePixiBonesStore, findBone, DOCK_PANEL_DEFAULT_WIDTH, DOCK_RESIZER_WIDTH, type BoneNode } from './store';
 import { useT } from './i18n';
 import moveIcon from './icons/move.png';
@@ -63,6 +64,10 @@ const T = {
   // 卡片之间间距（外层容器 gap）
   CARDS_GAP:         8,       // ← 5 张卡片之间的水平间距
 };
+
+// ===== 悬停说明（tooltip）延迟 =====
+const TOOLTIP_DELAY = 2000;    // 首次悬停等待（ms）
+const TOOLTIP_RESET_MS = 500;  // 离开后重置"已弹过"（ms）：行间快速切换不重置
 
 /**
  * Day 3.5 · 底部工具栏（严格 Spine 风格）
@@ -185,6 +190,11 @@ export function BottomToolbar() {
   const activeSpace: SpaceKey = (transformSpace === 'world' ? 'world' : 'local') as SpaceKey;
   const activeRef: RefKey = 'bone' as RefKey;
 
+  // ===== 悬停说明（tooltip）：7 个工具按钮悬停时显示「功能 + 快捷键」 =====
+  const [tooltip, setTooltip] = useState<{ text: string; x: number; y: number } | null>(null);
+  // ★ 共享"已弹过"状态：任一按钮弹过一次后，同一次连续悬停内切换到其他按钮也立即显示
+  const tipSharedRef = useRef<{ shown: boolean; resetTimer: number | null }>({ shown: false, resetTimer: null });
+
   return (
     <div
       className="absolute left-0 z-10 flex justify-center pointer-events-none"
@@ -249,6 +259,9 @@ export function BottomToolbar() {
             icon={<IconPose />}
             label={t('toolbar.mode_pose')}
             active={editorMode === 'pose'}
+            tip="姿势：编辑骨骼和图片的姿态\n快捷键 B"
+            onTip={setTooltip}
+            tipShared={tipSharedRef.current}
             onClick={() => {
               const st = usePixiBonesStore.getState();
               // 点击当前激活的工具 = 保持 pose（只有"右键空白处"才回退到上一个工具）
@@ -259,6 +272,9 @@ export function BottomToolbar() {
             icon={<IconWeights />}
             label={t('toolbar.mode_weights')}
             active={editorMode === 'weights'}
+            tip="权重：编辑网格顶点的骨骼权重\n快捷键 G"
+            onTip={setTooltip}
+            tipShared={tipSharedRef.current}
             onClick={() => {
               const st = usePixiBonesStore.getState();
               if (st.currentTool !== 'weights') setTool('weights');
@@ -271,6 +287,9 @@ export function BottomToolbar() {
             icon={<IconCreate />}
             label={t('toolbar.mode_create')}
             active={editorMode === 'create'}
+            tip="创建：在画布上创建骨骼\n快捷键 N"
+            onTip={setTooltip}
+            tipShared={tipSharedRef.current}
             onClick={() => {
               const st = usePixiBonesStore.getState();
               if (st.currentTool !== 'create') setTool('create');
@@ -287,6 +306,9 @@ export function BottomToolbar() {
             columns="one"
             hoverable
             transformType="rotate"
+            tip="旋转：旋转骨骼和图片\n快捷键 R"
+            onTip={setTooltip}
+            tipShared={tipSharedRef.current}
           />
           <TransformRow
             icon={<IconMove />}
@@ -297,6 +319,9 @@ export function BottomToolbar() {
             columns="two"
             hoverable
             transformType="move"
+            tip="移动：移动骨骼和图片\n快捷键 M"
+            onTip={setTooltip}
+            tipShared={tipSharedRef.current}
           />
           <TransformRow
             icon={<IconScale />}
@@ -307,6 +332,9 @@ export function BottomToolbar() {
             columns="two"
             hoverable
             transformType="scale"
+            tip="缩放：缩放骨骼和图片\n快捷键 S"
+            onTip={setTooltip}
+            tipShared={tipSharedRef.current}
           />
           <TransformRow
             icon={<IconShear />}
@@ -317,6 +345,9 @@ export function BottomToolbar() {
             columns="two"
             hoverable
             transformType="shear"
+            tip="倾斜：倾斜骨骼和图片\n快捷键 Z"
+            onTip={setTooltip}
+            tipShared={tipSharedRef.current}
           />
         </Card>
           {/* 卡片 3：transform space */}
@@ -372,6 +403,31 @@ export function BottomToolbar() {
           />
         </Card>
       </div>
+
+      {/* ===== 悬停说明浮层：portal 到 body，避开卡片 overflow 裁剪 ===== */}
+      {tooltip && createPortal(
+        <div
+          style={{
+            position: 'fixed',
+            left: tooltip.x + 14,
+            top: tooltip.y + 18,
+            zIndex: 9999,
+            pointerEvents: 'none',
+            padding: '5px 9px',
+            background: '#2D2D30',
+            border: '1px solid #3F3F46',
+            borderRadius: 4,
+            boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+            fontSize: 12,
+            lineHeight: 1.5,
+            whiteSpace: 'pre',
+            color: 'var(--spine-text)',
+          }}
+        >
+          {tooltip.text}
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }
@@ -401,6 +457,7 @@ function Card({ children }: { children: React.ReactNode }) {
 // ============================================================
 function Toolbutton({
   active, hover, onHoverChange, onClick, height, minWidth, padding, extraSlot, children,
+  tipText, onTip, tipShared,
 }: {
   active: boolean;
   hover: boolean;
@@ -411,13 +468,76 @@ function Toolbutton({
   padding: string;
   extraSlot?: React.ReactNode;
   children: React.ReactNode;
+  /** 悬停说明（功能 + 快捷键），支持 \n 换行 */
+  tipText?: string;
+  onTip?: (tip: { text: string; x: number; y: number } | null) => void;
+  /** 共享"已弹过"状态（所有工具按钮共用） */
+  tipShared?: { shown: boolean; resetTimer: number | null };
 }) {
+  // ===== 悬停说明延迟逻辑（仿层级树悬停预览）：
+  //  首次悬停等 2s 才弹出；任一按钮弹过一次后，同一次连续悬停内切换到其他按钮也立即显示；
+  //  离开超过 500ms（未进入其他按钮）才重置，下次重新等 2s。 =====
+  const tipTimerRef = useRef<number | null>(null);
+  const tipPosRef = useRef({ x: 0, y: 0 });
+  useEffect(() => () => {
+    if (tipTimerRef.current !== null) clearTimeout(tipTimerRef.current);
+    if (tipShared && tipShared.resetTimer !== null) clearTimeout(tipShared.resetTimer);
+  }, [tipShared]);
+  /** 悬停进入：首次等 2s，弹过后立即显示 */
+  const scheduleTip = (clientX: number, clientY: number) => {
+    if (!tipText || !onTip) return;
+    tipPosRef.current = { x: clientX, y: clientY };
+    if (tipShared && tipShared.resetTimer !== null) {
+      clearTimeout(tipShared.resetTimer);
+      tipShared.resetTimer = null;
+    }
+    if (tipTimerRef.current !== null) {
+      clearTimeout(tipTimerRef.current);
+      tipTimerRef.current = null;
+    }
+    const delay = (tipShared?.shown) ? 0 : TOOLTIP_DELAY;
+    tipTimerRef.current = window.setTimeout(() => {
+      onTip({ text: tipText, x: tipPosRef.current.x, y: tipPosRef.current.y });
+      if (tipShared) tipShared.shown = true;
+      tipTimerRef.current = null;
+    }, delay);
+  };
+  /** 悬停离开：清掉提示 + 延迟重置共享"已弹过"（快速切换按钮不重置） */
+  const cancelTip = () => {
+    if (tipTimerRef.current !== null) {
+      clearTimeout(tipTimerRef.current);
+      tipTimerRef.current = null;
+    }
+    if (onTip) onTip(null);
+    if (!tipShared) return;
+    if (tipShared.resetTimer !== null) {
+      clearTimeout(tipShared.resetTimer);
+      tipShared.resetTimer = null;
+    }
+    tipShared.resetTimer = window.setTimeout(() => {
+      tipShared.shown = false;
+      tipShared.resetTimer = null;
+    }, TOOLTIP_RESET_MS);
+  };
   return (
     <button
       type="button"
       onClick={onClick}
-      onMouseEnter={() => onHoverChange(true)}
-      onMouseLeave={() => onHoverChange(false)}
+      onMouseEnter={(e) => {
+        onHoverChange(true);
+        if (tipText && onTip) scheduleTip(e.clientX, e.clientY);
+      }}
+      onMouseMove={(e) => {
+        if (tipText && onTip) {
+          tipPosRef.current = { x: e.clientX, y: e.clientY };
+          // 已显示才跟随更新位置（等待期间不显示，只记录坐标）
+          if (tipShared?.shown) onTip({ text: tipText, x: e.clientX, y: e.clientY });
+        }
+      }}
+      onMouseLeave={() => {
+        onHoverChange(false);
+        if (tipText && onTip) cancelTip();
+      }}
       className="relative flex items-center gap-2 transition-colors"
       style={{
         height,
@@ -440,13 +560,18 @@ function Toolbutton({
 }
 
 function ModeButton({
-  icon, label, badge, active, onClick,
+  icon, label, badge, active, onClick, tip, onTip, tipShared,
 }: {
   icon: React.ReactNode;
   label: string;
   badge?: string;
   active: boolean;
   onClick: () => void;
+  /** 悬停说明（功能 + 快捷键），支持 \n 换行 */
+  tip?: string;
+  onTip?: (tip: { text: string; x: number; y: number } | null) => void;
+  /** 共享"已弹过"状态（所有工具按钮共用） */
+  tipShared?: { shown: boolean; resetTimer: number | null };
 }) {
   const [hover, setHover] = useState(false);
   // 复用通用 ToolButton 颜色逻辑，badge 专属逻辑保留
@@ -459,6 +584,9 @@ function ModeButton({
       height={26}
       minWidth={80}
       padding="0 10px"
+      tipText={tip}
+      onTip={onTip}
+      tipShared={tipShared}
       extraSlot={badge ? (
         <span
           style={{
@@ -485,6 +613,7 @@ function ModeButton({
 
 function TransformRow({
   icon, label, xValue, yValue, columns, hoverable = false, active = false, transformType,
+  tip, onTip, tipShared,
 }: {
   icon: React.ReactNode;
   label: string;
@@ -496,6 +625,11 @@ function TransformRow({
   hoverable?: boolean;
   /** 点击左侧按钮时切换到该工具；点击同一个则取消激活 */
   transformType: 'rotate' | 'move' | 'scale' | 'shear';
+  /** 悬停说明（功能 + 快捷键），支持 \n 换行 */
+  tip?: string;
+  onTip?: (tip: { text: string; x: number; y: number } | null) => void;
+  /** 共享"已弹过"状态（所有工具按钮共用） */
+  tipShared?: { shown: boolean; resetTimer: number | null };
 }) {
   // 两块独立 hover：左按钮 / 中输入
   // 钥匙按钮自身锁死与否取决于外部 editorTab（设置 / 动画）
@@ -546,6 +680,9 @@ function TransformRow({
           height={T.ROW_HEIGHT}
           minWidth={T.LABEL_BOX_WIDTH}
           padding={`0 0 0 ${T.LABEL_BOX_PAD_L}px`}
+          tipText={tip}
+          onTip={onTip}
+          tipShared={tipShared}
         >
           <span style={{ width: T.LABEL_ICON_SIZE, height: T.LABEL_ICON_SIZE, display: 'flex' }}>{icon}</span>
           <span>{label}</span>

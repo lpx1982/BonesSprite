@@ -2689,20 +2689,17 @@ export function BoneEditor() {
                 return;
               }
               if (mode === 'create') {
-                // Create 模式：点骨骼同样从鼠标按下位置拖出子骨骼
-                //   - joint 起点 = 鼠标按下位置（不在父骨骼 origin 上）
-                //   - parent = 当前选中骨骼（无选中则根骨骼）
+                // Create 模式：点骨骼 = 先选中它（成为当前选中、并作为新子骨骼的父级），
+                //   然后从鼠标按下位置拖出子骨骼（joint 起点 = 鼠标按下位置）
+                const store = usePixiBonesStore.getState();
+                store.selectBone(node.id);
                 const sx = root.scale.x;
                 const sy = root.scale.y;
                 const startWorld = {
                   x: (ev.global.x - root.x) / (sx || 1),
                   y: (ev.global.y - root.y) / (sy || 1),
                 };
-                const store = usePixiBonesStore.getState();
-                const rootBone = store.bones.find((bb) => bb.parentId === null);
-                const parentId = store.selectedBoneId || (rootBone ? rootBone.id : null);
-                if (!parentId) return;
-                const parentBone = boneById.get(parentId);
+                const parentBone = boneById.get(node.id);
                 if (!parentBone) return;
                 const parentWorld = skeletonRef!.getWorldPosition(parentBone);
                 const preview = new Gfx();
@@ -2710,7 +2707,7 @@ export function BoneEditor() {
                 a.stage.addChild(preview);
                 dragState = {
                   kind: 'create-from',
-                  parentId,
+                  parentId: node.id,
                   startWorld,
                   startScreen: { x: ev.global.x, y: ev.global.y },
                   parentWorld: { x: parentWorld.x, y: parentWorld.y },
@@ -3579,10 +3576,16 @@ export function BoneEditor() {
             const dx = mouseWorld.x - startX;
             const dy = mouseWorld.y - startY;
             const dragLen = Math.sqrt(dx * dx + dy * dy);
-            // ★ 单击（几乎没拖动）=> 创建一个 0 长度的「点骨骼」，
-            //   它的图标和根骨骼一样是十字，用来当纯旋转/挂载节点
+            // ★ 单击（几乎没拖动）=> 只选中，不创建骨骼。
+            //   （Spine 行为：Create 模式点击骨骼 = 选中它；拖拽才创建子骨骼）
             const isClick = dragLen <= 1;
-            const length = isClick ? 0 : dragLen;
+            if (isClick) {
+              // 清理预览
+              a.stage.removeChild(dragState.preview);
+              dragState.preview.destroy();
+              return;
+            }
+            const length = dragLen;
             // 父骨骼的世界旋转（弧度）：由父骨骼 world joint → world tip 方向得出；
             // 根骨（长度 0、无 tip 方向）时为 0。
             let parentWorldRot = 0;
@@ -3592,8 +3595,8 @@ export function BoneEditor() {
               const pt = skeletonRef!.getWorldTip(parentBone);
               parentWorldRot = Math.atan2(pt.y - pa.y, pt.x - pa.x);
             }
-            // 新骨骼世界方向（弧度）：单击没有方向，直接继承父骨骼
-            const worldRot = isClick ? parentWorldRot : Math.atan2(dy, dx);
+            // 新骨骼世界方向（弧度）：拖拽方向即骨骼朝向
+            const worldRot = Math.atan2(dy, dx);
             // joint 在父骨骼 local frame 下的 (x, y)：反旋转父世界旋转
             const offX = startX - parentWorld.x;
             const offY = startY - parentWorld.y;

@@ -6,7 +6,7 @@ import { importAssetFile } from './importAsset';
 import { PromptDialog } from './PromptDialog';
 
 /** 附件大预览悬停延迟（ms）。2 秒 = Spine 行为。 */
-const HOVER_PREVIEW_DELAY = 500;
+const HOVER_PREVIEW_DELAY = 2000;
 
 /**
  * 层级树面板（Spine 风格 · setup 模式）
@@ -292,7 +292,11 @@ export function HierarchyPanel() {
   // ===== 大预览（hover 附件图标 2s 后弹出该素材的大图） =====
   const [preview, setPreview] = useState<{ url: string; layerId: string; x: number; y: number } | null>(null);
   const previewTimerRef = useRef<number | null>(null);
-  /** 清除预览定时器与预览态（hover 中断时） */
+  /** 是否已弹出过一次预览（Spine：弹过一次后，再悬停其他节点立即显示，不再等延迟） */
+  const previewShownOnceRef = useRef(false);
+  /** 离开附件行后、短时间内没进入新附件行才重置"已弹过"记录的定时器 */
+  const resetShownTimerRef = useRef<number | null>(null);
+  /** 清除预览定时器与预览态（hover 中断时）。不重置"已弹过"记录。 */
   const clearPreview = () => {
     if (previewTimerRef.current !== null) {
       clearTimeout(previewTimerRef.current);
@@ -300,27 +304,52 @@ export function HierarchyPanel() {
     }
     setPreview(null);
   };
+  /** 取消待执行的"重置已弹过" */
+  const cancelResetShown = () => {
+    if (resetShownTimerRef.current !== null) {
+      clearTimeout(resetShownTimerRef.current);
+      resetShownTimerRef.current = null;
+    }
+  };
+  /** 鼠标离开附件行：延迟重置"已弹过"。行间快速切换会在 enter 时取消，保持立即显示；
+      真正离开（短时间内未进入新附件行）才删除记录，下次悬停重新等 2s。 */
+  const scheduleResetShown = () => {
+    cancelResetShown();
+    resetShownTimerRef.current = window.setTimeout(() => {
+      previewShownOnceRef.current = false;
+      resetShownTimerRef.current = null;
+    }, 500);
+  };
   useEffect(() => () => {
     if (previewTimerRef.current !== null) clearTimeout(previewTimerRef.current);
+    cancelResetShown();
   }, []);
   /** 鼠标进入附件行：延迟后弹出大图。layer 是被 hover 的素材（attachment）。 */
   const onAssetHoverEnter = (layer: PixiBonesLayer, clientX: number, clientY: number) => {
+    // 刚离开上一行：取消重置，保证行间快速切换仍"立即显示"
+    cancelResetShown();
     if (previewTimerRef.current !== null) {
       clearTimeout(previewTimerRef.current);
       previewTimerRef.current = null;
     }
+    // 首次需要等 2s；弹过一次后立即显示（仿 Spine）
+    const delay = previewShownOnceRef.current ? 0 : HOVER_PREVIEW_DELAY;
     previewTimerRef.current = window.setTimeout(() => {
       const url = attachmentThumb(layer);
       if (url) setPreview({ url, layerId: layer.id, x: clientX, y: clientY });
+      previewShownOnceRef.current = true;
       previewTimerRef.current = null;
-    }, HOVER_PREVIEW_DELAY);
+    }, delay);
   };
   /** 鼠标在附件行内移动：刷新弹出位置（仍保留当前预览）。 */
   const onAssetHoverMove = (clientX: number, clientY: number) => {
     setPreview((p) => (p ? { ...p, x: clientX, y: clientY } : p));
   };
-  /** 鼠标离开附件行：取消或清掉预览。 */
-  const onAssetHoverLeave = () => clearPreview();
+  /** 鼠标离开附件行：清掉预览 + 延迟重置"已弹过"记录。 */
+  const onAssetHoverLeave = () => {
+    clearPreview();
+    scheduleResetShown();
+  };
 
   /** 导入素材（.psd → 整个 PSD；图片 → 追加到 images） */
   const onImportFiles = async (files: FileList | null) => {
@@ -369,10 +398,6 @@ export function HierarchyPanel() {
   );
   /** 当前选中的插槽 */
   const selectedSlot = selectedSlotId ? slots.find((s) => s.id === selectedSlotId) ?? null : null;
-  /** 当前选中插槽的激活附件（用于底部面板标题等） */
-  const selectedSlotActive = selectedSlot?.activeAttachmentId
-    ? attachmentById.get(selectedSlot.activeAttachmentId) ?? null
-    : null;
   /** 当前选中的附件对象（层级树点附件行时非 null）→ 底部显示「附件属性」面板 */
   const selectedAttachment = selectedAttachmentId
     ? attachmentById.get(selectedAttachmentId) ?? null
@@ -1250,6 +1275,7 @@ export function HierarchyPanel() {
                       onSelectConstraint={selectConstraint}
                       onSelectAnimation={selectAnimationNode}
                       slotBindings={slotBindings}
+                      attachmentById={attachmentById}
                       boneNameById={new Map(bones.map((b) => [b.id, b.name]))}
                       onImport={r.kind === 'section' && r.key === 'section:images'
                         ? () => importInputRef.current?.click()
@@ -1345,7 +1371,6 @@ export function HierarchyPanel() {
       ) : selectedSlotId ? (
         <SlotPropsBlock
           slot={selectedSlot}
-          activeAttachment={selectedSlotActive}
           candidates={attachments.filter((l) => !selectedSlot?.attachmentIds.includes(l.id))}
           onAddAttachment={(aid) => addAttachmentToSlot(selectedSlotId, aid)}
           color={slotStyle[selectedSlotId]?.color ?? ''}
@@ -1546,6 +1571,8 @@ interface TreeRowViewProps {
   /** 层级树顶部的「动画」节点被点击 */
   onSelectAnimation: () => void;
   slotBindings: Record<string, SlotBinding>;
+  /** 附件 id → layer 映射（插槽行悬停预览取激活附件用） */
+  attachmentById: Map<string, PixiBonesLayer>;
   boneNameById: Map<string, string>;
   /** 「图片」节点上的 ＋ 导入按钮 */
   onImport?: () => void;
@@ -1569,6 +1596,7 @@ function TreeRowView(props: TreeRowViewProps) {
     slotBindings, boneNameById, onImport, drag, drop,
     onAssetHoverEnter, onAssetHoverMove, onAssetHoverLeave,
     onRequestRename,
+    attachmentById,
   } = props;
   const isBone = row.kind === 'bone';
   /** 附件行（🖼） */
@@ -1585,6 +1613,12 @@ function TreeRowView(props: TreeRowViewProps) {
   const node = row.node;
   const asset = row.asset;
   const slot = row.slot;
+  /** 悬停预览对象：附件行 = 该附件；插槽行 = 插槽当前激活的附件（对齐 Spine） */
+  const previewLayer = isAsset
+    ? (asset ?? null)
+    : (isSlot && slot && slot.activeAttachmentId
+        ? (attachmentById.get(slot.activeAttachmentId) ?? null)
+        : null);
   /** 附件行归属的插槽 id */
   const assetSlotId = row.slotId ?? null;
   // ★ 高亮精确到「被点击的那一行」：slot / asset 行只看 selectedRowKey，
@@ -1648,14 +1682,14 @@ function TreeRowView(props: TreeRowViewProps) {
       title={drag?.title}
       onMouseEnter={(e) => {
         if (!isSelected && clickable) e.currentTarget.style.background = 'rgba(255,255,255,0.06)';
-        if (isAsset && asset && onAssetHoverEnter) onAssetHoverEnter(asset, e.clientX, e.clientY);
+        if (previewLayer && onAssetHoverEnter) onAssetHoverEnter(previewLayer, e.clientX, e.clientY);
       }}
       onMouseMove={(e) => {
-        if (isAsset && asset && onAssetHoverMove) onAssetHoverMove(e.clientX, e.clientY);
+        if (previewLayer && onAssetHoverMove) onAssetHoverMove(e.clientX, e.clientY);
       }}
       onMouseLeave={(e) => {
         if (!isSelected) e.currentTarget.style.background = 'transparent';
-        if (isAsset && onAssetHoverLeave) onAssetHoverLeave();
+        if (previewLayer && onAssetHoverLeave) onAssetHoverLeave();
       }}
       onClick={() => {
         if (isBone && node) onSelect(node.id);
@@ -1729,7 +1763,7 @@ function TreeRowView(props: TreeRowViewProps) {
       )}
 
       {/* 名称（空插槽额外标注，便于区分「插槽还在但没附件」） */}
-      <span className="truncate flex-1 text-[14px]" title={row.label}>
+      <span className="truncate flex-1 text-[14px]">
         {nameEl}
         {isSlot && slot && slot.attachmentIds.length === 0 && (
           <span className="ml-1 text-[11px]" style={{ color: C.dim }}>（空）</span>
@@ -2161,35 +2195,6 @@ const BLEND_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'lighten',  label: '变亮' },
 ];
 
-/** 属性面板顶部的素材预览（棋盘格底，等比缩放到框内） */
-function AssetPreview({ layer, C }: { layer: PixiBonesLayer | null; C: any }) {
-  const url = layer ? attachmentThumb(layer) : null;
-  return (
-    <div
-      className="flex items-center justify-center"
-      style={{
-        height: 72,
-        borderBottom: '1px solid ' + C.border,
-        backgroundColor: C.panelDk,
-        backgroundImage: [
-          'linear-gradient(45deg, rgba(255,255,255,0.05) 25%, transparent 25%)',
-          'linear-gradient(-45deg, rgba(255,255,255,0.05) 25%, transparent 25%)',
-          'linear-gradient(45deg, transparent 75%, rgba(255,255,255,0.05) 75%)',
-          'linear-gradient(-45deg, transparent 75%, rgba(255,255,255,0.05) 75%)',
-        ].join(','),
-        backgroundSize: '12px 12px',
-        backgroundPosition: '0 0, 0 6px, 6px -6px, -6px 0px',
-      }}
-    >
-      {url ? (
-        <img src={url} alt="" draggable={false} style={{ maxWidth: '92%', maxHeight: 64, objectFit: 'contain' }} />
-      ) : (
-        <span className="text-[12px]" style={{ color: C.dim }}>无预览</span>
-      )}
-    </div>
-  );
-}
-
 /**
  * 属性面板标题栏：`◉ 插槽: 名字` / `▭ 区域: 名字` + 右侧 4 个图标按钮
  * （复制 / 粘贴 / 设置 / 删除）。图标按钮暂为占位（待实现）。
@@ -2292,8 +2297,6 @@ function PanelFooterBtn({
 // =================================================================================
 interface SlotPropsBlockProps {
   slot: PixiBonesSlot | null;
-  /** 插槽当前显示的附件（顶部预览区用） */
-  activeAttachment: PixiBonesLayer | null;
   /** 「＋ 新建…」挑选器：可加入该插槽的候选素材 */
   candidates: PixiBonesLayer[];
   onAddAttachment: (attachmentId: string) => void;
@@ -2314,7 +2317,7 @@ interface SlotPropsBlockProps {
 
 function SlotPropsBlock(props: SlotPropsBlockProps) {
   const {
-    slot, activeAttachment, candidates, onAddAttachment,
+    slot, candidates, onAddAttachment,
     color, onColor, blend, onBlend, bindingBoneName, onParent, onUnbind, onDelete, C,
   } = props;
   // 「＋ 新建…」选择器：把已有素材加入该插槽
@@ -2322,9 +2325,6 @@ function SlotPropsBlock(props: SlotPropsBlockProps) {
   const name = slot?.name ?? '（未知插槽）';
   return (
     <div style={{ borderTop: '1px solid ' + C.border, background: C.panelDk }}>
-      {/* 预览区：插槽当前附件的大图（棋盘格底） */}
-      <AssetPreview layer={activeAttachment} C={C} />
-
       {/* 标题栏：◉ 插槽: 名字 + 右侧图标按钮 */}
       <PanelTitleBar
         icon="◉"
@@ -2507,9 +2507,6 @@ function AttachmentPropsBlock(props: AttachmentPropsBlockProps) {
 
   return (
     <div style={{ borderTop: '1px solid ' + C.border, background: C.panelDk }}>
-      {/* 预览区：该附件的大图 */}
-      <AssetPreview layer={attachment} C={C} />
-
       {/* 标题栏：勾了网格显示「网格:」，否则「区域:」（✕ = 从插槽移出） */}
       <PanelTitleBar
         icon={isMesh ? '▦' : '▭'}
