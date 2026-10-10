@@ -1,6 +1,6 @@
 import { Bone } from './Bone';
 import { Mat3 } from './math/Mat3';
-import { Transform } from './math/Transform';
+import { Transform, type TransformLike } from './math/Transform';
 
 /**
  * 一棵骨骼树。世界矩阵由 root 自顶向下更新：
@@ -25,6 +25,11 @@ export class Skeleton {
   /**
    * 刷新所有骨骼的世界矩阵。
    * 必须在修改骨骼 local 之后、采样世界坐标/绘制之前调用。
+   *
+   * 继承规则（Spine Inherit）：
+   *   - 三个标志全开 → 保持原有的「parent × local」精确矩阵乘；
+   *   - 任一标志被勾掉 → 把父世界矩阵分解成 rotation / scale / reflection，
+   *     按勾选重组，未被勾选的部分不再从父级继承（平移始终继承）。
    */
   update(): void {
     const local = this._localScratch;
@@ -33,15 +38,48 @@ export class Skeleton {
       Transform.toMatrix(bone.local, local);
 
       if (bone.parent) {
-        // 2. 先把 parent.worldMatrix 拷到 bone.worldMatrix.elements
         const parent = bone.parent.worldMatrix.elements;
         const dst = bone.worldMatrix.elements;
-        dst[0] = parent[0]; dst[1] = parent[1]; dst[2] = parent[2];
-        dst[3] = parent[3]; dst[4] = parent[4]; dst[5] = parent[5];
-        dst[6] = parent[6]; dst[7] = parent[7]; dst[8] = parent[8];
+        const l = bone.local as TransformLike & {
+          inheritRotation?: boolean; inheritScale?: boolean; inheritReflection?: boolean;
+        };
+        const inheritRot = l.inheritRotation !== false;
+        const inheritScale = l.inheritScale !== false;
+        const inheritReflect = l.inheritReflection !== false;
 
-        // 3. dst = dst × local  （parent × local）
-        Mat3.multiplyInto(dst, local, dst);
+        if (inheritRot && inheritScale && inheritReflect) {
+          // 全继承：精确的 parent × local（保持既有行为）
+          dst[0] = parent[0]; dst[1] = parent[1]; dst[2] = parent[2];
+          dst[3] = parent[3]; dst[4] = parent[4]; dst[5] = parent[5];
+          dst[6] = parent[6]; dst[7] = parent[7]; dst[8] = parent[8];
+          Mat3.multiplyInto(dst, local, dst);
+        } else {
+          // 部分继承：分解父世界 → 按勾选重组（Spine 语义）
+          const pRot = Math.atan2(parent[1], parent[0]);      // 父世界旋转
+          const pScaleX = Math.hypot(parent[0], parent[1]) || 1;
+          const pScaleY = Math.hypot(parent[3], parent[4]) || 1;
+          const pReflect = parent[0] * parent[4] - parent[1] * parent[3] < 0 ? -1 : 1;
+          const lx = l.x, ly = l.y;
+          const lRot = l.rotation;
+          const lSx = l.scaleX, lSy = l.scaleY;
+          // 世界旋转 / 缩放 / 反射：未被勾选的项不再继承父级
+          const wRot = inheritRot ? pRot + lRot : lRot;
+          const wSx = inheritScale ? pScaleX * lSx : lSx;
+          const wSy = inheritScale ? pScaleY * lSy : lSy;
+          const wRe = inheritReflect ? pReflect : 1;
+          const shearX = l.shearX ?? 0;
+          const shearY = l.shearY ?? 0;
+          const wrx = wRot + shearX;
+          const wry = wRot + Math.PI / 2 + shearY;
+          // 平移始终继承：worldPos = parent.world × local(x,y)
+          const wtx = parent[0] * lx + parent[3] * ly + parent[6];
+          const wty = parent[1] * lx + parent[4] * ly + parent[7];
+          dst[0] = Math.cos(wrx) * wSx * wRe;
+          dst[1] = Math.sin(wrx) * wSx * wRe;
+          dst[3] = Math.cos(wry) * wSy * wRe;
+          dst[4] = Math.sin(wry) * wSy * wRe;
+          dst[2] = 0; dst[5] = 0; dst[6] = wtx; dst[7] = wty; dst[8] = 1;
+        }
       } else {
         // root：world = local
         const dst = bone.worldMatrix.elements;

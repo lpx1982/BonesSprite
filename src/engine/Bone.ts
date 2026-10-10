@@ -18,7 +18,7 @@ export class Bone {
   parent: Bone | null;
   children: Bone[];
 
-  constructor(name: string, opts: Partial<TransformLike & { length: number }> = {}) {
+  constructor(name: string, opts: Partial<TransformLike & { length: number } & { inheritRotation?: boolean; inheritScale?: boolean; inheritReflection?: boolean }> = {}) {
     this.name = name;
     this.local = {
       x: opts.x ?? 0,
@@ -26,7 +26,13 @@ export class Bone {
       rotation: opts.rotation ?? 0,
       scaleX: opts.scaleX ?? 1,
       scaleY: opts.scaleY ?? 1,
-    };
+      shearX: opts.shearX ?? 0,
+      shearY: opts.shearY ?? 0,
+      // 变换继承标志（Spine Inherit）：Skeleton.update 里按勾选决定继承哪些
+      inheritRotation: opts.inheritRotation ?? true,
+      inheritScale: opts.inheritScale ?? true,
+      inheritReflection: opts.inheritReflection ?? true,
+    } as TransformLike & { inheritRotation: boolean; inheritScale: boolean; inheritReflection: boolean };
     this.worldMatrix = new Mat3();
     this.length = opts.length ?? 0;
     this.parent = null;

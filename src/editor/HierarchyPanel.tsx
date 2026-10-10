@@ -717,7 +717,7 @@ export function HierarchyPanel() {
 
   return (
     <aside
-      className="flex flex-col overflow-hidden text-sm hierarchy-pop-enter shrink-0"
+      className="flex flex-col overflow-hidden text-[16px] hierarchy-pop-enter shrink-0"
       style={{
         width: panelWidth,
         background: C.panel, color: C.text,
@@ -728,40 +728,55 @@ export function HierarchyPanel() {
         position: 'relative',
       }}
     >
-      {/* ============ 顶部：标题 + 折叠按钮 ============ */}
+      {/* ============ 顶部：标题（Spine 风格：图标 + 「层级树」 + 骨数）============ */}
       <div
-        className="flex items-center px-2 py-1.5"
-        style={{ borderBottom: '1px solid ' + C.border, background: C.toolbar }}
+        className="flex items-center px-2"
+        style={{ height: 28, borderBottom: '1px solid ' + C.border, background: C.toolbar }}
       >
         <button
-          className="flex items-center gap-1 text-xs font-semibold"
-          style={{ color: C.text, background: 'transparent', border: 'none', cursor: 'pointer' }}
+          className="flex items-center gap-1.5 text-[14px] font-semibold h-full"
+          style={{ color: C.text, background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}
           onMouseEnter={(e) => (e.currentTarget.style.color = '#fff')}
           onMouseLeave={(e) => (e.currentTarget.style.color = C.text)}
           onClick={() => setShowTree((v) => !v)}
           title={showTree ? '折叠层级树' : '展开层级树'}
         >
-          <span style={{ color: C.warning }}>↳</span>
+          {/* Spine 树状图标：两根线汇合到一个点 + 顶横线 */}
+          <svg width="14" height="12" viewBox="0 0 14 12" fill="none" style={{ flexShrink: 0 }}>
+            <path d="M1 1 H4 V6 H8 V11" stroke={C.warning} strokeWidth="1.4" strokeLinecap="square" fill="none"/>
+            <circle cx="8" cy="11" r="1.5" fill={C.warning}/>
+            <path d="M6 1 H13" stroke={C.warning} strokeWidth="1.4" strokeLinecap="square" fill="none"/>
+          </svg>
           <span>层级树</span>
-          <span style={{ color: C.dim, fontSize: 10, marginLeft: 4 }}>{bones.length} 骨</span>
+          <span style={{ color: C.dim, fontSize: 12 }}>{bones.length} 骨</span>
         </button>
-        <div className="ml-auto flex items-center gap-1" style={{ color: C.dim, position: 'relative' }} ref={popoverWrapRef}>
-          {/* ✕ 全部展开（占位，目前点开树） */}
+        <div className="ml-auto flex items-center gap-2" style={{ color: C.dim, position: 'relative' }} ref={popoverWrapRef}>
+          {/* × 全部展开：SVG X 图标 */}
           <button
-            style={{ color: C.dim, background: 'transparent', border: 'none', padding: '0 4px', cursor: 'pointer' }}
+            className="h-full flex items-center justify-center"
+            style={{ color: C.dim, background: 'transparent', border: 'none', padding: '0 2px', cursor: 'pointer' }}
             onMouseEnter={(e) => (e.currentTarget.style.color = '#fff')}
             onMouseLeave={(e) => (e.currentTarget.style.color = C.dim)}
             title="全部展开"
             onClick={() => setShowTree(true)}
-          >✕</button>
-          {/* ≡ 弹层：最小化 / 关闭 */}
+          >
+            <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+              <path d="M2 2 L12 12 M12 2 L2 12" stroke="currentColor" strokeWidth="1.4" strokeLinecap="square"/>
+            </svg>
+          </button>
+          {/* ☰ 选项：SVG 三横线 */}
           <button
-            style={{ color: popoverOpen ? '#fff' : C.dim, background: 'transparent', border: 'none', padding: '0 4px', cursor: 'pointer' }}
+            className="h-full flex items-center justify-center"
+            style={{ color: popoverOpen ? '#fff' : C.dim, background: 'transparent', border: 'none', padding: '0 2px', cursor: 'pointer' }}
             onMouseEnter={(e) => (e.currentTarget.style.color = '#fff')}
             onMouseLeave={(e) => { if (!popoverOpen) e.currentTarget.style.color = C.dim; }}
             title="面板选项"
             onClick={() => setPopoverOpen((v) => !v)}
-          >≡</button>
+          >
+            <svg width="12" height="9" viewBox="0 0 14 10" fill="none">
+              <path d="M1 1 H13 M1 5 H13 M1 9 H13" stroke="currentColor" strokeWidth="1.4" strokeLinecap="square"/>
+            </svg>
+          </button>
           {/* 弹层（最小化 / 关闭） */}
           {popoverOpen && (
             <div
@@ -777,106 +792,142 @@ export function HierarchyPanel() {
                 padding: '2px 0',
               }}
             >
-              {/* 最小化（高亮蓝） */}
               <button
                 className="w-full flex items-center justify-between"
-                style={{
-                  height: 22,
-                  padding: '0 10px',
-                  background: 'transparent',
-                  border: 'none',
-                  color: C.text,
-                  fontSize: 12,
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                }}
+                style={{ height: 22, padding: '0 10px', background: 'transparent', border: 'none', color: C.text, fontSize: 14, cursor: 'pointer', textAlign: 'left' }}
                 onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.05)')}
                 onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-                onClick={() => {
-                  setShowTree(false);
-                  setPopoverOpen(false);
-                }}
+                onClick={() => { setShowTree(false); setPopoverOpen(false); }}
               >
                 <span style={{ color: C.accent, fontWeight: 600 }}>最小化</span>
-                <span style={{ color: C.dim, fontSize: 11 }}>右键单击</span>
+                <span style={{ color: C.dim, fontSize: 13 }}>右键单击</span>
               </button>
-              {/* 关闭 */}
               <button
                 className="w-full flex items-center justify-between"
-                style={{
-                  height: 22,
-                  padding: '0 10px',
-                  background: 'transparent',
-                  border: 'none',
-                  color: C.text,
-                  fontSize: 12,
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                }}
+                style={{ height: 22, padding: '0 10px', background: 'transparent', border: 'none', color: C.text, fontSize: 12, cursor: 'pointer', textAlign: 'left' }}
                 onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.05)')}
                 onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                 onClick={closePanel}
               >
                 <span>关闭</span>
-                <span style={{ color: C.dim, fontSize: 11 }}>双击</span>
+                <span style={{ color: C.dim, fontSize: 13 }}>双击</span>
               </button>
             </div>
           )}
         </div>
       </div>
 
-      {/* ============ 搜索框 + 8 个工具按钮（Spine 风格占位）============ */}
+      {/* ============ 工具条（Spine 单行：搜索框 + ← → + 8 个工具按钮）============ */}
       {showTree && (
         <>
           <div
-            className="px-2 py-1.5 flex items-center gap-1"
-            style={{ borderBottom: '1px solid ' + C.border, background: C.panel }}
+            className="flex items-center px-1"
+            style={{ height: 34, gap: 3, borderBottom: '1px solid ' + C.border, background: C.panel }}
           >
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="搜索骨骼"
-              className="flex-1 rounded px-2 py-1 text-xs focus:outline-none"
-              style={{
-                background: C.panelDk,
-                border: '1px solid ' + C.border,
-                color: C.text,
-              }}
-              onFocus={(e) => (e.currentTarget.style.borderColor = C.accent)}
-              onBlur={(e) => (e.currentTarget.style.borderColor = C.border)}
-            />
-            <button className="w-6 h-6 flex items-center justify-center text-gray-400 hover:text-white" title="上">↶</button>
-            <button className="w-6 h-6 flex items-center justify-center text-gray-400 hover:text-white" title="下">↷</button>
+            {/* 搜索框 + 放大镜图标（Spine 风格：固定 120px 宽） */}
+            <div className="flex items-center h-6 rounded shrink-0" style={{ width: 140, background: C.panelDk, border: '1px solid ' + C.border }}>
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ margin: '0 3px 0 6px', flexShrink: 0 }}>
+                <circle cx="5" cy="5" r="3.4" stroke={C.dim} strokeWidth="1.2" fill="none"/>
+                <path d="M7.5 7.5 L10.5 10.5" stroke={C.dim} strokeWidth="1.2" strokeLinecap="square"/>
+              </svg>
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder=""
+                className="min-w-0 text-[14px] focus:outline-none bg-transparent"
+                style={{ color: C.text, padding: '0 6px 0 0', width: '100%' }}
+                onFocus={(e) => (e.currentTarget.parentElement!.style.borderColor = C.accent)}
+                onBlur={(e) => (e.currentTarget.parentElement!.style.borderColor = C.border)}
+              />
+            </div>
+            {/* ← / → 上下匹配按钮（Spine 风格） */}
+            <ToolIcon title="上一个匹配" C={C}><path d="M5 1 L2 4 L8 4 Z" fill="currentColor"/></ToolIcon>
+            <ToolIcon title="下一个匹配" C={C}><path d="M5 7 L2 4 L8 4 Z" fill="currentColor"/></ToolIcon>
+            {/* 8 个工具按钮（Spine 单行：编辑/可见/连接/选中/移动/复制/复制设置/粘贴） */}
+            <ToolIcon title="编辑骨骼" C={C}><path d="M1 11 L4 11 L11 4 L8 1 L1 8 Z" stroke="currentColor" strokeWidth="1" fill="none"/></ToolIcon>
+            <ToolIcon title="可见性" C={C}><circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1" fill="none"/></ToolIcon>
+            <ToolIcon title="链接" C={C}>
+              <rect x="1.5" y="3.5" width="4" height="5" rx="1" stroke="currentColor" strokeWidth="1" fill="none"/>
+              <rect x="6.5" y="3.5" width="4" height="5" rx="1" stroke="currentColor" strokeWidth="1" fill="none"/>
+            </ToolIcon>
+            <ToolIcon title="选中" active C={C}>
+              <path d="M2 2 H10 V10 H2 Z M5 5 H7 V7 H5 Z" stroke="#fff" strokeWidth="1" fill="none"/>
+            </ToolIcon>
+            <ToolIcon title="缩放" C={C}>
+              <circle cx="5" cy="5" r="3" stroke="currentColor" strokeWidth="1" fill="none"/>
+              <path d="M7 7 L10.5 10.5" stroke="currentColor" strokeWidth="1" strokeLinecap="square"/>
+            </ToolIcon>
+            <ToolIcon title="复制" C={C}>
+              <rect x="2" y="2" width="6" height="7" stroke="currentColor" strokeWidth="1" fill="none"/>
+              <rect x="4" y="4" width="6" height="7" stroke="currentColor" strokeWidth="1" fill="none"/>
+            </ToolIcon>
+            <ToolIcon title="复制设置" C={C}>
+              <rect x="1.5" y="2" width="9" height="9" stroke="currentColor" strokeWidth="1" fill="none"/>
+              <path d="M4 5 H8 M4 7 H8 M4 9 H7" stroke="currentColor" strokeWidth="1"/>
+            </ToolIcon>
+            <ToolIcon title="粘贴" C={C}>
+              <rect x="2" y="3" width="8" height="8" stroke="currentColor" strokeWidth="1" fill="none"/>
+              <rect x="4" y="1.5" width="4" height="2" stroke="currentColor" strokeWidth="1" fill="none"/>
+            </ToolIcon>
           </div>
 
-          {/* 8 个工具按钮（Spine 顶部条：编辑/可见/连接/选中/移动/复制/复制设置/粘贴） */}
+          {/* 列头（Spine 风格：3 个图标 = 可见性 / 关键帧 / 节点树） */}
           <div
-            className="px-2 py-1 flex items-center justify-between"
-            style={{ borderBottom: '1px solid ' + C.border, background: C.panelDk }}
+            className="flex items-center shrink-0"
+            style={{ height: 24, borderBottom: '1px solid ' + C.border, background: C.panelDk }}
           >
-            <ToolBtn icon="✏" title="编辑骨骼" C={C} />
-            <ToolBtn icon="◉" title="可见性" C={C} />
-            <ToolBtn icon="🔗" title="链接" C={C} />
-            <ToolBtn icon="⛶" title="选中" active C={C} />
-            <ToolBtn icon="🔍" title="缩放" C={C} />
-            <ToolBtn icon="📋" title="复制" C={C} />
-            <ToolBtn icon="📑" title="复制设置" C={C} />
-            <ToolBtn icon="📥" title="粘贴" C={C} />
+            {/* 可见性列 */}
+            <div
+              className="flex items-center justify-center shrink-0"
+              style={{ width: 32, color: C.dim }}
+              title="可见性：点击切换显隐"
+            >
+              {/* 眼睛 SVG */}
+              <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                <path d="M1 7 C 3 3, 11 3, 13 7 C 11 11, 3 11, 1 7 Z" stroke="currentColor" strokeWidth="1" fill="none"/>
+                <circle cx="7" cy="7" r="2" stroke="currentColor" strokeWidth="1" fill="none"/>
+              </svg>
+            </div>
+            {/* 关键帧列 */}
+            <div
+              className="flex items-center justify-center shrink-0"
+              style={{ width: 32, color: C.dim, borderRight: '1px solid ' + C.border }}
+              title="关键帧：有动画属性时显示钥匙"
+            >
+              {/* 钥匙 SVG（圆形头 + 杆 + 齿） */}
+              <svg width="11" height="11" viewBox="0 0 14 14" fill="none">
+                <circle cx="4" cy="7" r="2.6" stroke="currentColor" strokeWidth="1" fill="none"/>
+                <path d="M6.6 7 L12.6 7 M11 7 L11 9.5 M9.4 7 L9.4 8.6" stroke="currentColor" strokeWidth="1" strokeLinecap="square"/>
+              </svg>
+            </div>
+            {/* 节点树列（占满剩余空间） */}
+            <div
+              className="flex items-center px-1 gap-1 flex-1 min-w-0 text-[12px]"
+              style={{ color: C.dim }}
+              title="节点树"
+            >
+              {/* 层级 / 缩进图标 */}
+              <svg width="11" height="11" viewBox="0 0 14 14" fill="none">
+                <path d="M2 2 H12 M2 2 V5 M2 8 H12 M2 8 V11 M2 14 H12 M2 14 V17" stroke="currentColor" strokeWidth="1" strokeLinecap="square" fill="none"/>
+                <rect x="6" y="4.5" width="3" height="3" stroke="currentColor" strokeWidth="1" fill="none"/>
+                <rect x="6" y="10.5" width="3" height="3" stroke="currentColor" strokeWidth="1" fill="none"/>
+              </svg>
+            </div>
           </div>
 
-          {/* 树主体：左列（显隐小圆点）+ 右列（树）—— 两列由同一个 rows 数组驱动，保证行对齐 */}
+          {/* 树主体：左列（显隐小圆点）+ 中列（关键帧图标）+ 右列（树） —— 三列由同一个 rows 数组驱动，保证行对齐 */}
           <div className="flex flex-1 min-h-0 overflow-y-auto">
             {/* 左列：统一用小圆点。显示/当前 = 浅灰，隐藏/非当前 = 深灰；插槽与附件行可点击切换 */}
             <div
-              className="w-4 flex flex-col shrink-0"
+              className="w-8 flex flex-col shrink-0"
               style={{ background: C.panelDk, borderRight: '1px solid ' + C.border }}
             >
               {rows.map((r) => {
                 const dotStyle = (on: boolean, clickable: boolean, tip: string, act: () => void) => (
                   <button
                     key={r.key}
-                    className="h-[22px] flex items-center justify-center shrink-0"
+                    className="h-[28px] flex items-center justify-center shrink-0"
                     title={tip}
                     style={{
                       background: 'transparent', border: 'none',
@@ -909,7 +960,7 @@ export function HierarchyPanel() {
                 return (
                   <div
                     key={r.key}
-                    className="h-[22px] flex items-center justify-center shrink-0"
+                    className="h-[28px] flex items-center justify-center shrink-0"
                     title={r.label}
                   >
                     <span
@@ -923,10 +974,48 @@ export function HierarchyPanel() {
               })}
             </div>
 
+            {/* 中列：关键帧（钥匙）—— 骨骼有动画属性时显示；其它行空白 */}
+            <div
+              className="w-8 flex flex-col shrink-0"
+              style={{ background: C.panelDk, borderRight: '1px solid ' + C.border }}
+              title="关键帧：有动画属性时显示"
+            >
+              {(() => {
+                // 当前激活动画里哪些骨骼有非空轨道（订阅动画/活动 id 变化）
+                const curAnims = usePixiBonesStore((s) => s.animations);
+                const curActive = usePixiBonesStore((s) => s.activeAnimationId);
+                const anim = curAnims.find((a) => a.id === curActive);
+                const withKey = new Set<string>();
+                if (anim) {
+                  for (const tr of anim.tracks) {
+                    if (tr.keys && tr.keys.length > 0) withKey.add(tr.boneId);
+                  }
+                }
+                return rows.map((r) => {
+                  const hasKey = r.kind === 'bone' && r.node && withKey.has(r.node.id);
+                  return (
+                    <div
+                      key={r.key}
+                      className="h-[28px] flex items-center justify-center shrink-0"
+                      title={hasKey ? `${r.label}（有关键帧）` : r.label}
+                      style={{ color: hasKey ? C.accent : 'transparent' }}
+                    >
+                      {hasKey ? (
+                        <svg width="9" height="9" viewBox="0 0 14 14" fill="none">
+                          <circle cx="4" cy="7" r="2.4" stroke="currentColor" strokeWidth="1" fill="none"/>
+                          <path d="M6.4 7 L12.4 7 M10.8 7 L10.8 9.4 M9.2 7 L9.2 8.6" stroke="currentColor" strokeWidth="1" strokeLinecap="square"/>
+                        </svg>
+                      ) : null}
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+
             {/* 右列：树 */}
             <div className="flex-1" style={{ background: C.panelDk }}>
               {rows.length === 0 ? (
-                <div className="text-xs text-center py-6" style={{ color: C.dim }}>
+                <div className="text-[14px] text-center py-6" style={{ color: C.dim }}>
                   {search ? '没有匹配的骨' : '还没有骨骼'}
                 </div>
               ) : (
@@ -1209,23 +1298,25 @@ export function HierarchyPanel() {
 }
 
 // =================================================================================
-//  顶部工具按钮（占位 icon，目前无字体实现）
+//  顶部工具按钮（SVG 图标，Spine 单行风格）
+//    children：SVG path / rect / circle 等节点
 // =================================================================================
-function ToolBtn({ icon, title, active, C }: { icon: string; title: string; active?: boolean; C: any }) {
+function ToolIcon({ title, active, children, C }: { title: string; active?: boolean; children: React.ReactNode; C: any }) {
   return (
     <button
-      className="w-6 h-6 flex items-center justify-center text-xs rounded"
+      className="h-6 w-6 flex items-center justify-center rounded shrink-0"
       style={{
         background: active ? C.accentDk : 'transparent',
         color: active ? '#fff' : C.dim,
         border: 'none',
         cursor: 'pointer',
+        padding: 0,
       }}
       onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = 'rgba(255,255,255,0.08)'; }}
       onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = 'transparent'; }}
       title={title}
     >
-      {icon}
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none">{children}</svg>
     </button>
   );
 }
@@ -1234,7 +1325,7 @@ function ToolBtn({ icon, title, active, C }: { icon: string; title: string; acti
 //  树的一行（工程节点 / 骨 / 分区）+ Spine 风格折线连线
 // =================================================================================
 /** 行高（像素）——左列 / 右列 / 连线都按它对齐 */
-const ROW_H = 22;
+const ROW_H = 28;
 /** 每一级缩进的宽度（像素） */
 const INDENT_W = 12;
 
@@ -1390,7 +1481,7 @@ function TreeRowView(props: TreeRowViewProps) {
 
   return (
     <div
-      className="group flex items-center pr-1 rounded select-none"
+      className="group flex items-center pl-2 pr-1 rounded select-none"
       draggable={!!drag}
       onDragStart={drag ? (e) => {
         e.dataTransfer.effectAllowed = 'move';
@@ -1458,7 +1549,7 @@ function TreeRowView(props: TreeRowViewProps) {
 
       {/* 折叠圆点（有子节点才显示 ⊖/⊕） */}
       <button
-        className="w-3 h-3 mr-0.5 shrink-0 flex items-center justify-center rounded-full text-[9px]"
+        className="w-3 h-3 mr-0.5 shrink-0 flex items-center justify-center rounded-full text-[11px]"
         style={{
           background: 'transparent',
           border: row.collapsible ? '1px solid ' + C.dim : 'none',
@@ -1489,7 +1580,7 @@ function TreeRowView(props: TreeRowViewProps) {
         </span>
       ) : (
         <span
-          className="w-4 h-4 flex items-center justify-center text-[11px] shrink-0 mr-1"
+          className="w-4 h-4 flex items-center justify-center text-[13px] shrink-0 mr-1"
           style={{ color: isSelected ? '#fff' : C.dim }}
         >
           {row.icon}
@@ -1497,13 +1588,13 @@ function TreeRowView(props: TreeRowViewProps) {
       )}
 
       {/* 名称（空插槽额外标注，便于区分「插槽还在但没附件」） */}
-      <span className="truncate flex-1 text-xs" title={row.label}>
+      <span className="truncate flex-1 text-[14px]" title={row.label}>
         {nameEl}
         {isSlot && slot && slot.attachmentIds.length === 0 && (
-          <span className="ml-1 text-[9px]" style={{ color: C.dim }}>（空）</span>
+          <span className="ml-1 text-[11px]" style={{ color: C.dim }}>（空）</span>
         )}
         {isAsset && row.isMesh && (
-          <span className="ml-1 text-[9px]" style={{ color: C.accent }} title="网格附件（曲面）">▦ 曲面</span>
+          <span className="ml-1 text-[11px]" style={{ color: C.accent }} title="网格附件（曲面）">▦ 曲面</span>
         )}
       </span>
 
@@ -1511,7 +1602,7 @@ function TreeRowView(props: TreeRowViewProps) {
           不再显示 🔗绑定名 标签（对齐 Spine）；未绑定时保留 hover 的 🔗 绑定入口 */}
       {((isSlot && slot) || (isAsset && assetSlotId)) && !boundBoneName ? (
         <button
-          className="shrink-0 w-4 h-4 flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100"
+          className="shrink-0 w-4 h-4 flex items-center justify-center text-[12px] opacity-0 group-hover:opacity-100"
           style={{ background: 'transparent', border: 'none', cursor: selectedBoneId ? 'pointer' : 'not-allowed', color: selectedBoneId ? C.text : C.dim }}
           title={selectedBoneId ? '绑定到选中骨骼' : '先在画布/树里选中一根骨骼'}
           onClick={(e) => { e.stopPropagation(); if (selectedBoneId) doBindToggle(); }}
@@ -1523,7 +1614,7 @@ function TreeRowView(props: TreeRowViewProps) {
       {/* 「图片」节点上的 ＋ 导入素材 */}
       {onImport && (
         <button
-          className="w-4 h-4 flex items-center justify-center text-xs shrink-0 opacity-0 group-hover:opacity-100"
+          className="w-4 h-4 flex items-center justify-center text-[14px] shrink-0 opacity-0 group-hover:opacity-100"
           style={{ color: C.text, background: 'transparent', border: 'none', cursor: 'pointer' }}
           onMouseEnter={(e) => (e.currentTarget.style.color = '#fff')}
           onMouseLeave={(e) => (e.currentTarget.style.color = C.text)}
@@ -1537,7 +1628,7 @@ function TreeRowView(props: TreeRowViewProps) {
       {/* 骨行右侧 + 按钮（hover 才显示） */}
       {isBone && node && (
         <button
-          className="w-4 h-4 flex items-center justify-center text-xs shrink-0 opacity-0 group-hover:opacity-100"
+          className="w-4 h-4 flex items-center justify-center text-[14px] shrink-0 opacity-0 group-hover:opacity-100"
           style={{ color: C.text, background: 'transparent', border: 'none', cursor: 'pointer' }}
           onMouseEnter={(e) => (e.currentTarget.style.color = '#fff')}
           onMouseLeave={(e) => (e.currentTarget.style.color = C.text)}
@@ -1613,7 +1704,7 @@ function SpineNewMenu({
       {createPortal(
         <div
           className="fixed z-[9998] shadow-2xl"
-          style={{ left: x, top: y, minWidth: W, background: C.panel, border: '1px solid ' + C.border, borderRadius: 4, padding: '4px 0', fontSize: 12 }}
+          style={{ left: x, top: y, minWidth: W, background: C.panel, border: '1px solid ' + C.border, borderRadius: 4, padding: '4px 0', fontSize: 14 }}
           onMouseDown={(e) => e.stopPropagation()}
         >
           {items.map((it, idx) => {
@@ -1630,7 +1721,7 @@ function SpineNewMenu({
                   border: 'none',
                   color: enabled ? C.text : C.dim,
                   cursor: enabled ? 'pointer' : 'default',
-                  fontSize: 12,
+                  fontSize: 14,
                 }}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.background = 'rgba(255,255,255,0.06)';
@@ -1653,8 +1744,8 @@ function SpineNewMenu({
               >
                 <span className="w-4 shrink-0 text-center" style={{ color: enabled ? C.accent : C.dim }}>{it.icon}</span>
                 <span className="flex-1 truncate">{it.label}</span>
-                {!enabled && <span className="text-[10px] shrink-0" style={{ color: C.dim }}>(未实现)</span>}
-                {!!it.children?.length && <span className="text-[10px]" style={{ color: C.dim }}>▶</span>}
+                {!enabled && <span className="text-[12px] shrink-0" style={{ color: C.dim }}>(未实现)</span>}
+                {!!it.children?.length && <span className="text-[12px]" style={{ color: C.dim }}>▶</span>}
               </button>
             );
           })}
@@ -1694,7 +1785,7 @@ function SpineNewMenu({
               >
                 <span className="w-4 shrink-0 text-center" style={{ color: enabled ? C.accent : C.dim }}>{sub.icon}</span>
                 <span className="flex-1 truncate">{sub.label}</span>
-                {!enabled && <span className="text-[10px] shrink-0" style={{ color: C.dim }}>(未实现)</span>}
+                {!enabled && <span className="text-[12px] shrink-0" style={{ color: C.dim }}>(未实现)</span>}
               </button>
             );
           })}
@@ -1734,7 +1825,7 @@ function BonePropsBlock(props: BonePropsBlockProps) {
     color: C.text,
     borderRadius: 3,
     padding: '2px 6px',
-    fontSize: 11,
+    fontSize: 13,
   };
   // ===== 「新建」下拉菜单（Spine 风格）=====
   const newBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -1778,7 +1869,7 @@ function BonePropsBlock(props: BonePropsBlockProps) {
     <div style={{ borderTop: '1px solid ' + C.border, background: C.panelDk }}>
       {/* 第一行：骨名 + 图标按钮 */}
       <div className="flex items-center px-2 py-1.5" style={{ background: C.toolbar, borderBottom: '1px solid ' + C.border }}>
-        <span className="text-xs font-semibold flex-1 truncate" style={{ color: C.selected }} title={node.name}>
+        <span className="text-[14px] font-semibold flex-1 truncate" style={{ color: C.selected }} title={node.name}>
           🦴 {node.name}
         </span>
         <button className="w-6 h-6 flex items-center justify-center" style={{ color: C.dim, background: 'transparent', border: 'none', cursor: 'pointer' }} onMouseEnter={(e) => (e.currentTarget.style.color = '#fff')} onMouseLeave={(e) => (e.currentTarget.style.color = C.dim)} title="定位到画布" onClick={onToggleIsolate}>
@@ -1791,7 +1882,7 @@ function BonePropsBlock(props: BonePropsBlockProps) {
       </div>
 
       {/* 第二行：继承 / 旋转 / 缩放 / 反射 checkbox */}
-      <div className="px-2 py-1 grid grid-cols-4 gap-1 text-[10px]">
+      <div className="px-2 py-1 grid grid-cols-4 gap-1 text-[12px]">
         <CheckChip label="继承" defaultChecked C={C} />
         <CheckChip label="旋转" defaultChecked C={C} />
         <CheckChip label="缩放" defaultChecked C={C} />
@@ -1799,7 +1890,7 @@ function BonePropsBlock(props: BonePropsBlockProps) {
       </div>
 
       {/* 第三行：长度 / 选择 / 名称 */}
-      <div className="px-2 pb-1.5 flex items-center gap-2 text-xs">
+      <div className="px-2 pb-1.5 flex items-center gap-2 text-[14px]">
         <span className="shrink-0" style={{ color: C.dim }}>📏 长度</span>
         <input
           type="number"
@@ -1843,7 +1934,7 @@ function BonePropsBlock(props: BonePropsBlockProps) {
       </div>
 
       {/* 第五行：Rotation (°) */}
-      <div className="px-2 pb-1.5 flex items-center gap-2 text-xs">
+      <div className="px-2 pb-1.5 flex items-center gap-2 text-[14px]">
         <span className="shrink-0 w-12" style={{ color: C.dim }}>↻ Rotation</span>
         <input
           type="number"
@@ -1859,7 +1950,7 @@ function BonePropsBlock(props: BonePropsBlockProps) {
       </div>
 
       {/* 父级下拉 */}
-      <div className="px-2 pb-1.5 flex items-center gap-2 text-xs">
+      <div className="px-2 pb-1.5 flex items-center gap-2 text-[14px]">
         <span className="shrink-0 w-12" style={{ color: C.dim }}>父级</span>
         <select
           value={node.parentId ?? ''}
@@ -1875,9 +1966,9 @@ function BonePropsBlock(props: BonePropsBlockProps) {
       </div>
 
       {/* 第六行：底部操作按钮（新建 ▾ / 父级 / 拆分 / 皮肤） */}
-      <div className="px-2 pb-2 grid grid-cols-4 gap-1 text-[10px]">
+      <div className="px-2 pb-2 grid grid-cols-4 gap-1 text-[12px]">
         <button ref={newBtnRef} onClick={openNewMenu} className="rounded px-1 py-1 flex items-center justify-center gap-0.5" style={{ background: newMenu ? C.toolbar : C.panel, color: C.text, border: '1px solid ' + C.border, cursor: 'pointer' }} onMouseEnter={(e) => (e.currentTarget.style.background = C.toolbar)} onMouseLeave={(e) => { if (!newMenu) e.currentTarget.style.background = C.panel; }} title="新建骨骼 / 插槽 / 约束 …">
-          <span style={{ color: C.accent }}>+</span> 新建 <span style={{ color: C.dim, fontSize: 9 }}>▾</span>
+          <span style={{ color: C.accent }}>+</span> 新建 <span style={{ color: C.dim, fontSize: 11 }}>▾</span>
         </button>
         <button className="rounded px-1 py-1 flex items-center justify-center gap-0.5" style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border, cursor: 'pointer' }} onMouseEnter={(e) => (e.currentTarget.style.background = C.toolbar)} onMouseLeave={(e) => (e.currentTarget.style.background = C.panel)}>
           <span>↗</span> 父级
@@ -1887,7 +1978,7 @@ function BonePropsBlock(props: BonePropsBlockProps) {
         </button>
         <button className="rounded px-1 py-1 flex items-center justify-center gap-0.5 relative" style={{ background: 'rgba(230,30,30,0.15)', color: '#e88', border: '1px solid rgba(230,30,30,0.3)', cursor: 'pointer' }}>
           <span>🧴</span> 皮肤
-          <span className="absolute -top-1 -right-1 text-[8px] px-0.5 font-bold" style={{ background: C.warning, color: '#000', borderRadius: 2 }}>PRO</span>
+          <span className="absolute -top-1 -right-1 text-[10px] px-0.5 font-bold" style={{ background: C.warning, color: '#000', borderRadius: 2 }}>PRO</span>
         </button>
       </div>
 
@@ -1952,7 +2043,7 @@ function AssetPreview({ layer, C }: { layer: PixiBonesLayer | null; C: any }) {
       {url ? (
         <img src={url} alt="" draggable={false} style={{ maxWidth: '92%', maxHeight: 64, objectFit: 'contain' }} />
       ) : (
-        <span className="text-[10px]" style={{ color: C.dim }}>无预览</span>
+        <span className="text-[12px]" style={{ color: C.dim }}>无预览</span>
       )}
     </div>
   );
@@ -1976,17 +2067,17 @@ function PanelTitleBar({
     color: C.dim,
     cursor: 'not-allowed',
     width: 20, height: 18, lineHeight: '16px',
-    fontSize: 10, borderRadius: 3, padding: 0, opacity: 0.55,
+    fontSize: 12, borderRadius: 3, padding: 0, opacity: 0.55,
   };
   return (
     <div
       className="flex items-center px-2 py-1.5 gap-1"
       style={{ background: C.toolbar, borderBottom: '1px solid ' + C.border }}
     >
-      <span className="text-xs shrink-0" style={{ color: C.dim }}>{icon}</span>
-      <span className="text-xs shrink-0" style={{ color: C.dim }}>{kindLabel}:</span>
-      <span className="text-xs font-semibold truncate" style={{ color: C.selected }} title={name}>{name}</span>
-      {badge ? <span className="text-[10px] shrink-0" style={{ color: C.dim }}>{badge}</span> : null}
+      <span className="text-[14px] shrink-0" style={{ color: C.dim }}>{icon}</span>
+      <span className="text-[14px] shrink-0" style={{ color: C.dim }}>{kindLabel}:</span>
+      <span className="text-[14px] font-semibold truncate" style={{ color: C.selected }} title={name}>{name}</span>
+      {badge ? <span className="text-[12px] shrink-0" style={{ color: C.dim }}>{badge}</span> : null}
       <span className="ml-auto flex items-center gap-1 shrink-0">
         <button style={iconBtn} title="复制（待实现）">⧉</button>
         <button style={iconBtn} title="粘贴（待实现）">⎘</button>
@@ -2009,8 +2100,8 @@ function PanelRow({
 }: { icon: string; label: string; C: any; children: React.ReactNode }) {
   return (
     <div className="flex items-center gap-1 px-2 py-1" style={{ borderBottom: '1px solid ' + C.border }}>
-      <span className="w-4 text-[11px] shrink-0 text-center" style={{ color: C.dim }}>{icon}</span>
-      <span className="text-[11px] shrink-0" style={{ color: C.text, width: 40 }}>{label}</span>
+      <span className="w-4 text-[13px] shrink-0 text-center" style={{ color: C.dim }}>{icon}</span>
+      <span className="text-[13px] shrink-0" style={{ color: C.text, width: 40 }}>{label}</span>
       <span className="flex items-center gap-1 flex-1 min-w-0">{children}</span>
     </div>
   );
@@ -2039,7 +2130,7 @@ function PanelFooterBtn({
         border: '1px solid ' + (active ? C.accent : C.border),
         cursor: disabled ? 'not-allowed' : 'pointer',
         opacity: disabled ? 0.5 : 1,
-        fontSize: 10,
+        fontSize: 12,
         whiteSpace: 'nowrap',
       }}
       onMouseEnter={(e) => { if (!disabled && !active) e.currentTarget.style.background = C.toolbar; }}
@@ -2047,7 +2138,7 @@ function PanelFooterBtn({
       title={title}
     >
       {pro && (
-        <span style={{ color: '#e5c07b', fontSize: 7, fontWeight: 700, lineHeight: 1 }}>PRO</span>
+        <span style={{ color: '#e5c07b', fontSize: 9, fontWeight: 700, lineHeight: 1 }}>PRO</span>
       )}
       <span style={{ color: active ? '#fff' : C.accent }}>{icon}</span> {label}
     </button>
@@ -2106,7 +2197,7 @@ function SlotPropsBlock(props: SlotPropsBlockProps) {
 
       {/* 已绑定的父级骨骼 */}
       {bindingBoneName && (
-        <div className="px-2 py-1 flex items-center gap-1 text-[10px]" style={{ color: '#7dd3a0' }}>
+        <div className="px-2 py-1 flex items-center gap-1 text-[12px]" style={{ color: '#7dd3a0' }}>
           <span>🔗 父级: {bindingBoneName}</span>
           <button
             style={{ background: 'transparent', border: 'none', color: C.dim, cursor: 'pointer', marginLeft: 'auto' }}
@@ -2126,7 +2217,7 @@ function SlotPropsBlock(props: SlotPropsBlockProps) {
           title="插槽颜色（与附件颜色相乘后作用于画布）"
         />
         <button
-          className="rounded px-1 text-[10px]"
+          className="rounded px-1 text-[12px]"
           style={{ background: C.panel, border: '1px solid ' + C.border, color: C.text, cursor: 'pointer' }}
           onClick={() => onColor('')}
           title="恢复默认（不覆盖颜色）"
@@ -2138,7 +2229,7 @@ function SlotPropsBlock(props: SlotPropsBlockProps) {
         <select
           value={blend}
           onChange={(e) => onBlend(e.target.value)}
-          className="rounded px-1 text-[10px] w-full"
+          className="rounded px-1 text-[12px] w-full"
           style={{ background: C.panel, border: '1px solid ' + C.border, color: C.text, cursor: 'pointer' }}
         >
           {BLEND_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -2149,11 +2240,11 @@ function SlotPropsBlock(props: SlotPropsBlockProps) {
       {picking && (
         <div className="mx-2 my-1 rounded" style={{ background: C.panel, border: '1px solid ' + C.border, maxHeight: 132, overflowY: 'auto' }}>
           {candidates.length === 0 ? (
-            <div className="px-2 py-1 text-[10px]" style={{ color: C.dim }}>没有可添加的素材</div>
+            <div className="px-2 py-1 text-[12px]" style={{ color: C.dim }}>没有可添加的素材</div>
           ) : candidates.map((l) => (
             <button
               key={l.id}
-              className="w-full flex items-center gap-1 px-2 py-1 text-[10px] text-left"
+              className="w-full flex items-center gap-1 px-2 py-1 text-[12px] text-left"
               style={{ background: 'transparent', border: 'none', color: C.text, cursor: 'pointer' }}
               onMouseEnter={(e) => (e.currentTarget.style.background = C.toolbar)}
               onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
@@ -2168,7 +2259,7 @@ function SlotPropsBlock(props: SlotPropsBlockProps) {
       )}
 
       {/* 操作按钮：＋ 新建… / ↖ 父级 */}
-      <div className="px-2 pb-2 pt-1 grid grid-cols-2 gap-1 text-[10px]">
+      <div className="px-2 pb-2 pt-1 grid grid-cols-2 gap-1 text-[12px]">
         <PanelFooterBtn
           C={C}
           onClick={() => setPicking((v) => !v)}
@@ -2237,7 +2328,7 @@ function FlagCheck({
   label, checked, onChange, C,
 }: { label: string; checked: boolean; onChange: (v: boolean) => void; C: any }) {
   return (
-    <label className="flex items-center gap-1 shrink-0 cursor-pointer text-[10px]" style={{ color: C.text }}>
+    <label className="flex items-center gap-1 shrink-0 cursor-pointer text-[12px]" style={{ color: C.text }}>
       <input
         type="checkbox"
         checked={checked}
@@ -2269,7 +2360,7 @@ function AttachmentPropsBlock(props: AttachmentPropsBlockProps) {
     border: '1px solid ' + C.border,
     color: C.dim,
     cursor: 'not-allowed',
-    width: 20, height: 18, lineHeight: '16px', fontSize: 10,
+    width: 20, height: 18, lineHeight: '16px', fontSize: 12,
     borderRadius: 3, padding: 0, flex: 'none',
   };
 
@@ -2291,7 +2382,7 @@ function AttachmentPropsBlock(props: AttachmentPropsBlockProps) {
 
       {/* 已绑定的父级骨骼 */}
       {bindingBoneName && (
-        <div className="px-2 py-1 flex items-center gap-1 text-[10px]" style={{ color: '#7dd3a0' }}>
+        <div className="px-2 py-1 flex items-center gap-1 text-[12px]" style={{ color: '#7dd3a0' }}>
           <span>🔗 父级: {bindingBoneName}</span>
           <button
             style={{ background: 'transparent', border: 'none', color: C.dim, cursor: 'pointer', marginLeft: 'auto' }}
@@ -2304,7 +2395,7 @@ function AttachmentPropsBlock(props: AttachmentPropsBlockProps) {
       {/* 图片路径（当前 = 素材名；查找/重指定为占位） */}
       <PanelRow icon="📁" label="图片路径" C={C}>
         <span
-          className="truncate rounded px-1 text-[10px] flex-1"
+          className="truncate rounded px-1 text-[12px] flex-1"
           style={{ background: C.panel, border: '1px solid ' + C.border, color: C.text, lineHeight: '16px' }}
           title={attachment.name}
         >&lt;{attachment.name}&gt;</span>
@@ -2324,7 +2415,7 @@ function AttachmentPropsBlock(props: AttachmentPropsBlockProps) {
             <FlagCheck label="网格" checked={isMesh} onChange={onToggleMesh} C={C} />
             <FlagCheck label="线框" checked={wireframe} onChange={onToggleWireframe} C={C} />
             <span
-              className="flex items-center gap-1 text-[10px] shrink-0"
+              className="flex items-center gap-1 text-[12px] shrink-0"
               style={{ color: C.dim, cursor: 'not-allowed' }}
               title="序列帧（待实现）"
             >
@@ -2345,7 +2436,7 @@ function AttachmentPropsBlock(props: AttachmentPropsBlockProps) {
           title="附件颜色（与插槽颜色相乘后作用于画布）"
         />
         <button
-          className="rounded px-1 text-[10px]"
+          className="rounded px-1 text-[12px]"
           style={{ background: C.panel, border: '1px solid ' + C.border, color: C.text, cursor: 'pointer' }}
           onClick={() => onColor('')}
           title="恢复默认（不覆盖颜色）"
@@ -2356,11 +2447,11 @@ function AttachmentPropsBlock(props: AttachmentPropsBlockProps) {
       {picking && (
         <div className="mx-2 my-1 rounded" style={{ background: C.panel, border: '1px solid ' + C.border, maxHeight: 132, overflowY: 'auto' }}>
           {candidates.length === 0 ? (
-            <div className="px-2 py-1 text-[10px]" style={{ color: C.dim }}>没有可添加的素材</div>
+            <div className="px-2 py-1 text-[12px]" style={{ color: C.dim }}>没有可添加的素材</div>
           ) : candidates.map((l) => (
             <button
               key={l.id}
-              className="w-full flex items-center gap-1 px-2 py-1 text-[10px] text-left"
+              className="w-full flex items-center gap-1 px-2 py-1 text-[12px] text-left"
               style={{ background: 'transparent', border: 'none', color: C.text, cursor: 'pointer' }}
               onMouseEnter={(e) => (e.currentTarget.style.background = C.toolbar)}
               onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
@@ -2375,7 +2466,7 @@ function AttachmentPropsBlock(props: AttachmentPropsBlockProps) {
       )}
 
       {/* 操作按钮：＋新建… / 父级 [/ 编辑网格 / 描绘 / 重置 / 冻结（勾网格后出现）] */}
-      <div className="px-2 pb-2 pt-1 flex flex-col gap-1 text-[10px]">
+      <div className="px-2 pb-2 pt-1 flex flex-col gap-1 text-[12px]">
         <div className="grid grid-cols-4 gap-1">
           <PanelFooterBtn
             C={C}
@@ -2466,11 +2557,11 @@ function ImagesSectionPropsBlock(props: ImagesSectionPropsBlockProps) {
     <div style={{ borderTop: '1px solid ' + C.border, background: C.panelDk }}>
       {/* 标题行：图片文件 */}
       <div className="flex items-center px-2 py-1.5 gap-1" style={{ background: C.toolbar, borderBottom: '1px solid ' + C.border }}>
-        <span className="text-xs font-semibold" style={{ color: C.selected }}>图片文件</span>
+        <span className="text-[14px] font-semibold" style={{ color: C.selected }}>图片文件</span>
       </div>
 
       {/* 选项：限制扫描（checkbox） */}
-      <div className="px-2 py-1 flex items-center gap-2 text-[11px]" style={{ color: C.text }}>
+      <div className="px-2 py-1 flex items-center gap-2 text-[13px]" style={{ color: C.text }}>
         <span style={{ color: C.dim }}>▶ 选项</span>
         <label className="flex items-center gap-1 cursor-pointer select-none ml-auto">
           <input type="checkbox" defaultChecked className="w-3 h-3" />
@@ -2479,7 +2570,7 @@ function ImagesSectionPropsBlock(props: ImagesSectionPropsBlockProps) {
       </div>
 
       {/* 路径 ./images/ */}
-      <div className="px-2 py-1 flex items-center gap-1 text-[11px]" style={{ color: C.text }}>
+      <div className="px-2 py-1 flex items-center gap-1 text-[13px]" style={{ color: C.text }}>
         <span className="shrink-0" style={{ color: C.dim }}>路径</span>
         <span className="flex-1 truncate" style={{ color: C.dim }}>./images/</span>
         <span style={{ color: C.warning }} title="设为图片目录">★</span>
@@ -2488,13 +2579,13 @@ function ImagesSectionPropsBlock(props: ImagesSectionPropsBlockProps) {
       </div>
 
       {/* PSD <无> */}
-      <div className="px-2 py-1 flex items-center gap-2 text-[11px]" style={{ color: C.text }}>
+      <div className="px-2 py-1 flex items-center gap-2 text-[13px]" style={{ color: C.text }}>
         <span className="shrink-0" style={{ color: C.dim }}>PSD</span>
         <span className="flex-1 truncate" style={{ color: C.dim }}>&lt;无&gt;</span>
       </div>
 
       {/* 底部按钮：添加PSD / 刷新 */}
-      <div className="px-2 pb-2 pt-1 grid grid-cols-2 gap-1 text-[10px]">
+      <div className="px-2 pb-2 pt-1 grid grid-cols-2 gap-1 text-[12px]">
         <button
           onClick={onAddPsd}
           className="rounded px-1 py-1 flex items-center justify-center gap-0.5"
@@ -2560,14 +2651,14 @@ function ConstraintsSectionPropsBlock(props: ConstraintsSectionPropsBlockProps) 
     <div style={{ borderTop: '1px solid ' + C.border, background: C.panelDk, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       {/* 标题行 */}
       <div className="flex items-center px-2 py-1.5 gap-1 shrink-0" style={{ background: C.toolbar, borderBottom: '1px solid ' + C.border }}>
-        <span className="text-xs font-semibold" style={{ color: C.selected }}>IK 约束</span>
-        <span className="text-[10px]" style={{ color: C.dim }}>{constraints.length} 条</span>
+        <span className="text-[14px] font-semibold" style={{ color: C.selected }}>IK 约束</span>
+        <span className="text-[12px]" style={{ color: C.dim }}>{constraints.length} 条</span>
       </div>
 
       {/* 约束列表（顺序 = 应用顺序） */}
       <div className="px-2 py-1 flex flex-col gap-0.5 overflow-y-auto shrink-0" style={{ maxHeight: 160 }}>
         {constraints.length === 0 && (
-          <div className="text-[11px]" style={{ color: C.dim }}>尚未创建约束。用下方「新建」添加 IK。</div>
+          <div className="text-[13px]" style={{ color: C.dim }}>尚未创建约束。用下方「新建」添加 IK。</div>
         )}
         {constraints.map((c, i) => (
           <div
@@ -2575,7 +2666,7 @@ function ConstraintsSectionPropsBlock(props: ConstraintsSectionPropsBlockProps) 
             onClick={() => selectConstraint(c.id)}
             // ★ 双击 = 弹窗重命名（Spine 行为），与「name」输入框 onBlur 互不干扰（点击触发 onBlur 但 name 未变 → noop）
             onDoubleClick={(e) => { e.preventDefault(); e.stopPropagation(); onRenamePopup?.(c.id); }}
-            className="flex items-center gap-1 rounded px-1.5 py-1 text-[11px] cursor-pointer select-none"
+            className="flex items-center gap-1 rounded px-1.5 py-1 text-[13px] cursor-pointer select-none"
             style={{
               background: selectedId === c.id ? C.accentDk : 'transparent',
               color: selectedId === c.id ? '#fff' : C.text,
@@ -2587,21 +2678,21 @@ function ConstraintsSectionPropsBlock(props: ConstraintsSectionPropsBlockProps) 
             </span>
             {/* 上移 / 下移（调整应用顺序） */}
             <button
-              className="w-4 h-4 flex items-center justify-center rounded text-[10px]"
+              className="w-4 h-4 flex items-center justify-center rounded text-[12px]"
               style={{ background: 'transparent', border: 'none', color: C.dim, cursor: i === 0 ? 'default' : 'pointer' }}
               disabled={i === 0}
               title="上移（更先应用）"
               onClick={(e) => { e.stopPropagation(); onMove(c.id, i - 1); }}
             >▲</button>
             <button
-              className="w-4 h-4 flex items-center justify-center rounded text-[10px]"
+              className="w-4 h-4 flex items-center justify-center rounded text-[12px]"
               style={{ background: 'transparent', border: 'none', color: C.dim, cursor: i === constraints.length - 1 ? 'default' : 'pointer' }}
               disabled={i === constraints.length - 1}
               title="下移（更后应用）"
               onClick={(e) => { e.stopPropagation(); onMove(c.id, i + 1); }}
             >▼</button>
             <button
-              className="w-4 h-4 flex items-center justify-center rounded text-[10px]"
+              className="w-4 h-4 flex items-center justify-center rounded text-[12px]"
               style={{ background: 'transparent', border: 'none', color: C.warning, cursor: 'pointer' }}
               title="删除约束"
               onClick={(e) => { e.stopPropagation(); onRemove(c.id); if (selectedId === c.id) usePixiBonesStore.getState().selectSection('constraints'); }}
@@ -2611,11 +2702,11 @@ function ConstraintsSectionPropsBlock(props: ConstraintsSectionPropsBlockProps) 
       </div>
 
       {/* 新建约束 */}
-      <div className="px-2 py-1.5 border-t flex flex-col gap-1 text-[11px]" style={{ borderColor: C.border }}>
+      <div className="px-2 py-1.5 border-t flex flex-col gap-1 text-[13px]" style={{ borderColor: C.border }}>
         <div className="flex items-center gap-1">
           <span className="shrink-0" style={{ color: C.dim }}>受约束</span>
           <select
-            className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[11px]"
+            className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
             style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
             value={newBone}
             onChange={(e) => setNewBone(e.target.value)}
@@ -2626,7 +2717,7 @@ function ConstraintsSectionPropsBlock(props: ConstraintsSectionPropsBlockProps) 
         <div className="flex items-center gap-1">
           <span className="shrink-0" style={{ color: C.dim }}>子骨(选)</span>
           <select
-            className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[11px]"
+            className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
             style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
             value={newChild}
             onChange={(e) => setNewChild(e.target.value)}
@@ -2638,7 +2729,7 @@ function ConstraintsSectionPropsBlock(props: ConstraintsSectionPropsBlockProps) 
         <div className="flex items-center gap-1">
           <span className="shrink-0" style={{ color: C.dim }}>目标</span>
           <select
-            className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[11px]"
+            className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
             style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
             value={newTarget}
             onChange={(e) => setNewTarget(e.target.value)}
@@ -2666,11 +2757,11 @@ function ConstraintsSectionPropsBlock(props: ConstraintsSectionPropsBlockProps) 
 
       {/* 选中约束的属性编辑 */}
       {selected && (
-        <div className="px-2 py-1.5 border-t flex flex-col gap-1.5 text-[11px]" style={{ borderColor: C.border }}>
+        <div className="px-2 py-1.5 border-t flex flex-col gap-1.5 text-[13px]" style={{ borderColor: C.border }}>
           <div className="flex items-center gap-1">
             <span className="shrink-0" style={{ color: C.dim }}>名称</span>
             <input
-              className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[11px]"
+              className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
               style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
               defaultValue={selected.name}
               onBlur={(e) => { const v = e.target.value.trim(); if (v && v !== selected.name) onRename(selected.id, v); }}
@@ -2680,7 +2771,7 @@ function ConstraintsSectionPropsBlock(props: ConstraintsSectionPropsBlockProps) 
           <div className="flex items-center gap-1">
             <span className="shrink-0" style={{ color: C.dim }}>目标骨</span>
             <select
-              className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[11px]"
+              className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
               style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
               value={selected.targetBoneId}
               onChange={(e) => onTarget(selected.id, e.target.value)}
@@ -2692,7 +2783,7 @@ function ConstraintsSectionPropsBlock(props: ConstraintsSectionPropsBlockProps) 
             <div className="flex items-center gap-1">
               <span className="shrink-0" style={{ color: C.dim }}>弯曲方向</span>
               <select
-                className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[11px]"
+                className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
                 style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
                 value={selected.bendDirection}
                 onChange={(e) => onBend(selected.id, Number(e.target.value) as 1 | -1)}

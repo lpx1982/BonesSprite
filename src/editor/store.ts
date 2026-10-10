@@ -85,6 +85,36 @@ export interface BoneNode {
   scaleY: number;
   length: number;
   slotId: string | null;
+  /** 骨骼颜色（0xRRGGBB，Spine 面板 Color 行；未设置用默认灰 0x9ca3af）。 */
+  color?: number;
+  /** 本地剪切角（弧度，对应 Spine shearX）。 */
+  shearX?: number;
+  /** 本地剪切角（弧度，对应 Spine shearY）。 */
+  shearY?: number;
+  /** 是否继承父骨骼旋转（Spine Inherit Rotation）。缺省 true。 */
+  inheritRotation?: boolean;
+  /** 是否继承父骨骼缩放（Spine Inherit Scale）。缺省 true。 */
+  inheritScale?: boolean;
+  /** 是否继承父骨骼反射（Spine Inherit Reflection）。缺省 true。 */
+  inheritReflection?: boolean;
+  /** 视口中总是渲染名字（Spine Name checkbox）。 */
+  showName?: boolean;
+  /** 是否可在视口中被点选（Spine Select checkbox）。 */
+  selectable?: boolean;
+}
+
+/** 骨骼新字段的缺省值补全（旧存档 / 新建骨骼共用）。 */
+export function normalizeBone(b: BoneNode): BoneNode {
+  return {
+    ...b,
+    shearX: b.shearX ?? 0,
+    shearY: b.shearY ?? 0,
+    inheritRotation: b.inheritRotation ?? true,
+    inheritScale: b.inheritScale ?? true,
+    inheritReflection: b.inheritReflection ?? true,
+    showName: b.showName ?? false,
+    selectable: b.selectable ?? true,
+  };
 }
 
 /**
@@ -625,6 +655,16 @@ export interface PixiBonesState {
   moveBone: (id: string, x: number, y: number) => void;
   setBoneRotation: (id: string, rotation: number) => void;
   setBoneLength: (id: string, length: number) => void;
+  /** 设置骨骼颜色（0xRRGGBB；Spine 面板 Color 行） */
+  setBoneColor: (id: string, color: number) => void;
+  /** 设置本地剪切角（弧度；对应 Spine shearX / shearY） */
+  setBoneShear: (id: string, shearX: number, shearY: number) => void;
+  /** 设置是否继承父骨骼的 旋转 / 缩放 / 反射（Spine Inherit checkboxes） */
+  setBoneInherit: (id: string, prop: 'rotation' | 'scale' | 'reflection', on: boolean) => void;
+  /** 视口总是渲染名字（Spine Name checkbox） */
+  setBoneShowName: (id: string, on: boolean) => void;
+  /** 视口可否点选（Spine Select checkbox） */
+  setBoneSelectable: (id: string, on: boolean) => void;
   /** 单选：替换整个多选集 */
   selectBone: (id: string | null) => void;
   /** 多选（Shift+点击 / 框选）。传入 true = 增量，false = 替换 */
@@ -1975,7 +2015,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       attachmentMeshes: d.attachmentMeshes,
       slotOrder: d.slotOrder,
       slotBindings: d.slotBindings,
-      bones: d.bones,
+      bones: d.bones.map(normalizeBone),
       selectedBoneId: d.selectedBoneId,
       selectedBoneIds: d.selectedBoneIds,
       projectName: d.projectName,
@@ -2697,7 +2737,7 @@ setActiveTool: (t) => set((s) => ({
   addBone: (parentId, partial = {}) => {
     get().pushHistory();
     set((state) => {
-      const newBone: BoneNode = {
+      const newBone: BoneNode = normalizeBone({
         id: genBoneId(),
         name: partial.name ?? `Bone ${state.bones.length + 1}`,
         parentId,
@@ -2708,7 +2748,15 @@ setActiveTool: (t) => set((s) => ({
         scaleY: partial.scaleY ?? 1,
         length: partial.length ?? 100,
         slotId: partial.slotId ?? null,
-      };
+        color: partial.color,
+        shearX: partial.shearX ?? 0,
+        shearY: partial.shearY ?? 0,
+        inheritRotation: partial.inheritRotation ?? true,
+        inheritScale: partial.inheritScale ?? true,
+        inheritReflection: partial.inheritReflection ?? true,
+        showName: partial.showName ?? false,
+        selectable: partial.selectable ?? true,
+      });
       return {
         bones: [...state.bones, newBone],
         selectedBoneId: newBone.id,
@@ -2757,6 +2805,46 @@ setActiveTool: (t) => set((s) => ({
     get().pushHistory();
     set((state) => ({
       bones: state.bones.map((n) => (n.id === id ? { ...n, length: Math.max(1, length) } : n)),
+    }));
+  },
+
+  setBoneColor: (id, color) => {
+    get().pushHistory();
+    set((state) => ({
+      bones: state.bones.map((n) => (n.id === id ? { ...n, color } : n)),
+    }));
+  },
+
+  setBoneShear: (id, shearX, shearY) => {
+    get().pushHistory();
+    set((state) => ({
+      bones: state.bones.map((n) => (n.id === id ? { ...n, shearX, shearY } : n)),
+    }));
+  },
+
+  setBoneInherit: (id, prop, on) => {
+    get().pushHistory();
+    set((state) => ({
+      bones: state.bones.map((n) => {
+        if (n.id !== id) return n;
+        if (prop === 'rotation') return { ...n, inheritRotation: on };
+        if (prop === 'scale') return { ...n, inheritScale: on };
+        return { ...n, inheritReflection: on };
+      }),
+    }));
+  },
+
+  setBoneShowName: (id, on) => {
+    get().pushHistory();
+    set((state) => ({
+      bones: state.bones.map((n) => (n.id === id ? { ...n, showName: on } : n)),
+    }));
+  },
+
+  setBoneSelectable: (id, on) => {
+    get().pushHistory();
+    set((state) => ({
+      bones: state.bones.map((n) => (n.id === id ? { ...n, selectable: on } : n)),
     }));
   },
 

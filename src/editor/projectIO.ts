@@ -255,49 +255,111 @@ export async function loadProject(id: string): Promise<boolean> {
     return false;
   }
   if (!snap) return false;
+  return applySnapshot(snap);
+}
+
+/** 把一份快照反序列化并应用到 store。成功返回 true。 */
+async function applySnapshot(snap: SerializedProject): Promise<boolean> {
   if (snap.version !== PROJECT_VERSION) return false;
-
   try {
-    const psd: PixiBonesPsd | null = snap.hasPsd
-      ? {
-          width: snap.psdWidth,
-          height: snap.psdHeight,
-          layers: await Promise.all(snap.psdLayers.map(deserializeLayer)),
-        }
-      : null;
-    const images = await Promise.all(snap.images.map(deserializeLayer));
-    const meshes: Record<string, MeshData> = {};
-    for (const [k, m] of Object.entries(snap.attachmentMeshes)) meshes[k] = normalizeMesh(m);
-
-    const data: ProjectData = {
-      psd,
-      images,
-      slots: snap.slots,
-      slotVisibility: snap.slotVisibility,
-      slotTransforms: snap.slotTransforms,
-      slotStyle: snap.slotStyle,
-      attachmentStyle: snap.attachmentStyle,
-      attachmentMeshes: meshes,
-      slotOrder: snap.slotOrder,
-      slotBindings: snap.slotBindings,
-      bones: snap.bones,
-      selectedBoneId: snap.selectedBoneId,
-      selectedBoneIds: snap.selectedBoneIds,
-      projectName: snap.projectName,
-      editorTab: snap.editorTab,
-      viewport: snap.viewport,
-      // 旧存档没有这些字段 → 缺省为空
-      animations: snap.animations ?? [],
-      activeAnimationId: snap.activeAnimationId ?? null,
-      setupPose: snap.setupPose ?? {},
-      constraints: snap.constraints ?? [],
-    };
+    const data = await snapshotToProjectData(snap);
     usePixiBonesStore.getState().applyProjectData(data);
     return true;
   } catch (err) {
     console.error('[projectIO] 反序列化失败', err);
     return false;
   }
+}
+
+/** SerializedProject → ProjectData（重建 canvas）。 */
+async function snapshotToProjectData(snap: SerializedProject): Promise<ProjectData> {
+  const psd: PixiBonesPsd | null = snap.hasPsd
+    ? {
+        width: snap.psdWidth,
+        height: snap.psdHeight,
+        layers: await Promise.all(snap.psdLayers.map(deserializeLayer)),
+      }
+    : null;
+  const images = await Promise.all(snap.images.map(deserializeLayer));
+  const meshes: Record<string, MeshData> = {};
+  for (const [k, m] of Object.entries(snap.attachmentMeshes)) meshes[k] = normalizeMesh(m);
+
+  return {
+    psd,
+    images,
+    slots: snap.slots,
+    slotVisibility: snap.slotVisibility,
+    slotTransforms: snap.slotTransforms,
+    slotStyle: snap.slotStyle,
+    attachmentStyle: snap.attachmentStyle,
+    attachmentMeshes: meshes,
+    slotOrder: snap.slotOrder,
+    slotBindings: snap.slotBindings,
+    bones: snap.bones,
+    selectedBoneId: snap.selectedBoneId,
+    selectedBoneIds: snap.selectedBoneIds,
+    projectName: snap.projectName,
+    editorTab: snap.editorTab,
+    viewport: snap.viewport,
+    // 旧存档没有这些字段 → 缺省为空
+    animations: snap.animations ?? [],
+    activeAnimationId: snap.activeAnimationId ?? null,
+    setupPose: snap.setupPose ?? {},
+    constraints: snap.constraints ?? [],
+  };
+}
+
+// =================================================================================
+//  .pbs 工程文件（导出 / 导入）—— 仿 Spine .spine，一个 JSON 文件装全部数据
+// =================================================================================
+
+/** 工程文件扩展名 */
+export const PROJECT_FILE_EXT = '.pbs';
+
+/**
+ * 把当前工程导出为一个 .pbs 文件并触发浏览器下载。
+ * 文件内容 = SerializedProject 的 JSON（图片内嵌为 PNG dataURL）。
+ */
+export function saveProjectToFile(): void {
+  const snap = buildSnapshot();
+  // 用当前工程名（清理非法字符）作为文件名
+  const safeName = (snap.name || 'untitled').replace(/[\\/:*?"<>|]/g, '_') || 'untitled';
+  const blob = new Blob([JSON.stringify(snap, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${safeName}${PROJECT_FILE_EXT}`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * 从 .pbs 文件导入：解析 JSON → 应用到 store（作为新工程载入）。
+ * 成功返回 true；格式不对 / 版本不符返回 false。
+ */
+export async function loadProjectFromFile(file: File): Promise<boolean> {
+  const text = await file.text();
+  let snap: SerializedProject;
+  try {
+    snap = JSON.parse(text) as SerializedProject;
+  } catch (err) {
+    console.error('[projectIO] 工程文件不是合法 JSON', err);
+    return false;
+  }
+  if (!snap || typeof snap !== 'object' || typeof snap.version !== 'number') {
+    console.error('[projectIO] 工程文件缺少 version 字段，无法识别');
+    return false;
+  }
+  const ok = await applySnapshot(snap);
+  if (ok) {
+    // 载入后切到一个新工程 id（当前编辑器直接使用这份数据；也便于后续保存）
+    const id = `proj_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+    usePixiBonesStore.setState({ currentProjectId: id, projectName: snap.projectName });
+    usePixiBonesStore.getState().pushRecentProject(id, snap.projectName);
+  }
+  return ok;
 }
 
 /** 某工程是否已有存档。 */

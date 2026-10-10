@@ -2282,7 +2282,7 @@ export function BoneEditor() {
             } else if (hoveredBoneId === rootBoneId) {
               color = HOVER_COLOR;
             } else {
-              color = BONE_COLOR;
+              color = node.color ?? BONE_COLOR;
             }
             const boneAlpha = rootBoneId ? (boneAlphaMap.get(rootBoneId) ?? 1) : 1;
             // anchor (viewBox 中心) — 4 条 line 都相对它对称布置
@@ -2362,7 +2362,7 @@ export function BoneEditor() {
             } else if (hoveredBoneId === bId) {
               color = HOVER_COLOR;
             } else {
-              color = BONE_COLOR;
+              color = node.color ?? BONE_COLOR;
             }
             const boneAlpha = bId ? (boneAlphaMap.get(bId) ?? 1) : 1;
             // anchor 位置 = 骨骼 joint 屏幕位置；尖端 = world tip 屏幕位置
@@ -2407,6 +2407,16 @@ export function BoneEditor() {
           const isSelected = (selectedBoneIds && selectedBoneIds.length > 0)
             ? selectedBoneIds.includes(node.id)
             : node.id === selectedBoneId;
+
+          // ★ Spine Select：不可在视口点选的骨骼 → 不创建命中区（树上仍可选中）
+          if (node.selectable === false) {
+            const oldHit = hitById.get(node.id);
+            if (oldHit) {
+              handlesLayer.removeChild(oldHit);
+              hitById.delete(node.id);
+            }
+            continue;
+          }
 
           const origin = skeletonRef.getWorldPosition(b);
           // 根骨图标画在 rootAnchor + 自身世界位移上（见 visit 里的 cx/cy），
@@ -5323,6 +5333,11 @@ function makeBone(node: BoneNode): EngineBone {
     rotation: node.rotation,
     scaleX: node.scaleX, scaleY: node.scaleY,
     length: node.length,
+    shearX: node.shearX ?? 0,
+    shearY: node.shearY ?? 0,
+    inheritRotation: node.inheritRotation ?? true,
+    inheritScale: node.inheritScale ?? true,
+    inheritReflection: node.inheritReflection ?? true,
   });
   (b as unknown as { _id: string })._id = node.id;
   return b;

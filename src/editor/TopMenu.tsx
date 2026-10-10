@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { usePixiBonesStore } from './store';
 import { useT, type Locale } from './i18n';
-import { saveCurrentProject, saveProjectAsPrompt } from './projectIO';
+import { saveProjectToFile, loadProjectFromFile, PROJECT_FILE_EXT } from './projectIO';
 import { importDataFromFiles } from '../exporters/importDataFlow';
 import { PromptDialog } from './PromptDialog';
 import logoImg from '/logo.png';
@@ -67,8 +67,8 @@ const MENU_ITEMS: MenuItem[] = [
   { icon: '📁', labelKey: 'menu.open_project',    shortcutKey: 'shortcut.cmd_o' },
   { icon: '🕘', labelKey: 'menu.recent',          shortcutKey: 'shortcut.arrow_right' },
   { divider: true } as MenuItem,
-  { icon: '💾', labelKey: 'menu.save',            shortcutKey: 'shortcut.cmd_s', action: () => { void saveCurrentProject(); } },
-  { icon: '📝', labelKey: 'menu.save_as',         shortcutKey: 'shortcut.cmd_shift_s', action: () => { void saveProjectAsPrompt(); } },
+  { icon: '💾', labelKey: 'menu.save',            shortcutKey: 'shortcut.cmd_s' },
+  { icon: '📝', labelKey: 'menu.save_as',         shortcutKey: 'shortcut.cmd_shift_s' },
   { icon: '📦', labelKey: 'menu.pack' },
   { divider: true } as MenuItem,
   { icon: '🦴', labelKey: 'menu.new_skeleton',    shortcutKey: 'shortcut.cmd_n' },
@@ -104,6 +104,34 @@ export function TopMenu() {
   const settingsRowRef = useRef<HTMLButtonElement>(null);
   // ★ 新建项目对话框（Spine 风格 PromptDialog，输入项目名）
   const [newProjectOpen, setNewProjectOpen] = useState(false);
+  // ★ 打开 / 导入 .pbs 工程文件的隐藏 input
+  const openFileRef = useRef<HTMLInputElement>(null);
+  const [openFileError, setOpenFileError] = useState(false);
+
+  const handleOpenFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const ok = await loadProjectFromFile(file);
+    setOpenFileError(!ok);
+    if (ok) {
+      setOpen(false);
+      setHoverSettings(false);
+    }
+  };
+
+  const handleSave = () => {
+    // ★ 保存 = 导出 .pbs 文件（仿 Spine 的 .spine：一个 JSON 装全部数据）
+    saveProjectToFile();
+    setOpen(false);
+    setHoverSettings(false);
+  };
+
+  const handleSaveAs = () => {
+    saveProjectToFile();
+    setOpen(false);
+    setHoverSettings(false);
+  };
 
   // 点击外部关闭（仅关闭主菜单，不干扰子菜单 hover）
   useEffect(() => {
@@ -141,6 +169,20 @@ export function TopMenu() {
     // ★ 新建项目：打开命名对话框（不执行其它 action）
     if (item.labelKey === 'menu.new_project') {
       setNewProjectOpen(true);
+      setOpen(false);
+      setHoverSettings(false);
+      return;
+    }
+    // ★ 打开工程：选择 .pbs 文件
+    if (item.labelKey === 'menu.open_project') {
+      openFileRef.current?.click();
+      setOpen(false);
+      setHoverSettings(false);
+      return;
+    }
+    // ★ 保存 / 另存为：导出 .pbs 文件
+    if (item.labelKey === 'menu.save' || item.labelKey === 'menu.save_as') {
+      saveProjectToFile();
       setOpen(false);
       setHoverSettings(false);
       return;
@@ -191,13 +233,10 @@ export function TopMenu() {
             paddingTop:     M.ICON_GRP.TOP,
           }}
         >
-          <QuickBtn title={t('quickbtn.open_tip')} onClick={() => console.log(t('quickbtn.open_console'))}>
+          <QuickBtn title={t('quickbtn.open_tip')} onClick={() => openFileRef.current?.click()}>
             <img src={folderIcon} alt="打开" width={M.ICON_GRP.ICON_SIZE} height={M.ICON_GRP.ICON_SIZE} style={{ display: 'block' }} />
           </QuickBtn>
-          <QuickBtn title={t('quickbtn.save_tip')} onClick={(e) => {
-            if (e.shiftKey) void saveProjectAsPrompt();
-            else void saveCurrentProject();
-          }}>
+          <QuickBtn title={t('quickbtn.save_tip')} onClick={() => saveProjectToFile()}>
             <img src={saveIcon} alt="保存" width={M.ICON_GRP.ICON_SIZE} height={M.ICON_GRP.ICON_SIZE} style={{ display: 'block' }} />
           </QuickBtn>
           <QuickBtn title={t('quickbtn.undo_tip')} onClick={() => usePixiBonesStore.getState().undo()}>
@@ -333,6 +372,35 @@ export function TopMenu() {
             setNewProjectOpen(false);
           }}
         />
+      )}
+
+      {/* ★ 打开 .pbs 工程文件的隐藏 input */}
+      <input
+        ref={openFileRef}
+        type="file"
+        accept={PROJECT_FILE_EXT}
+        style={{ display: 'none' }}
+        onChange={handleOpenFile}
+      />
+      {/* 打开失败提示（非 .pbs 文件 / 版本不符） */}
+      {openFileError && (
+        <div
+          className="fixed z-[9998]"
+          style={{
+            top: M.HEADER_HEIGHT + 8,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: '#5a1f1f',
+            border: '1px solid #e66',
+            color: '#fff',
+            padding: '6px 16px',
+            borderRadius: 4,
+            fontSize: 12,
+          }}
+          onClick={() => setOpenFileError(false)}
+        >
+          无法打开该文件：不是有效的工程文件（.{PROJECT_FILE_EXT.slice(1)}）
+        </div>
       )}
     </div>
   );

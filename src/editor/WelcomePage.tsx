@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { usePixiBonesStore } from './store';
 import { useT } from './i18n';
 import { importDataFromFiles } from '../exporters/importDataFlow';
+import { loadProjectFromFile } from './projectIO';
 import logoImg from '/logo.png';
 import folderIcon from './icons/folder.png';
 
@@ -41,14 +42,17 @@ export function WelcomePage() {
     setNewName('');
   };
 
-  const handleOpenFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleOpenFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    // 用文件名（去掉扩展名）作为工程名
-    const name = file.name.replace(/\.[^.]+$/, '');
-    const id = `proj-${Date.now().toString(36)}`;
-    openProject(id, name);
-    // TODO: 真正读文件解析工程数据
+    // ★ 真正的 .pbs 工程文件：解析并载入（图片 dataURL 内嵌在文件里）
+    const ok = await loadProjectFromFile(file);
+    if (!ok) {
+      // 不是 .pbs 工程文件 → 回退旧逻辑（仅按文件名建空工程占位）
+      const name = file.name.replace(/\.[^.]+$/, '');
+      const id = `proj-${Date.now().toString(36)}`;
+      openProject(id, name);
+    }
     e.target.value = '';
   };
 
