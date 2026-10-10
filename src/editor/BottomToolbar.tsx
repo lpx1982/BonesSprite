@@ -99,10 +99,15 @@ export function BottomToolbar() {
   const viewWeights = usePixiBonesStore((s) => s.viewWeights);
   const dockPanelWidths = usePixiBonesStore((s) => s.dockPanelWidths);
   // 右侧停靠区总宽度 = 各已开面板宽度之和 + 每块面板左边缘那根拖动分隔条的宽度
+  const viewGridToolMinimized = usePixiBonesStore((s) => s.viewGridToolMinimized);
+  const viewWeightsMinimized  = usePixiBonesStore((s) => s.viewWeightsMinimized);
+  // ★ 停靠区"实际占的宽度"：只算"正在显示"的面板。
+  //   - hierarchy：showRightPanel
+  //   - grid_tool / weights：view 标记 + 不是最小化（被最小化后 dock 不渲染，应释放宽度）
   const dockOpen = [
     showRightPanel && 'hierarchy',
-    viewGridTool && 'grid_tool',
-    viewWeights && 'weights',
+    (viewGridTool && !viewGridToolMinimized) && 'grid_tool',
+    (viewWeights && !viewWeightsMinimized) && 'weights',
   ].filter(Boolean) as string[];
   const dockWidth = dockOpen.reduce(
     (sum, k) => sum + (dockPanelWidths[k] ?? DOCK_PANEL_DEFAULT_WIDTH[k] ?? 300) + DOCK_RESIZER_WIDTH,

@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useRef } from 'react';
+import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, DOCK_PANEL_DEFAULT_WIDTH, type BoneNode, type SlotBinding, type IkConstraintDef } from './store';
 import { type PixiBonesLayer, type PixiBonesSlot } from '@psd/index';
@@ -6,7 +6,7 @@ import { importAssetFile } from './importAsset';
 import { PromptDialog } from './PromptDialog';
 
 /** 附件大预览悬停延迟（ms）。2 秒 = Spine 行为。 */
-const HOVER_PREVIEW_DELAY = 2000;
+const HOVER_PREVIEW_DELAY = 500;
 
 /**
  * 层级树面板（Spine 风格 · setup 模式）
@@ -352,7 +352,7 @@ export function HierarchyPanel() {
     usePixiBonesStore.getState().toggleViewHierarchy();
     setPopoverOpen(false);
   };
-
+  // 真正最小化：见下面"出场动画"块的 useCallback 版本（拦截后先播动画再卸载）
   const childMap = useMemo(() => buildChildMap(bones), [bones]);
   const rootNodes = childMap.get(null) ?? [];
 
@@ -715,17 +715,147 @@ export function HierarchyPanel() {
     guide:    'rgba(255,255,255,0.18)',
   };
 
+  // ===== 最小化 / 恢复动画 =====
+  //   点击 ☰ 右键 / 弹层"最小化" → 面板缩成 0×0，移动到 header 图标位置，渐隐 → 卸载
+  //   点击 header 图标 → 面板从图标位置展开到正常大小
+  const asideRef = useRef<HTMLElement | null>(null);
+  // 入场动画：`hierarchyRestorePending` 为 true 时挂载即播从图标位置展开
+  const restorePending = usePixiBonesStore((s) => s.hierarchyRestorePending);
+  const setRestorePending = usePixiBonesStore((s) => s.setHierarchyRestorePending);
+  // 当前动画状态（仅在动画进行中非 idle）
+  const [animStyle, setAnimStyle] = useState<React.CSSProperties | null>(null);
+  const [animating, setAnimating] = useState(false);
+
+  // 入场：从图标位置展开（被最小化按钮 toggle 打开时触发）
+  useEffect(() => {
+    if (!restorePending) return;
+    const el = asideRef.current;
+    if (!el) return;
+    // 量图标位置（按钮 data-attr="hierarchy-min-icon" 由 Editor.tsx header 提供）
+    const iconEl = document.querySelector<HTMLElement>('[data-hierarchy-min-icon]');
+    const startRect = iconEl ? iconEl.getBoundingClientRect() : null;
+    const endRect = el.getBoundingClientRect();
+    // ★ 起始位置 = 图标中心；缩到 0 宽，移到图标位置，透明度 0
+    //   终止位置 = 当前面板；正常宽，opacity 1
+    const fromX = startRect ? (startRect.left + startRect.width / 2 - endRect.left - endRect.width / 2) : 0;
+    const fromY = startRect ? (startRect.top + startRect.height / 2 - endRect.top - endRect.height / 2) : 0;
+    const targetW = endRect.width;
+    const targetH = endRect.height;
+    const dur = 240;
+    const t0 = performance.now();
+    setAnimating(true);
+    setAnimStyle({
+      width: 0,
+      height: targetH,
+      transform: `translate(${fromX}px, ${fromY}px) scale(0.02)`,
+      transformOrigin: 'center center',
+      opacity: 0,
+      transition: 'none',
+      overflow: 'hidden',
+    });
+    let raf = 0;
+    const step = () => {
+      const t = Math.min(1, (performance.now() - t0) / dur);
+      // ease-out cubic
+      const e = 1 - Math.pow(1 - t, 3);
+      const w = targetW * e;
+      setAnimStyle({
+        width: w,
+        height: targetH,
+        transform: `translate(${fromX * (1 - e)}px, ${fromY * (1 - e)}px) scale(${0.02 + 0.98 * e})`,
+        transformOrigin: 'center center',
+        opacity: e,
+        transition: 'none',
+        overflow: 'hidden',
+      });
+      if (t < 1) {
+        raf = requestAnimationFrame(step);
+      } else {
+        setAnimStyle(null);
+        setAnimating(false);
+        setRestorePending(false);
+      }
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [restorePending, setRestorePending]);
+
+  // 出场：拦截"最小化"，先播动画再卸载
+  const fullyMinimize = useCallback(() => {
+    const el = asideRef.current;
+    if (!el) {
+      // 找不到 ref（极端情况）就直接卸载
+      setShowTree(false);
+      usePixiBonesStore.getState().toggleRightPanel();
+      setPopoverOpen(false);
+      return;
+    }
+    const startRect = el.getBoundingClientRect();
+    const iconEl = document.querySelector<HTMLElement>('[data-hierarchy-min-icon]');
+    const endRect = iconEl ? iconEl.getBoundingClientRect() : startRect;
+    const fromX = 0;
+    const fromY = 0;
+    // 目标位置：图标中心 - 面板中心
+    const toX = (endRect.left + endRect.width / 2) - (startRect.left + startRect.width / 2);
+    const toY = (endRect.top + endRect.height / 2) - (startRect.top + startRect.height / 2);
+    const fromW = startRect.width;
+    const targetH = endRect.height;
+    const dur = 220;
+    const t0 = performance.now();
+    setPopoverOpen(false);
+    setAnimating(true);
+    setAnimStyle({
+      width: fromW,
+      height: targetH,
+      transform: 'translate(0,0) scale(1)',
+      transformOrigin: 'center center',
+      opacity: 1,
+      transition: 'none',
+      overflow: 'hidden',
+    });
+    let raf = 0;
+    const step = () => {
+      const t = Math.min(1, (performance.now() - t0) / dur);
+      // ease-in cubic（开始慢后加速）
+      const e = Math.pow(t, 2);
+      const w = fromW * (1 - e);
+      setAnimStyle({
+        width: w,
+        height: targetH,
+        transform: `translate(${toX * e}px, ${toY * e}px) scale(${1 - 0.98 * e})`,
+        transformOrigin: 'center center',
+        opacity: 1 - e,
+        transition: 'none',
+        overflow: 'hidden',
+      });
+      if (t < 1) {
+        raf = requestAnimationFrame(step);
+      } else {
+        setAnimStyle(null);
+        setAnimating(false);
+        setShowTree(false);
+        usePixiBonesStore.getState().toggleRightPanel();
+      }
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [setShowTree, setPopoverOpen]);
+
+
   return (
     <aside
+      ref={asideRef}
       className="flex flex-col overflow-hidden text-[16px] hierarchy-pop-enter shrink-0"
       style={{
         width: panelWidth,
         background: C.panel, color: C.text,
         borderLeft: '1px solid ' + C.border,
         transformOrigin: 'top right',
+        transition: animStyle ? undefined : 'width 0.18s ease',
         // ★ 作为「右侧停靠区」的一个面板参与横向排列（停靠区自身浮在画布右侧，
         //   所以不会挤压画布宽度）。
         position: 'relative',
+        ...(animStyle ?? {}),
       }}
     >
       {/* ============ 顶部：标题（Spine 风格：图标 + 「层级树」 + 骨数）============ */}
@@ -764,7 +894,7 @@ export function HierarchyPanel() {
               <path d="M2 2 L12 12 M12 2 L2 12" stroke="currentColor" strokeWidth="1.4" strokeLinecap="square"/>
             </svg>
           </button>
-          {/* ☰ 选项：SVG 三横线 */}
+          {/* ☰ 选项：SVG 三横线（右键=最小化，双击=关闭） */}
           <button
             className="h-full flex items-center justify-center"
             style={{ color: popoverOpen ? '#fff' : C.dim, background: 'transparent', border: 'none', padding: '0 2px', cursor: 'pointer' }}
@@ -772,6 +902,17 @@ export function HierarchyPanel() {
             onMouseLeave={(e) => { if (!popoverOpen) e.currentTarget.style.color = C.dim; }}
             title="面板选项"
             onClick={() => setPopoverOpen((v) => !v)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              // ★ 右键三横杠 → 真正最小化（面板缩成图标，对齐 Spine）
+              fullyMinimize();
+            }}
+            onDoubleClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              // ★ 双击三横杠 → 关闭层级树面板
+              closePanel();
+            }}
           >
             <svg width="12" height="9" viewBox="0 0 14 10" fill="none">
               <path d="M1 1 H13 M1 5 H13 M1 9 H13" stroke="currentColor" strokeWidth="1.4" strokeLinecap="square"/>
@@ -797,7 +938,7 @@ export function HierarchyPanel() {
                 style={{ height: 22, padding: '0 10px', background: 'transparent', border: 'none', color: C.text, fontSize: 14, cursor: 'pointer', textAlign: 'left' }}
                 onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.05)')}
                 onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-                onClick={() => { setShowTree(false); setPopoverOpen(false); }}
+                onClick={() => { fullyMinimize(); }}
               >
                 <span style={{ color: C.accent, fontWeight: 600 }}>最小化</span>
                 <span style={{ color: C.dim, fontSize: 13 }}>右键单击</span>

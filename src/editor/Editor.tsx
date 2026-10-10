@@ -11,6 +11,7 @@ import { PromptDialog } from './PromptDialog';
 import { useProjectPersistence } from './projectIO';
 import type { MeshData } from '@psd/types';
 import hideViewsIcon from './icons/hideviews.png';
+import { MinimizedIcon, PANEL_ICONS, MinimizeControl } from './MinimizeControl';
 
 /**
  * Day 3.5 · Spine 风格主编辑器
@@ -32,6 +33,18 @@ export function Editor() {
   const projectName = usePixiBonesStore((s) => s.projectName);
   const viewAllHidden   = usePixiBonesStore((s) => s.viewAllHidden);
   const setViewAllHidden= usePixiBonesStore((s) => s.setViewAllHidden);
+  const viewHierarchy = usePixiBonesStore((s) => s.viewHierarchy);
+  const toggleRightPanel = usePixiBonesStore((s) => s.toggleRightPanel);
+  const setHierarchyRestorePending = usePixiBonesStore((s) => s.setHierarchyRestorePending);
+  const setGridRestorePending = usePixiBonesStore((s) => s.setGridRestorePending);
+  const setWeightsRestorePending = usePixiBonesStore((s) => s.setWeightsRestorePending);
+  const toggleViewGridTool = usePixiBonesStore((s) => s.toggleViewGridTool);
+  const toggleViewWeights = usePixiBonesStore((s) => s.toggleViewWeights);
+  const viewWeights = usePixiBonesStore((s) => s.viewWeights);
+  const viewGridToolMinimized = usePixiBonesStore((s) => s.viewGridToolMinimized);
+  const viewWeightsMinimized  = usePixiBonesStore((s) => s.viewWeightsMinimized);
+  const setViewGridToolMinimized = usePixiBonesStore((s) => s.setViewGridToolMinimized);
+  const setViewWeightsMinimized  = usePixiBonesStore((s) => s.setViewWeightsMinimized);
   // hideviews 总开关：开启时把 10 个单项 toggle 全部关掉
   const toggleAll = () => setViewAllHidden(!viewAllHidden);
 
@@ -63,10 +76,9 @@ export function Editor() {
       const mod = e.metaKey || e.ctrlKey;
       if (!mod) {
         const key = e.key;
-        // Opt+P：唤醒 / 切换层级树面板（对齐 Spine 层级树快捷键）
-        // ★ 用 e.code（物理键位）而非 e.key：Mac 上 Option+P 会输出字符「π」，e.key 不是 'p'，
-        //   用 KeyP 才能稳定识别。
-        if (e.altKey && (e.code === 'KeyP' || e.key === 'p' || e.key === 'P')) {
+        // Opt+T：唤醒 / 切换层级树面板（对齐 Spine 层级树快捷键）
+        // ★ 用 e.code（物理键位）而非 e.key：Mac 上 Option+T 会输出字符，用 KeyT 才能稳定识别。
+        if (e.altKey && (e.code === 'KeyT' || e.key === 't' || e.key === 'T')) {
           e.preventDefault();
           const s = usePixiBonesStore.getState();
           const on = !s.showRightPanel;
@@ -175,6 +187,34 @@ export function Editor() {
 
         {/* header 右上角：hideviews / views 视图菜单（层级树面板由 views 菜单控制） */}
         <div className="ml-auto flex items-center gap-1">
+          {/* ★ 视图面板"被最小化"的图标条：每个面板独立显示
+              点击 = 还原对应面板（动画由面板自身的 useEffect 播放） */}
+          {viewHierarchy && !showRightPanel && (
+            <MinimizedIcon
+              panelKey="hierarchy"
+              paths={PANEL_ICONS.hierarchy.paths}
+              color={PANEL_ICONS.hierarchy.color}
+              onClick={() => { setHierarchyRestorePending(true); toggleRightPanel(); }}
+            />
+          )}
+          {viewGridTool && viewGridToolMinimized && <MinimizedIcon
+            panelKey="grid_tool"
+            paths={PANEL_ICONS.grid_tool.paths}
+            color={PANEL_ICONS.grid_tool.color}
+            onClick={() => {
+              setGridRestorePending(true);
+              setViewGridToolMinimized(false);
+            }}
+          />}
+          {viewWeights && viewWeightsMinimized && <MinimizedIcon
+            panelKey="weights"
+            paths={PANEL_ICONS.weights.paths}
+            color={PANEL_ICONS.weights.color}
+            onClick={() => {
+              setWeightsRestorePending(true);
+              setViewWeightsMinimized(false);
+            }}
+          />}
           <button
             className="spine-btn-icon"
             onClick={toggleAll}
@@ -312,9 +352,13 @@ function IkPickOverlay() {
 }
 
 // =================================================================================
-//  右侧停靠区 —— 视图面板横向并排停靠在画布最右侧
-//    规则：viewDockOrder 记录各面板「首次出现」的顺序；越早出现的越靠右。
-//    停靠区本身绝对定位、右对齐（不挤压画布宽度），面板作为 flex 子项依次排列。
+//  右侧停靠区 —— 视图面板横向并排停靠在画布最右侧（无空隙，紧贴）
+//    规则：
+//      - 层级树永远在最右侧（不管 viewDockOrder 顺序如何）
+//      - 其它面板按 viewDockOrder 中「首次出现」的顺序，从右往左依次排列
+//        （DOM 左 → 右 = 视觉右 → 左）
+//      - 面板之间不留空隙；每块面板的「右边缘」是一根可拖动分隔条
+//        （最右边的那块没有分隔条）
 // =================================================================================
 function RightDock() {
   const showRightPanel = usePixiBonesStore((s) => s.showRightPanel);
@@ -326,14 +370,21 @@ function RightDock() {
   const editorTab = usePixiBonesStore((s) => s.editorTab);
   const timelineHeight = usePixiBonesStore((s) => s.timelineHeight);
 
-  // 当前开着的面板；反转后 DOM 从左到右 = 从「最晚出现」到「最早出现」
-  const open = [...viewDockOrder].reverse().filter((k) =>
+  // 判断每个面板是否真正应该渲染（开关 + 最小化）
+  const isVisible = (k: string) =>
     k === 'hierarchy' ? showRightPanel
-      : k === 'grid_tool' ? viewGridTool
-        : k === 'weights' ? viewWeights
-          : false,
-  );
-  if (open.length === 0) return null;
+      : k === 'grid_tool' ? (viewGridTool && !usePixiBonesStore.getState().viewGridToolMinimized)
+        : k === 'weights' ? (viewWeights && !usePixiBonesStore.getState().viewWeightsMinimized)
+          : false;
+
+  // 当前开着的面板列表（按视觉顺序：右→左）
+  //   1) hierarchy 永远在最后（DOM 顺序的尾 = 视觉最右）
+  //   2) 其它面板按 viewDockOrder 的反序（早出现的在视觉上更靠近右侧）
+  // 最终 DOM 从左到右 = [其它面板按出现晚→早] + [hierarchy]
+  const others = viewDockOrder.filter((k) => k !== 'hierarchy' && isVisible(k));
+  const isHierarchyVisible = isVisible('hierarchy');
+  const ordered = [...others, ...(isHierarchyVisible ? ['hierarchy'] : [])];
+  if (ordered.length === 0) return null;
 
   return (
     <div
@@ -341,16 +392,28 @@ function RightDock() {
       style={{
         zIndex: 10,
         bottom: editorTab === 'animate' ? timelineHeight : 0,
+        // 面板之间不要 gap，紧贴
+        gap: 0,
+        // ★ 让 DockResizer 的绝对定位（覆盖在面板右边缘）能正确定位到此 div 内
+        position: 'absolute',
+        top: 0,
+        right: 0,
       }}
     >
-      {open.map((k) => (
+      {ordered.map((k, i) => (
         <Fragment key={k}>
-          {/* 每块面板左边缘一根可拖动分隔条 → 拖动即可横向缩放该面板 */}
-          <DockResizer panelKey={k} />
+          {/*
+           * 拖动分隔条：每块面板的**右边缘**（不是左边缘）作为可拖动手柄。
+           *   - 最右边那块的右边不需要分隔条（已经贴到画布边缘）
+           *   - 分隔条绝对定位在面板右边界上（覆盖整高），不占布局宽度 → 面板间 0 间距
+           * 但是这样面板之间没有视觉分界 —— 用 borderLeft 当分界线（1px 像素）
+           */}
           {k === 'hierarchy' ? <HierarchyPanel />
             : k === 'grid_tool' ? <MeshToolsPanel />
               : k === 'weights' ? <WeightsPanel />
                 : null}
+          {/* 每块面板的右边缘放拖手柄（最右那块不需要）；overlay 不占布局空间 */}
+          {i < ordered.length - 1 && <DockResizer panelKey={k} side="right" />}
         </Fragment>
       ))}
     </div>
@@ -358,13 +421,15 @@ function RightDock() {
 }
 
 /**
- * 停靠面板的横向缩放手柄（面板左边缘那根分隔条）。
+ * 停靠面板的横向缩放手柄。
  *
- * 面板整体右对齐，所以「往左拖 = 变宽、往右拖 = 变窄」：
- *   newWidth = 起始宽度 + (起始鼠标 x − 当前鼠标 x)
+ * 设计为**绝对定位覆盖在面板边缘上**，不占布局空间（这样面板之间可以 0 间距紧贴）：
+ *   - `side="right"`：定位在面板右边界，作为"拖右边那条线"改宽度
+ *   - `side="left"`：定位在面板左边界（旧行为，保留兼容）
+ * 拖动方向：往左拖 = 变宽，往右拖 = 变窄
  * 用 Pointer Capture 保证鼠标移出手柄/面板后仍然跟着走。
  */
-function DockResizer({ panelKey }: { panelKey: string }) {
+function DockResizer({ panelKey, side = 'right' }: { panelKey: string; side?: 'left' | 'right' }) {
   const width = usePixiBonesStore(
     (s) => s.dockPanelWidths[panelKey] ?? DOCK_PANEL_DEFAULT_WIDTH[panelKey] ?? 300,
   );
@@ -379,14 +444,12 @@ function DockResizer({ panelKey }: { panelKey: string }) {
     drag.current = { startX: e.clientX, startW: width };
     setDragging(true);
     e.currentTarget.setPointerCapture(e.pointerId);
-    // 拖动期间禁止选中文本
     document.body.style.userSelect = 'none';
   };
 
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const d = drag.current;
     if (!d) return;
-    // 上限：不小于拖动前已有宽度，也不小于窗口宽度的 60%（避免窄窗口下「往左拖反而变窄」）
     const max = Math.max(d.startW, DOCK_PANEL_MIN_WIDTH + 60, window.innerWidth * 0.6);
     const w = Math.round(
       Math.max(DOCK_PANEL_MIN_WIDTH, Math.min(d.startW + (d.startX - e.clientX), max)),
@@ -414,10 +477,15 @@ function DockResizer({ panelKey }: { panelKey: string }) {
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
       style={{
+        // 绝对定位：覆盖在面板边缘上（宽度 = DOCK_RESIZER_WIDTH，不占 flex 布局）
+        position: 'absolute',
+        top: 0,
+        bottom: 0,
+        [side]: -DOCK_RESIZER_WIDTH / 2,
         width: DOCK_RESIZER_WIDTH,
-        flex: 'none',
         cursor: 'col-resize',
         touchAction: 'none',
+        zIndex: 1,
       }}
     />
   );
@@ -440,6 +508,31 @@ function MeshToolsPanel() {
   const setHull       = usePixiBonesStore((s) => s.setMeshSoftHull);
   // 宽度由左边缘的拖动分隔条控制（store 里的 dockPanelWidths）
   const width = usePixiBonesStore((s) => s.dockPanelWidths.grid_tool ?? DOCK_PANEL_DEFAULT_WIDTH.grid_tool);
+  // 监听顶部 ☰ 的最小化 / 关闭事件（panel:minimize / panel:close）
+  //   - 最小化：直接关闭 viewGridTool（header 显示图标；点击图标 → 重新开）
+  //   - 关闭：彻底从视图菜单移除（仍由 view 菜单控制）
+  const toggleViewGridTool = usePixiBonesStore((s) => s.toggleViewGridTool);
+  const setViewGridTool    = usePixiBonesStore((s) => s.setViewGridTool);
+  const setViewGridToolMinimized = usePixiBonesStore((s) => s.setViewGridToolMinimized);
+  useEffect(() => {
+    const onMin = (e: Event) => {
+      if ((e as CustomEvent).detail?.panelKey !== 'grid_tool') return;
+      // 最小化：view 仍为 true，但"最小化"标记打开 → RightDock 不渲染 + header 显示缩略图
+      setViewGridToolMinimized(true);
+    };
+    const onClose = (e: Event) => {
+      if ((e as CustomEvent).detail?.panelKey !== 'grid_tool') return;
+      // 关闭：彻底关掉 view 标记 + 清最小化
+      setViewGridTool(false);
+      setViewGridToolMinimized(false);
+    };
+    window.addEventListener('panel:minimize', onMin);
+    window.addEventListener('panel:close', onClose);
+    return () => {
+      window.removeEventListener('panel:minimize', onMin);
+      window.removeEventListener('panel:close', onClose);
+    };
+  }, [setViewGridTool, setViewGridToolMinimized]);
 
   const rowStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 8 };
   const labelStyle: CSSProperties = {
@@ -462,21 +555,14 @@ function MeshToolsPanel() {
         position: 'relative',
       }}
     >
-      {/* 标题栏：ℹ + 「网格工具」+ 折叠图标 */}
+      {/* 标题栏：ℹ + 「网格工具」+ 最小化控件 */}
       <div
-        className="flex items-center px-2 py-1.5"
-        style={{ borderBottom: '1px solid var(--spine-border)', background: 'var(--spine-bg-toolbar)' }}
+        className="flex items-center px-2"
+        style={{ height: 28, borderBottom: '1px solid var(--spine-border)', background: 'var(--spine-bg-toolbar)' }}
       >
         <InfoIcon />
         <span style={{ marginLeft: 6, fontSize: 13, fontWeight: 600 }}>网格工具</span>
-        <button
-          type="button"
-          title="折叠（占位）"
-          style={{
-            marginLeft: 'auto', background: 'transparent', border: 'none',
-            color: 'var(--spine-text)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: 0,
-          }}
-        >≡</button>
+        <MinimizeControl panelKey="grid_tool" />
       </div>
 
       {/* 内容卡片 */}
@@ -562,6 +648,28 @@ function InfoIcon() {
 //      绑定 / 自动 / 平滑 / 焊接 / 修剪 / 更新 / 交换 / 删除 及骨骼列表暂为占位。
 // =================================================================================
 function WeightsPanel() {
+  // 监听顶部 ☰ 的最小化 / 关闭事件（panel:minimize / panel:close）
+  const setViewWeights = usePixiBonesStore((s) => s.setViewWeights);
+  const setViewWeightsMinimized = usePixiBonesStore((s) => s.setViewWeightsMinimized);
+  useEffect(() => {
+    const onMin = (e: Event) => {
+      if ((e as CustomEvent).detail?.panelKey !== 'weights') return;
+      // 最小化：view 仍为 true，标记最小化（RightDock 不渲染 + header 显示缩略图）
+      setViewWeightsMinimized(true);
+    };
+    const onClose = (e: Event) => {
+      if ((e as CustomEvent).detail?.panelKey !== 'weights') return;
+      // 关闭：彻底关 view 标记 + 清最小化
+      setViewWeights(false);
+      setViewWeightsMinimized(false);
+    };
+    window.addEventListener('panel:minimize', onMin);
+    window.addEventListener('panel:close', onClose);
+    return () => {
+      window.removeEventListener('panel:minimize', onMin);
+      window.removeEventListener('panel:close', onClose);
+    };
+  }, [setViewWeights, setViewWeightsMinimized]);
   const influence     = usePixiBonesStore((s) => s.weightInfluence);
   const setInfluence  = usePixiBonesStore((s) => s.setWeightInfluence);
   const mode          = usePixiBonesStore((s) => s.weightMode);
@@ -665,20 +773,13 @@ function WeightsPanel() {
     >
       {/* 标题栏：ℹ + 权重图标 + 「权重」+ 折叠图标 */}
       <div
-        className="flex items-center px-2 py-1.5"
-        style={{ borderBottom: '1px solid var(--spine-border)', background: 'var(--spine-bg-toolbar)' }}
+        className="flex items-center px-2"
+        style={{ height: 28, borderBottom: '1px solid var(--spine-border)', background: 'var(--spine-bg-toolbar)' }}
       >
         <InfoIcon />
         <span style={{ marginLeft: 5, display: 'inline-flex' }}><WeightsTitleIcon /></span>
         <span style={{ marginLeft: 5, fontSize: 13, fontWeight: 600 }}>权重</span>
-        <button
-          type="button"
-          title="折叠（占位）"
-          style={{
-            marginLeft: 'auto', background: 'transparent', border: 'none',
-            color: 'var(--spine-text)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: 0,
-          }}
-        >≡</button>
+        <MinimizeControl panelKey="weights" />
       </div>
 
       {/* 内容卡片（撑满剩余高度，骨骼列表占满下半部分） */}

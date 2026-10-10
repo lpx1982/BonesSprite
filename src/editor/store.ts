@@ -59,7 +59,7 @@ export interface TraceSnapshot {
 //    DOCK_RESIZER_WIDTH：面板左边缘那根可拖动分隔条的宽度（占布局宽度）
 // =================================================================================
 export const DOCK_PANEL_DEFAULT_WIDTH: Record<string, number> = {
-  hierarchy: 288,
+  hierarchy: 418,
   grid_tool: 300,
   weights: 300,
 };
@@ -507,6 +507,16 @@ export interface PixiBonesState {
   selectedBoneIds: string[];
   /** 鼠标悬停的骨骼 id（用于显示 hover 高亮） */
   hoveredBoneId: string | null;
+  /** 层级树面板"恢复"时需要播"从图标展开"的入场动画（被最小化图标点击后置 true） */
+  hierarchyRestorePending: boolean;
+  /** 网格工具面板"恢复"时需要播入场动画 */
+  gridRestorePending: boolean;
+  /** 权重视图面板"恢复"时需要播入场动画 */
+  weightsRestorePending: boolean;
+  /** 把层级树面板的入场动画置为 true（由 header 恢复按钮调用） */
+  setHierarchyRestorePending: (v: boolean) => void;
+  setGridRestorePending: (v: boolean) => void;
+  setWeightsRestorePending: (v: boolean) => void;
 
   // ---- IK 约束（仿 Spine 3.8，顺序 = 应用顺序）----
   /** IK 约束列表。数组顺序即应用顺序（层级树「约束」节点里可拖拽调整）。 */
@@ -555,10 +565,15 @@ export interface PixiBonesState {
   // ---- 视图菜单 11 个开关（Spine 视图风格，全部默认关闭）----
   viewWeights:        boolean; toggleViewWeights:        () => void;
   viewSkin:           boolean; toggleViewSkin:           () => void;
-  viewGridTool:       boolean; toggleViewGridTool:       () => void;
+  viewGridTool:       boolean; toggleViewGridTool:       () => void; setViewGridTool: (v: boolean) => void;
+  /** grid_tool 面板"已最小化"标记（true = view 标记仍为 true 但不渲染面板） */
+  viewGridToolMinimized: boolean; setViewGridToolMinimized: (v: boolean) => void;
   viewColor:          boolean; toggleViewColor:          () => void;
   viewAnimation:      boolean; toggleViewAnimation:      () => void;
   viewHierarchy:      boolean; toggleViewHierarchy:      () => void;
+  setViewWeights:     (v: boolean) => void;
+  /** weights 面板"已最小化"标记 */
+  viewWeightsMinimized: boolean; setViewWeightsMinimized: (v: boolean) => void;
   viewIndicators:     boolean; toggleViewIndicators:     () => void;
   viewOutline:        boolean; toggleViewOutline:        () => void;
   viewIssues:         boolean; toggleViewIssues:         () => void;
@@ -1119,6 +1134,11 @@ export function slotIdOf(slots: PixiBonesSlot[], attachmentId: string | null): s
 export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   skeleton: null,
   hoveredBoneId: null,
+  hierarchyRestorePending: false,
+  gridRestorePending: false,
+  weightsRestorePending: false,
+  viewGridToolMinimized: false,
+  viewWeightsMinimized: false,
   animations: [],
   activeAnimationId: null,
   currentTime: 0,
@@ -1775,6 +1795,14 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     // 首次打开时登记停靠顺序（越早出现的越靠右）
     return { viewGridTool: on, ...(on && !s.viewDockOrder.includes('grid_tool') ? { viewDockOrder: [...s.viewDockOrder, 'grid_tool'] } : {}) };
   }),
+  setViewGridTool: (v) => set((s) => (s.viewGridTool === v ? s : {
+    viewGridTool: v,
+    viewDockOrder: v && !s.viewDockOrder.includes('grid_tool') ? [...s.viewDockOrder, 'grid_tool'] : s.viewDockOrder,
+  })),
+  setViewWeights: (v: boolean) => set((s) => (s.viewWeights === v ? s : {
+    viewWeights: v,
+    viewDockOrder: v && !s.viewDockOrder.includes('weights') ? [...s.viewDockOrder, 'weights'] : s.viewDockOrder,
+  })),
   viewColor:       false, toggleViewColor:       () => set((s) => ({ viewColor:      !s.viewColor })),
   viewAnimation:   false, toggleViewAnimation:   () => set((s) => ({ viewAnimation:  !s.viewAnimation })),
   viewHierarchy:   false, toggleViewHierarchy:   () => set((s) => {
@@ -1988,6 +2016,12 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       // —— 撤销栈清空（新项目是新起点，不允许撤销回旧工程）——
       historyPast: [],
       historyFuture: [],
+      // —— 最小化标记清空（每次加载项目时面板全部还原）——
+      hierarchyRestorePending: false,
+      gridRestorePending: false,
+      weightsRestorePending: false,
+      viewGridToolMinimized: false,
+      viewWeightsMinimized: false,
     });
     // id 计数器对齐（新项目只有 1 根骨 / 1 个动画，无插槽）
     syncIdCounters(
@@ -2892,6 +2926,12 @@ setActiveTool: (t) => set((s) => ({
 
   // 设置 hover 骨骼 id（不进入 history、不影响选中态）
   setHoveredBoneId: (id) => set({ hoveredBoneId: id }),
+
+  setHierarchyRestorePending: (v) => set({ hierarchyRestorePending: v }),
+  setGridRestorePending: (v) => set({ gridRestorePending: v }),
+  setWeightsRestorePending: (v) => set({ weightsRestorePending: v }),
+  setViewGridToolMinimized: (v) => set({ viewGridToolMinimized: v }),
+  setViewWeightsMinimized: (v) => set({ viewWeightsMinimized: v }),
 }));  // end usePixiBonesStore = create<PixiBonesState>((set, get) => ({
 
 // 兼容：导出供 store 外的消费者复用
