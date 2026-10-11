@@ -107,7 +107,7 @@ export function BoneEditor() {
       | { kind: 'rotate'; boneId: string; startRot: number; startScreen: { x: number; y: number } }
       | { kind: 'root-move'; boneId: string; startLocal: { x: number; y: number }; startScreen: { x: number; y: number }; moveZone?: 'green' | 'red' | 'center'; axisAngle?: number }
       | { kind: 'pan'; startScreen: { x: number; y: number }; startPan: { x: number; y: number } }
-      | { kind: 'create-from'; parentId: string; startWorld: { x: number; y: number }; startScreen: { x: number; y: number }; preview: Gfx }
+      | { kind: 'create-from'; parentId: string; startWorld: { x: number; y: number }; startScreen: { x: number; y: number }; preview: Gfx; fromBone: boolean; fromCmdSelect?: boolean }
       | {
           kind: 'marquee';
           additive: boolean;
@@ -2197,6 +2197,14 @@ export function BoneEditor() {
           h.destroy();
           tipById.delete(id);
         }
+        // ★ 清理已被删除骨骼的命中区（jointHit）—— 否则陈旧命中区残留在事件树上，
+        //   点击它会选中一个「已不存在的骨骼」，导致后续创建骨骼时 selectedBoneId 指向无效 id
+        for (const [id, h] of hitById) {
+          if (nodes.some((n) => n.id === id)) continue;
+          handlesLayer.removeChild(h);
+          h.destroy();
+          hitById.delete(id);
+        }
         // 清完残留后，若没有可绘骨骼或骨架未初始化，直接返回
         if (!skeletonRef || nodes.length === 0) return;
         // 当前 hover 的骨骼 id（用于图标 hover 高亮变浅）
@@ -2511,6 +2519,12 @@ export function BoneEditor() {
           if (!wired.__downWired) {
             wired.__downWired = true;
             jointHit.on('pointerdown', (ev: FederatedPointerEvent) => {
+              // ★ Cmd 按下：优先「选择目标图层」，骨骼不参与、也不拦截事件
+              //   （Spine：Ctrl+点击图片 = 选图片）。放行到 stage 的统一创建逻辑处理。
+              if (ev.metaKey || metaDown) {
+                const hitSlotId = topSlotAt(ev.global.x, ev.global.y);
+                if (hitSlotId) return;   // 不 stopPropagation，让事件冒泡到 stage
+              }
               ev.stopPropagation();
               // ★ 权重模式：优先选饼图（顶点）；命中饼图则本次不选骨骼
               if (trySelectWeightVertex(ev.global.x, ev.global.y, ev.metaKey || ev.ctrlKey || ev.shiftKey)) {
@@ -2712,6 +2726,7 @@ export function BoneEditor() {
                   startScreen: { x: ev.global.x, y: ev.global.y },
                   parentWorld: { x: parentWorld.x, y: parentWorld.y },
                   preview,
+                  fromBone: true,
                 } as typeof dragState & { parentWorld: { x: number; y: number } };
                 return;
               } else {
@@ -3576,16 +3591,20 @@ export function BoneEditor() {
             const dx = mouseWorld.x - startX;
             const dy = mouseWorld.y - startY;
             const dragLen = Math.sqrt(dx * dx + dy * dy);
-            // ★ 单击（几乎没拖动）=> 只选中，不创建骨骼。
-            //   （Spine 行为：Create 模式点击骨骼 = 选中它；拖拽才创建子骨骼）
+            // 单击（几乎没拖动）
             const isClick = dragLen <= 1;
-            if (isClick) {
-              // 清理预览
+            // ★ 单击只选中、不创建：
+            //   - 起点在骨骼上（fromBone）：Create 模式点骨骼 = 选中它
+            //   - ⌘ 点图层（fromCmdSelect）：⌘ + 单击 = 只把图层设为绑定目标
+            //  其余（点空白 + 单击）→ 创建 0 长度「点骨骼」（十字图标）
+            const fromCmdSelect = (dragState as { fromCmdSelect?: boolean }).fromCmdSelect === true;
+            if (isClick && (dragState.fromBone || fromCmdSelect)) {
+              // 清理预览 + 清掉 dragState（否则残留 create-from 会在下次 pointermove 访问已销毁的 preview 报错）
               a.stage.removeChild(dragState.preview);
               dragState.preview.destroy();
+              dragState = null;
               return;
             }
-            const length = dragLen;
             // 父骨骼的世界旋转（弧度）：由父骨骼 world joint → world tip 方向得出；
             // 根骨（长度 0、无 tip 方向）时为 0。
             let parentWorldRot = 0;
@@ -3595,8 +3614,9 @@ export function BoneEditor() {
               const pt = skeletonRef!.getWorldTip(parentBone);
               parentWorldRot = Math.atan2(pt.y - pa.y, pt.x - pa.x);
             }
-            // 新骨骼世界方向（弧度）：拖拽方向即骨骼朝向
-            const worldRot = Math.atan2(dy, dx);
+            // 新骨骼世界方向（弧度）：单击（空白）继承父骨骼方向；拖拽 = 拖拽方向
+            const length = isClick ? 0 : dragLen;
+            const worldRot = isClick ? parentWorldRot : Math.atan2(dy, dx);
             // joint 在父骨骼 local frame 下的 (x, y)：反旋转父世界旋转
             const offX = startX - parentWorld.x;
             const offY = startY - parentWorld.y;
@@ -4036,17 +4056,18 @@ export function BoneEditor() {
         // 创建模式：点空白 / 点 PSD 图层都可以从鼠标位置拖出子骨骼
         // （骨骼手柄自身会 stopPropagation，所以拖手柄不会走到这里）
         if (mode === 'create') {
-          // ⌘ + 点击素材：把它设为「新建骨骼的目标素材」（不创建骨骼）。
-          //   之后创建的骨骼会自动绑定到它，并以它的名称命名。
+          // ⌘ + 点击素材：把它设为「新建骨骼的目标素材」，并继续走创建流程。
           //   ★ 只设置目标素材，**不动骨骼选中** —— 保证父骨骼链不断：
           //     新骨仍是「当前选中骨骼」的子骨，而不是 root 下的兄弟骨。
+          //   ★ 不 return：⌘ + 点图层后「拖动」创建骨骼并自动绑定；
+          //     「单击」则在 pointerup 里只选中、不创建（fromCmdSelect 标记）。
+          let cmdSelected = false;
           if (ev.metaKey || metaDown) {
-            // 命中检测本身就是「插槽」维度（每个插槽渲染自己的激活附件）
             const hitSlotId = topSlotAt(ev.global.x, ev.global.y);
             if (hitSlotId) {
               usePixiBonesStore.getState().setTargetSlot(hitSlotId);
               attachmentHover.clear();
-              return;
+              cmdSelected = true;
             }
           }
           // Create 模式：点空白 = 启动拖动创建骨骼
@@ -4082,6 +4103,8 @@ export function BoneEditor() {
             // 扩展字段：父骨骼世界坐标（pointerup 时用）
             parentWorld: { x: parentWorld.x, y: parentWorld.y },
             preview,
+            fromBone: false,
+            fromCmdSelect: cmdSelected,
           } as typeof dragState & { parentWorld: { x: number; y: number } };
         } else if (ev.target === a.stage || isSlotSprite(ev.target)) {
           const st0p = usePixiBonesStore.getState();

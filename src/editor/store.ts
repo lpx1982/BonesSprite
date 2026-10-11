@@ -166,7 +166,76 @@ export type HistorySnapshot = {
   animations: EditorAnimation[];
   /** IK 约束也纳入快照（增删/改 mix/调顺序都能 Cmd+Z 撤销） */
   constraints: IkConstraintDef[];
+  // ===== 素材 / 插槽相关（让插槽/附件的删除、重命名、复制也能 Cmd+Z / Cmd+Shift+Z）=====
+  slots: PixiBonesSlot[];
+  /** 素材库：canvas 保留同一引用（canvas 内容创建后不变），数组结构可还原 */
+  images: PixiBonesLayer[];
+  slotVisibility: Record<string, boolean>;
+  slotStyle: Record<string, { color: string; blend: string }>;
+  attachmentStyle: Record<string, { color: string; blend: string }>;
+  slotOrder: string[];
+  slotBindings: Record<string, SlotBinding>;
+  selectedSlotId: string | null;
+  selectedSlotIds: string[];
+  selectedAttachmentId: string | null;
+  selectedRowKey: string | null;
 };
+
+/** 深拷贝素材图层（canvas 保留同一引用 —— 内容创建后不变，只还原数组结构）。 */
+function cloneLayerTree(layer: PixiBonesLayer): PixiBonesLayer {
+  return {
+    ...layer,
+    children: layer.children.map(cloneLayerTree),
+  };
+}
+
+/** 从当前 store 状态生成一份完整历史快照。 */
+function makeSnapshot(s: PixiBonesState): HistorySnapshot {
+  return {
+    bones: JSON.parse(JSON.stringify(s.bones)),
+    slotTransforms: JSON.parse(JSON.stringify(s.slotTransforms)),
+    attachmentMeshes: JSON.parse(JSON.stringify(
+      Object.fromEntries(Object.entries(s.attachmentMeshes).map(([k, m]) => [k, fillMeshDefaults(m)])),
+    )),
+    selectedBoneId: s.selectedBoneId,
+    animations: JSON.parse(JSON.stringify(s.animations)),
+    constraints: JSON.parse(JSON.stringify(s.constraints)),
+    slots: JSON.parse(JSON.stringify(s.slots)),
+    images: s.images.map(cloneLayerTree),
+    slotVisibility: JSON.parse(JSON.stringify(s.slotVisibility)),
+    slotStyle: JSON.parse(JSON.stringify(s.slotStyle)),
+    attachmentStyle: JSON.parse(JSON.stringify(s.attachmentStyle)),
+    slotOrder: JSON.parse(JSON.stringify(s.slotOrder)),
+    slotBindings: JSON.parse(JSON.stringify(s.slotBindings)),
+    selectedSlotId: s.selectedSlotId,
+    selectedSlotIds: [...s.selectedSlotIds],
+    selectedAttachmentId: s.selectedAttachmentId,
+    selectedRowKey: s.selectedRowKey,
+  };
+}
+
+/** 把快照还原成可 set 的状态子集（供 undo / redo 使用）。 */
+function snapshotToState(snap: HistorySnapshot) {
+  return {
+    bones: snap.bones,
+    slotTransforms: snap.slotTransforms,
+    attachmentMeshes: snap.attachmentMeshes,
+    selectedBoneId: snap.selectedBoneId,
+    animations: snap.animations,
+    constraints: snap.constraints,
+    slots: snap.slots,
+    images: snap.images,
+    slotVisibility: snap.slotVisibility,
+    slotStyle: snap.slotStyle,
+    attachmentStyle: snap.attachmentStyle,
+    slotOrder: snap.slotOrder,
+    slotBindings: snap.slotBindings,
+    selectedSlotId: snap.selectedSlotId,
+    selectedSlotIds: snap.selectedSlotIds,
+    selectedAttachmentId: snap.selectedAttachmentId,
+    selectedRowKey: snap.selectedRowKey,
+  };
+}
 
 /**
  * 一个已保存工程的完整数据（projectIO 反序列化后交给 applyProjectData 落盘）。
@@ -271,6 +340,9 @@ export interface PixiBonesState {
   addAttachmentToSlot: (slotId: string, attachmentId: string) => void;
   /** 解除「该插槽 → 该附件」的引用（附件本身留在素材库，插槽空了也保留） */
   detachAttachment: (slotId: string, attachmentId: string) => void;
+  /** 复制一个素材附件：深拷贝素材加入 images；若提供 slotId，把副本引用进该插槽
+   *  （插入原附件之后、设为当前显示），选中副本。 */
+  duplicateAttachment: (attachmentId: string, slotId?: string | null) => void;
   /** 插槽可见性（key = slotId） */
   slotVisibility: Record<string, boolean>;
   /** 仿 Spine SlotTransform：每个插槽自己的局部变换（key = slotId）。
@@ -473,6 +545,9 @@ export interface PixiBonesState {
   /** 删除插槽。★ 只允许删**空插槽**（有附件时请先把附件移出，避免素材丢失）——
    *  插槽的生命周期由用户显式控制，不会被附件移走自动删除。 */
   removeSlot: (slotId: string) => void;
+  /** 复制一个插槽：新插槽插入到原插槽**下方**（slots 数组顺序 = 层级树顺序），
+   *  引用同一批附件，名字加「 Copy」后缀（对齐 Spine）。 */
+  duplicateSlot: (slotId: string) => void;
   /** 按**附件 id** 反查它所属的插槽 id（找不到返回 null） */
   slotIdOfAttachment: (attachmentId: string | null) => string | null;
   /** 多选插槽。additive=true 增量追加，false 替换 */
@@ -682,6 +757,8 @@ export interface PixiBonesState {
 
   addBone: (parentId: string | null, partial?: Partial<BoneNode>) => void;
   removeBone: (id: string) => void;
+  /** 复制一根骨骼：新骨骼插入到原骨骼**下方**（平级），名字加「 Copy」后缀。 */
+  duplicateBone: (id: string) => void;
   moveBone: (id: string, x: number, y: number) => void;
   setBoneRotation: (id: string, rotation: number) => void;
   setBoneLength: (id: string, length: number) => void;
@@ -912,6 +989,31 @@ let _slotIdCounter = 0;
 function genSlotId(): string {
   _slotIdCounter++;
   return `slot_${_slotIdCounter}`;
+}
+
+/** 素材附件（PixiBonesLayer）id 自增 —— 复制附件时需要生成新 id。 */
+let _layerIdCounter = 0;
+function genLayerId(): string {
+  _layerIdCounter++;
+  return `layer_${_layerIdCounter}`;
+}
+
+/** 深拷贝一个素材图层（含 canvas 与子图层），复制时生成独立 id。 */
+function cloneLayerDeep(layer: PixiBonesLayer): PixiBonesLayer {
+  let canvas: HTMLCanvasElement | undefined;
+  if (layer.canvas) {
+    canvas = document.createElement('canvas');
+    canvas.width = layer.canvas.width;
+    canvas.height = layer.canvas.height;
+    const ctx = canvas.getContext('2d');
+    if (ctx) ctx.drawImage(layer.canvas, 0, 0);
+  }
+  return {
+    ...layer,
+    id: genLayerId(),
+    canvas,
+    children: layer.children.map(cloneLayerDeep),
+  };
 }
 
 /** 动画 id 自增（一次会话内稳定）。 */
@@ -1204,20 +1306,53 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   }),
   // 解除「该插槽 → 该附件」的引用（★ 只解引用：附件仍在素材库里，
   //   也可能仍被其它插槽引用；插槽空了也照样保留）
-  detachAttachment: (slotId, attachmentId) => set((state) => {
-    const src = state.slots.find((s) => s.id === slotId);
-    if (!src || !src.attachmentIds.includes(attachmentId)) return state;
-    const slots = state.slots.map((s) => {
-      if (s.id !== slotId) return s;
-      const attachmentIds = s.attachmentIds.filter((id) => id !== attachmentId);
-      const activeAttachmentId = s.activeAttachmentId && attachmentIds.includes(s.activeAttachmentId)
-        ? s.activeAttachmentId
-        : (attachmentIds[0] ?? null);
-      return { ...s, attachmentIds, activeAttachmentId };
+  detachAttachment: (slotId, attachmentId) => {
+    get().pushHistory();
+    set((state) => {
+      const src = state.slots.find((s) => s.id === slotId);
+      if (!src || !src.attachmentIds.includes(attachmentId)) return state;
+      const slots = state.slots.map((s) => {
+        if (s.id !== slotId) return s;
+        const attachmentIds = s.attachmentIds.filter((id) => id !== attachmentId);
+        const activeAttachmentId = s.activeAttachmentId && attachmentIds.includes(s.activeAttachmentId)
+          ? s.activeAttachmentId
+          : (attachmentIds[0] ?? null);
+        return { ...s, attachmentIds, activeAttachmentId };
+      });
+      return { slots };
     });
-    return { slots };
-  }),
+  },
   slotIdOfAttachment: (attachmentId) => slotIdOf(get().slots, attachmentId),
+  duplicateAttachment: (attachmentId, slotId = null) => {
+    get().pushHistory();
+    set((state) => {
+      const src = state.images.find((l) => l.id === attachmentId);
+      if (!src) return state;
+      const copy = cloneLayerDeep(src);
+      copy.name = src.name + ' Copy';
+      // 若提供 slotId：把副本引用进该插槽（插在原附件**之后**、设为当前显示）
+      const slots = slotId
+        ? state.slots.map((s) => {
+            if (s.id !== slotId) return s;
+            const attachmentIds = [...s.attachmentIds];
+            const at = attachmentIds.indexOf(attachmentId);
+            if (at >= 0) attachmentIds.splice(at + 1, 0, copy.id);
+            else attachmentIds.push(copy.id);
+            return { ...s, attachmentIds, activeAttachmentId: copy.id };
+          })
+        : state.slots;
+      return {
+        images: [...state.images, copy],
+        slots,
+        selectedSlotId: slotId ?? state.selectedSlotId,
+        selectedSlotIds: slotId ? [slotId] : state.selectedSlotIds,
+        selectedAttachmentId: copy.id,
+        selectedRowKey: 'asset:' + copy.id,
+        selectedBoneId: null,
+        selectedSectionKey: null,
+      };
+    });
+  },
   slotVisibility: {},
   slotTransforms: {},
   setSlotTransform: (id, t) => set((state) => ({
@@ -1744,7 +1879,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   },
   /**
    * 重命名一个插槽。空字符串忽略；同名忽略。
-   * 不入撤销栈：HistorySnapshot 暂未含 slots 字段，避免"撤销只回骨不回名"的半残体验。
+   * 已入撤销栈（HistorySnapshot 已含 slots）。
    */
   renameSlot: (id, name) => {
     const trimmed = name.trim();
@@ -1752,13 +1887,14 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     const s = get();
     const sl = s.slots.find((x) => x.id === id);
     if (!sl || sl.name === trimmed) return;
+    s.pushHistory();
     set((st) => ({
       slots: st.slots.map((x) => (x.id === id ? { ...x, name: trimmed } : x)),
     }));
   },
   /**
    * 重命名一个素材附件（PixiBonesLayer）。空字符串忽略；同名忽略。
-   * 不入撤销栈（同上，HistorySnapshot 暂未含 images）。
+   * 已入撤销栈（HistorySnapshot 已含 images）。
    */
   renameAttachment: (id, name) => {
     const trimmed = name.trim();
@@ -1766,6 +1902,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     const s = get();
     const a = s.images.find((x) => x.id === id);
     if (!a || a.name === trimmed) return;
+    s.pushHistory();
     set((st) => ({
       images: st.images.map((x) => (x.id === id ? { ...x, name: trimmed } : x)),
     }));
@@ -2161,25 +2298,13 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     try { localStorage.setItem('pixibones.recent', JSON.stringify(trimmed)); } catch {}
   },
 
-  // ===== Undo / Redo（快照 bones + slotTransforms + selectedBoneId）=====
+  // ===== Undo / Redo（快照 bones + slotTransforms + selectedBoneId + 素材/插槽）=====
   historyPast:  [],
   historyFuture: [],
   pushHistory: () => {
     const s = get();
-    // 深拷贝当前 bones 快照 + slotTransforms + attachmentMeshes + animations（解构后是 plain object，可直接 JSON 化）
-    // ★ 必须保证可选字段（mesh.bones/weights/bindPose）也被保留：
-    //   JSON.stringify 会丢掉 undefined 字段 → 用 fillMeshDefaults 先把 undefined 填成 []，
-    //   解析回来仍然是 []，applySkinning 会按"无权重"路径处理（不会崩）。
-    const snap = {
-      bones: JSON.parse(JSON.stringify(s.bones)),
-      slotTransforms: JSON.parse(JSON.stringify(s.slotTransforms)),
-      attachmentMeshes: JSON.parse(JSON.stringify(
-        Object.fromEntries(Object.entries(s.attachmentMeshes).map(([k, m]) => [k, fillMeshDefaults(m)])),
-      )),
-      selectedBoneId: s.selectedBoneId,
-      animations: JSON.parse(JSON.stringify(s.animations)),
-      constraints: JSON.parse(JSON.stringify(s.constraints)),
-    };
+    // 深拷贝当前快照（素材 canvas 保留同一引用 —— 内容创建后不变，只还原数组结构）
+    const snap = makeSnapshot(s);
     const past = [...s.historyPast, snap].slice(-50);  // 最多 50 步
     set({ historyPast: past, historyFuture: [] });
   },
@@ -2189,26 +2314,12 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     const past = [...s.historyPast];
     const prev = past.pop()!;
     // 当前状态推到 future
-    const currentSnap = {
-      bones: JSON.parse(JSON.stringify(s.bones)),
-      slotTransforms: JSON.parse(JSON.stringify(s.slotTransforms)),
-      attachmentMeshes: JSON.parse(JSON.stringify(
-        Object.fromEntries(Object.entries(s.attachmentMeshes).map(([k, m]) => [k, fillMeshDefaults(m)])),
-      )),
-      selectedBoneId: s.selectedBoneId,
-      animations: JSON.parse(JSON.stringify(s.animations)),
-      constraints: JSON.parse(JSON.stringify(s.constraints)),
-    };
+    const currentSnap = makeSnapshot(s);
     const future = [currentSnap, ...s.historyFuture];
     set({
       historyPast: past,
       historyFuture: future,
-      bones: prev.bones,
-      slotTransforms: prev.slotTransforms,
-      attachmentMeshes: prev.attachmentMeshes,
-      selectedBoneId: prev.selectedBoneId,
-      animations: prev.animations,
-      constraints: prev.constraints,
+      ...snapshotToState(prev),
     });
     // 撤销后若在动画 tab，按当前时间重新采样骨骼（保证画面与动画一致）
     if (get().editorTab === 'animate') get().applyActiveAnimation();
@@ -2218,26 +2329,12 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     if (s.historyFuture.length === 0) return;
     const [next, ...rest] = s.historyFuture;
     // 当前状态推到 past
-    const currentSnap = {
-      bones: JSON.parse(JSON.stringify(s.bones)),
-      slotTransforms: JSON.parse(JSON.stringify(s.slotTransforms)),
-      attachmentMeshes: JSON.parse(JSON.stringify(
-        Object.fromEntries(Object.entries(s.attachmentMeshes).map(([k, m]) => [k, fillMeshDefaults(m)])),
-      )),
-      selectedBoneId: s.selectedBoneId,
-      animations: JSON.parse(JSON.stringify(s.animations)),
-      constraints: JSON.parse(JSON.stringify(s.constraints)),
-    };
+    const currentSnap = makeSnapshot(s);
     const past = [...s.historyPast, currentSnap];
     set({
       historyPast: past,
       historyFuture: rest,
-      bones: next.bones,
-      slotTransforms: next.slotTransforms,
-      attachmentMeshes: next.attachmentMeshes,
-      selectedBoneId: next.selectedBoneId,
-      animations: next.animations,
-      constraints: next.constraints,
+      ...snapshotToState(next),
     });
     if (get().editorTab === 'animate') get().applyActiveAnimation();
   },
@@ -2551,27 +2648,74 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       delete next[slotId];
       return { slotBindings: next };
     }),
-  // 删除插槽（★ 只允许删空插槽：有附件时请先把附件移出，避免素材丢失）
-  removeSlot: (slotId) => set((state) => {
-    const slot = state.slots.find((s) => s.id === slotId);
-    if (!slot || slot.attachmentIds.length > 0) return state;
-    const omit = <T,>(rec: Record<string, T>) => {
-      const next = { ...rec };
-      delete next[slotId];
-      return next;
-    };
-    return {
-      slots: state.slots.filter((s) => s.id !== slotId),
-      selectedSlotId: state.selectedSlotId === slotId ? null : state.selectedSlotId,
-      selectedSlotIds: state.selectedSlotIds.filter((id) => id !== slotId),
-      selectedRowKey: state.selectedRowKey === 'slot:' + slotId ? null : state.selectedRowKey,
-      slotVisibility: omit(state.slotVisibility),
-      slotStyle: omit(state.slotStyle),
-      slotBindings: omit(state.slotBindings),
-      slotTransforms: omit(state.slotTransforms),
-      slotOrder: state.slotOrder.filter((id) => id !== slotId),
-    };
-  }),
+  // 删除插槽（有附件也允许删除：附件素材是全局共享的，删插槽只移除容器与引用，素材保留）
+  removeSlot: (slotId) => {
+    get().pushHistory();
+    set((state) => {
+      const slot = state.slots.find((s) => s.id === slotId);
+      if (!slot) return state;
+      // 若选中的附件属于该插槽，一并清掉选中（素材本身保留）
+      const attSelected = state.selectedAttachmentId !== null
+        && slot.attachmentIds.includes(state.selectedAttachmentId);
+      const omit = <T,>(rec: Record<string, T>) => {
+        const next = { ...rec };
+        delete next[slotId];
+        return next;
+      };
+      return {
+        slots: state.slots.filter((s) => s.id !== slotId),
+        selectedSlotId: state.selectedSlotId === slotId ? null : state.selectedSlotId,
+        selectedSlotIds: state.selectedSlotIds.filter((id) => id !== slotId),
+        selectedAttachmentId: attSelected ? null : state.selectedAttachmentId,
+        selectedRowKey: state.selectedRowKey === 'slot:' + slotId ? null : state.selectedRowKey,
+        slotVisibility: omit(state.slotVisibility),
+        slotStyle: omit(state.slotStyle),
+        slotBindings: omit(state.slotBindings),
+        slotTransforms: omit(state.slotTransforms),
+        slotOrder: state.slotOrder.filter((id) => id !== slotId),
+      };
+    });
+  },
+  duplicateSlot: (slotId) => {
+    get().pushHistory();
+    set((state) => {
+      const slot = state.slots.find((s) => s.id === slotId);
+      if (!slot) return state;
+      const id = genSlotId();
+      const copy: PixiBonesSlot = {
+        id,
+        name: slot.name + ' Copy',
+        attachmentIds: [...slot.attachmentIds],
+        activeAttachmentId: slot.activeAttachmentId,
+      };
+      // 插入到原插槽下方（平级）—— slots 数组顺序即层级树顺序
+      const idx = state.slots.findIndex((s) => s.id === slotId);
+      const slots = [...state.slots];
+      slots.splice(idx + 1, 0, copy);
+      // 复制关联的可见性 / 样式 / 绑定 / 变换 / 绘制顺序
+      const cp = <T,>(rec: Record<string, T>): Record<string, T> =>
+        slotId in rec ? { ...rec, [id]: rec[slotId] } : rec;
+      const slotOrder = [...state.slotOrder];
+      const orderIdx = slotOrder.indexOf(slotId);
+      if (orderIdx >= 0) slotOrder.splice(orderIdx + 1, 0, id);
+      return {
+        slots,
+        slotVisibility: cp(state.slotVisibility),
+        slotStyle: cp(state.slotStyle),
+        slotBindings: cp(state.slotBindings),
+        slotTransforms: cp(state.slotTransforms),
+        slotOrder,
+        // 选中新插槽
+        selectedSlotId: id,
+        selectedSlotIds: [id],
+        selectedAttachmentId: null,
+        selectedRowKey: 'slot:' + id,
+        selectedBoneId: null,
+        selectedSectionKey: null,
+        attachingSlotId: null,
+      };
+    });
+  },
   // 单独导入的图片素材（PNG/JPG）：追加到 images，并建一个同名插槽
   addImage: (layer) =>
     set((state) => {
@@ -2878,18 +3022,117 @@ setActiveTool: (t) => set((s) => {
     if (!target || target.parentId === null) return;
     get().pushHistory();
     set((state) => {
+      // 一并删除：整棵子树骨骼 + 绑定在这些骨骼上的插槽
       const toRemove = collectDescendants(state.bones, id);
-      const removedSel = state.selectedBoneId && toRemove.has(state.selectedBoneId);
-      // 被删骨骼上的图层绑定也一并清掉
-      const nextBindings = { ...state.slotBindings };
-      for (const [slotId, b] of Object.entries(nextBindings)) {
-        if (toRemove.has(b.boneId)) delete nextBindings[slotId];
+      const removedSlots = new Set<string>();
+      for (const [slotId, b] of Object.entries(state.slotBindings)) {
+        if (toRemove.has(b.boneId)) removedSlots.add(slotId);
       }
+      const removedSel = state.selectedBoneId && toRemove.has(state.selectedBoneId);
+      const slotRemovedSel = state.selectedSlotId !== null && removedSlots.has(state.selectedSlotId);
+      const omit = <T,>(rec: Record<string, T>) => {
+        const next = { ...rec };
+        for (const sid of removedSlots) delete next[sid];
+        return next;
+      };
       return {
         bones: state.bones.filter((n) => !toRemove.has(n.id)),
         selectedBoneId: removedSel ? null : state.selectedBoneId,
         selectedBoneIds: removedSel ? [] : state.selectedBoneIds.filter((bid) => !toRemove.has(bid)),
-        slotBindings: nextBindings,
+        slots: state.slots.filter((s) => !removedSlots.has(s.id)),
+        selectedSlotId: slotRemovedSel ? null : state.selectedSlotId,
+        selectedSlotIds: slotRemovedSel ? [] : state.selectedSlotIds.filter((sid) => !removedSlots.has(sid)),
+        selectedAttachmentId: slotRemovedSel ? null : state.selectedAttachmentId,
+        selectedRowKey: slotRemovedSel ? null : state.selectedRowKey,
+        slotBindings: omit(state.slotBindings),
+        slotVisibility: omit(state.slotVisibility),
+        slotStyle: omit(state.slotStyle),
+        slotTransforms: omit(state.slotTransforms),
+        slotOrder: state.slotOrder.filter((sid) => !removedSlots.has(sid)),
+      };
+    });
+  },
+
+  duplicateBone: (id) => {
+    get().pushHistory();
+    set((state) => {
+      const src = state.bones.find((n) => n.id === id);
+      if (!src) return state;
+      // ★ 复制整棵子树（含所有子骨骼），绑定在这些骨骼上的插槽也一并复制
+      const subTree = [...collectDescendants(state.bones, id)];
+      // 按 bones 数组顺序排序（插入位置要保持原相对顺序）
+      const orderIdx = new Map(state.bones.map((n, i) => [n.id, i]));
+      subTree.sort((a, b) => (orderIdx.get(a) ?? 0) - (orderIdx.get(b) ?? 0));
+      const idMap = new Map<string, string>();
+      for (const oid of subTree) idMap.set(oid, genBoneId());
+
+      const copies: BoneNode[] = subTree.map((oid) => {
+        const n = state.bones.find((x) => x.id === oid)!;
+        return normalizeBone({
+          id: idMap.get(oid)!,
+          name: oid === id ? n.name + ' Copy' : n.name,
+          parentId: n.parentId ? (idMap.get(n.parentId) ?? n.parentId) : null,
+          x: n.x, y: n.y,
+          rotation: n.rotation,
+          scaleX: n.scaleX, scaleY: n.scaleY,
+          length: n.length,
+          slotId: n.slotId,
+          color: n.color,
+          shearX: n.shearX, shearY: n.shearY,
+          inheritRotation: n.inheritRotation,
+          inheritScale: n.inheritScale,
+          inheritReflection: n.inheritReflection,
+          showName: n.showName,
+          selectable: n.selectable,
+        });
+      });
+
+      // 插入到原骨骼**下方**（平级）—— bones 数组顺序 = 层级树同级顺序
+      const idx = state.bones.findIndex((n) => n.id === id);
+      const bones = [...state.bones];
+      bones.splice(idx + 1, 0, ...copies);
+
+      // 复制绑定在这些骨骼上的插槽（引用同一批附件，绑定到对应新骨骼）
+      const slots = [...state.slots];
+      const slotOrder = [...state.slotOrder];
+      const slotVisibility = { ...state.slotVisibility };
+      const slotStyle = { ...state.slotStyle };
+      const slotTransforms = { ...state.slotTransforms };
+      const slotBindings = { ...state.slotBindings };
+      for (const [slotId, b] of Object.entries(state.slotBindings)) {
+        const newBoneId = idMap.get(b.boneId);
+        if (!newBoneId) continue; // 不是子树里的骨骼
+        const s = state.slots.find((x) => x.id === slotId);
+        if (!s) continue;
+        const nid = genSlotId();
+        slots.splice(slots.findIndex((x) => x.id === slotId) + 1, 0, {
+          ...s,
+          id: nid,
+          name: s.name + ' Copy',
+          attachmentIds: [...s.attachmentIds],
+        });
+        slotBindings[nid] = { boneId: newBoneId, ref: [...b.ref] };
+        if (slotVisibility[slotId] !== undefined) slotVisibility[nid] = slotVisibility[slotId];
+        if (slotStyle[slotId]) slotStyle[nid] = { ...slotStyle[slotId] };
+        if (slotTransforms[slotId]) slotTransforms[nid] = { ...slotTransforms[slotId] };
+        const oi = slotOrder.indexOf(slotId);
+        if (oi >= 0) slotOrder.splice(oi + 1, 0, nid);
+      }
+
+      return {
+        bones,
+        slots,
+        slotBindings,
+        slotVisibility,
+        slotStyle,
+        slotTransforms,
+        slotOrder,
+        selectedBoneId: idMap.get(id)!,
+        selectedBoneIds: [idMap.get(id)!],
+        selectedSlotId: null,
+        selectedSlotIds: [],
+        selectedAttachmentId: null,
+        selectedRowKey: null,
       };
     });
   },

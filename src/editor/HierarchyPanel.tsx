@@ -164,6 +164,9 @@ export function HierarchyPanel() {
   const startAttach = usePixiBonesStore((s) => s.startAttach);
   const unbindSlot = usePixiBonesStore((s) => s.unbindSlot);
   const removeSlot = usePixiBonesStore((s) => s.removeSlot);
+  const duplicateSlot = usePixiBonesStore((s) => s.duplicateSlot);
+  const duplicateBone = usePixiBonesStore((s) => s.duplicateBone);
+  const duplicateAttachment = usePixiBonesStore((s) => s.duplicateAttachment);
   // ===== IK 约束（仿 Spine「约束」分区）=====
   const constraints = usePixiBonesStore((s) => s.constraints);
   const selectedConstraintId = usePixiBonesStore((s) => s.selectedConstraintId);
@@ -1328,6 +1331,17 @@ export function HierarchyPanel() {
           onDelete={() => {
             if (confirm(`删除 "${selectedBone.name}" 及其子骨？`)) removeBone(selectedBone.id);
           }}
+          onRename={() => {
+            const cur = usePixiBonesStore.getState().bones.find((x) => x.id === selectedBone.id);
+            if (!cur) return;
+            setPendingRename({
+              title: '重命名骨骼',
+              message: '为此骨骼输入一个新名称:',
+              initialValue: cur.name,
+              onConfirm: (v) => { renameBone(selectedBone.id, v); closeRename(); },
+            });
+          }}
+          onCopy={() => duplicateBone(selectedBone.id)}
           onToggleIsolate={() => setHideNonSelected((v) => !v)}
           isolated={hideNonSelected}
           C={C}
@@ -1340,6 +1354,17 @@ export function HierarchyPanel() {
           candidates={attachments.filter((l) => !selectedSlot?.attachmentIds.includes(l.id))}
           onAddAttachment={selectedSlotId ? (aid) => addAttachmentToSlot(selectedSlotId, aid) : undefined}
           onDetach={selectedSlotId ? () => detachAttachment(selectedSlotId, selectedAttachment.id) : undefined}
+          onRename={() => {
+            const cur = usePixiBonesStore.getState().images.find((x) => x.id === selectedAttachment.id);
+            if (!cur) return;
+            setPendingRename({
+              title: '重命名图片',
+              message: '为此图片输入一个新名称:',
+              initialValue: cur.name,
+              onConfirm: (v) => { renameAttachment(selectedAttachment.id, v); closeRename(); },
+            });
+          }}
+          onCopy={() => duplicateAttachment(selectedAttachment.id, selectedSlotId)}
           bindingBoneName={selectedBindingBoneName}
           onUnbind={selectedSlotId ? () => unbindSlot(selectedSlotId) : undefined}
           onParent={selectedSlotId ? () => startAttach(selectedSlotId) : undefined}
@@ -1380,9 +1405,28 @@ export function HierarchyPanel() {
           bindingBoneName={selectedBindingBoneName}
           onParent={() => startAttach(selectedSlotId)}
           onUnbind={() => unbindSlot(selectedSlotId)}
-          onDelete={selectedSlot && selectedSlot.attachmentIds.length === 0
-            ? () => removeSlot(selectedSlotId)
+          onDelete={selectedSlot
+            ? () => {
+                const n = selectedSlot.attachmentIds.length;
+                if (n > 0) {
+                  if (!confirm(`删除插槽 "${selectedSlot.name}"？\n它包含 ${n} 个附件（素材保留在「图片」区）。`)) return;
+                } else {
+                  if (!confirm(`删除插槽 "${selectedSlot.name}"？`)) return;
+                }
+                removeSlot(selectedSlotId);
+              }
             : undefined}
+          onRename={selectedSlot ? () => {
+            const cur = usePixiBonesStore.getState().slots.find((x) => x.id === selectedSlot.id);
+            if (!cur) return;
+            setPendingRename({
+              title: '重命名插槽',
+              message: '为此插槽输入一个新名称:',
+              initialValue: cur.name,
+              onConfirm: (v) => { renameSlot(selectedSlot.id, v); closeRename(); },
+            });
+          } : undefined}
+          onCopy={selectedSlot ? () => duplicateSlot(selectedSlot.id) : undefined}
           C={C}
         />
       ) : selectedSectionKey === 'images' ? (
@@ -1985,13 +2029,17 @@ interface BonePropsBlockProps {
   /** 「新建」菜单：创建 IK 约束（目标骨由父级决定） */
   onCreateIk?: () => void;
   onDelete: () => void;
+  /** 重命名骨骼 */
+  onRename?: () => void;
+  /** 复制骨骼（插入到该骨骼下方、平级） */
+  onCopy?: () => void;
   onToggleIsolate: () => void;
   isolated: boolean;
   C: any;
 }
 
 function BonePropsBlock(props: BonePropsBlockProps) {
-  const { node, parentOptions, onMove, onRotate, onLength, onParent, onAddChild, onCreateIk, onDelete, onToggleIsolate, isolated, C } = props;
+  const { node, parentOptions, onMove, onRotate, onLength, onParent, onAddChild, onCreateIk, onDelete, onRename, onCopy, onToggleIsolate, isolated, C } = props;
   const rotDeg = (node.rotation * 180) / Math.PI;
   // 输入框统一样式
   const inputStyle: React.CSSProperties = {
@@ -2050,7 +2098,24 @@ function BonePropsBlock(props: BonePropsBlockProps) {
         <button className="w-6 h-6 flex items-center justify-center" style={{ color: C.dim, background: 'transparent', border: 'none', cursor: 'pointer' }} onMouseEnter={(e) => (e.currentTarget.style.color = '#fff')} onMouseLeave={(e) => (e.currentTarget.style.color = C.dim)} title="定位到画布" onClick={onToggleIsolate}>
           {isolated ? '🟢' : '📍'}
         </button>
-        <button className="w-6 h-6 flex items-center justify-center" style={{ color: C.dim, background: 'transparent', border: 'none', cursor: 'pointer' }} onMouseEnter={(e) => (e.currentTarget.style.color = '#fff')} onMouseLeave={(e) => (e.currentTarget.style.color = C.dim)} title="复制">⎘</button>
+        {node.parentId !== null && (
+          <button
+            className="w-6 h-6 flex items-center justify-center"
+            style={{ color: C.dim, background: 'transparent', border: 'none', cursor: onCopy ? 'pointer' : 'not-allowed', opacity: onCopy ? 1 : 0.5 }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = '#fff')}
+            onMouseLeave={(e) => (e.currentTarget.style.color = C.dim)}
+            title={onCopy ? '复制（创建副本，插入到下方）' : '复制'}
+            onClick={onCopy}
+          >⧉</button>
+        )}
+        <button
+          className="w-6 h-6 flex items-center justify-center"
+          style={{ color: C.dim, background: 'transparent', border: 'none', cursor: onRename ? 'pointer' : 'not-allowed', opacity: onRename ? 1 : 0.5 }}
+          onMouseEnter={(e) => (e.currentTarget.style.color = '#fff')}
+          onMouseLeave={(e) => (e.currentTarget.style.color = C.dim)}
+          title="重命名"
+          onClick={onRename}
+        >✎</button>
         {node.parentId !== null && (
           <button className="w-6 h-6 flex items-center justify-center" style={{ color: C.dim, background: 'transparent', border: 'none', cursor: 'pointer' }} onMouseEnter={(e) => (e.currentTarget.style.color = '#e88')} onMouseLeave={(e) => (e.currentTarget.style.color = C.dim)} title="删除" onClick={onDelete}>✕</button>
         )}
@@ -2197,15 +2262,19 @@ const BLEND_OPTIONS: Array<{ value: string; label: string }> = [
 
 /**
  * 属性面板标题栏：`◉ 插槽: 名字` / `▭ 区域: 名字` + 右侧 4 个图标按钮
- * （复制 / 粘贴 / 设置 / 删除）。图标按钮暂为占位（待实现）。
+ * （从右往左：删除 / 重命名 / 复制 / 设置占位）。
  */
 function PanelTitleBar({
-  icon, kindLabel, name, badge, C, onDelete, deleteTitle,
+  icon, kindLabel, name, badge, C, onDelete, deleteTitle, onRename, onCopy,
 }: {
   icon: string; kindLabel: string; name: string; badge?: string; C: any;
   /** 提供则「✕」可点，否则为占位 */
   onDelete?: () => void;
   deleteTitle?: string;
+  /** 提供则「✎」可点（重命名），否则为占位 */
+  onRename?: () => void;
+  /** 提供则「⧉」可点（复制），否则为占位 */
+  onCopy?: () => void;
 }) {
   const iconBtn: React.CSSProperties = {
     background: C.panel,
@@ -2215,6 +2284,12 @@ function PanelTitleBar({
     width: 20, height: 18, lineHeight: '16px',
     fontSize: 12, borderRadius: 3, padding: 0, opacity: 0.55,
   };
+  const activeBtn = (color?: string): React.CSSProperties => ({
+    ...iconBtn,
+    cursor: 'pointer',
+    opacity: 1,
+    ...(color ? { color } : {}),
+  });
   return (
     <div
       className="flex items-center px-2 py-1.5 gap-1"
@@ -2225,13 +2300,19 @@ function PanelTitleBar({
       <span className="text-[14px] font-semibold truncate" style={{ color: C.selected }} title={name}>{name}</span>
       {badge ? <span className="text-[12px] shrink-0" style={{ color: C.dim }}>{badge}</span> : null}
       <span className="ml-auto flex items-center gap-1 shrink-0">
-        <button style={iconBtn} title="复制（待实现）">⧉</button>
-        <button style={iconBtn} title="粘贴（待实现）">⎘</button>
         <button style={iconBtn} title="设置（待实现）">⚙</button>
         <button
-          style={onDelete
-            ? { ...iconBtn, color: '#e06c75', cursor: 'pointer', opacity: 1 }
-            : { ...iconBtn, color: '#e06c75' }}
+          style={onCopy ? activeBtn() : iconBtn}
+          title={onCopy ? '复制（创建副本，插入到下方）' : '复制（待实现）'}
+          onClick={onCopy}
+        >⧉</button>
+        <button
+          style={onRename ? activeBtn() : iconBtn}
+          title={onRename ? '重命名' : '重命名（待实现）'}
+          onClick={onRename}
+        >✎</button>
+        <button
+          style={onDelete ? activeBtn('#e06c75') : { ...iconBtn, color: '#e06c75' }}
           title={onDelete ? (deleteTitle ?? '删除') : '删除（待实现）'}
           onClick={onDelete}
         >✕</button>
@@ -2312,13 +2393,17 @@ interface SlotPropsBlockProps {
   onUnbind: () => void;
   /** 删除插槽（仅空插槽时由父组件传入；undefined = 有附件，按占位显示） */
   onDelete?: () => void;
+  /** 重命名插槽（弹出重命名弹窗） */
+  onRename?: () => void;
+  /** 复制插槽（插入到该插槽下方、平级） */
+  onCopy?: () => void;
   C: any;
 }
 
 function SlotPropsBlock(props: SlotPropsBlockProps) {
   const {
     slot, candidates, onAddAttachment,
-    color, onColor, blend, onBlend, bindingBoneName, onParent, onUnbind, onDelete, C,
+    color, onColor, blend, onBlend, bindingBoneName, onParent, onUnbind, onDelete, onRename, onCopy, C,
   } = props;
   // 「＋ 新建…」选择器：把已有素材加入该插槽
   const [picking, setPicking] = useState(false);
@@ -2334,6 +2419,8 @@ function SlotPropsBlock(props: SlotPropsBlockProps) {
         C={C}
         onDelete={onDelete}
         deleteTitle="删除该插槽"
+        onRename={onRename}
+        onCopy={onCopy}
       />
 
       {/* 已绑定的父级骨骼 */}
@@ -2443,6 +2530,10 @@ interface AttachmentPropsBlockProps {
   onParent?: () => void;
   /** 上下文插槽 id（null = 该素材没被任何插槽引用） */
   slotId: string | null;
+  /** 重命名图片（弹出重命名弹窗） */
+  onRename?: () => void;
+  /** 复制图片（深拷贝素材；若有上下文插槽则引用进该插槽、设为当前显示） */
+  onCopy?: () => void;
   // ---- 网格（仿 Spine）----
   /** 该附件是否已经是网格附件 */
   isMesh: boolean;
@@ -2485,6 +2576,7 @@ function AttachmentPropsBlock(props: AttachmentPropsBlockProps) {
   const {
     attachment, color, onColor, candidates, onAddAttachment,
     onDetach, bindingBoneName, onUnbind, onParent, C,
+    onRename, onCopy,
     isMesh, onToggleMesh, wireframe, onToggleWireframe, editingMesh, onEditMesh,
     onResetMesh, onFreeze, vertexCount,
   } = props;
@@ -2516,6 +2608,8 @@ function AttachmentPropsBlock(props: AttachmentPropsBlockProps) {
         C={C}
         onDelete={onDetach}
         deleteTitle="从插槽移出（变成独立插槽）"
+        onRename={onRename}
+        onCopy={onCopy}
       />
 
       {/* 已绑定的父级骨骼 */}
