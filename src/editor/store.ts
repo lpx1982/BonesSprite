@@ -18,10 +18,19 @@ export type EditorTool = 'pose' | 'weights' | 'create' | 'rotate' | 'move' | 'sc
 export type AnimProperty = 'x' | 'y' | 'rotation' | 'scaleX' | 'scaleY' | 'mix';
 /** 骨骼全部可动画属性（录制 / 采样共用）。'mix' 不在这里 —— 它是约束 mix 专用属性。 */
 export const ANIM_PROPERTIES: AnimProperty[] = ['x', 'y', 'rotation', 'scaleX', 'scaleY'];
+/** 关键帧插值类型（仿 Spine）：
+ *  - stepped：步进，前一帧的值保持到下一帧才跳变
+ *  - linear：线性（默认）
+ *  - bezier：三次贝塞尔，用 bezier 控制点调节缓动 */
+export type AnimCurveType = 'stepped' | 'linear' | 'bezier';
 /** 单个关键帧：time 为秒。 */
 export interface AnimKeyframe {
   time: number;
   value: number;
+  /** 插值类型。缺省 = linear（兼容旧数据）。 */
+  curve?: AnimCurveType;
+  /** 贝塞尔控制点 [cx1, cy1, cx2, cy2]，单位方块内的相对偏移（curve='bezier' 时有效）。 */
+  bezier?: [number, number, number, number];
 }
 /** 一根骨骼一个属性的一条轨道（keys 恒按 time 升序）。
  *  constraintMix = true 时是「约束 mix」轨道：boneId 存约束 id，property 固定 'mix'。 */
@@ -282,6 +291,7 @@ export interface PixiBonesState {
   loop: boolean;
   /** 时间轴标尺 / 帧步进的帧率（fps） */
   fps: number;
+  setFps: (v: number) => void;
   /** 进入动画 tab 时捕获的「设置姿态」（动画未覆盖属性的缺省值） */
   setupPose: Record<string, BonePose>;
   /** 关键帧锁（动画 tab 钥匙按钮）：true = 变换骨骼时自动在 currentTime 写关键帧 */
@@ -301,6 +311,15 @@ export interface PixiBonesState {
   toggleKeyframeLock: () => void;
   /** 写 / 更新某骨骼某属性在 time 处的关键帧（入历史；随后采样应用） */
   setKeyframe: (boneId: string, property: AnimProperty, time: number, value: number) => void;
+  /** 设置某个关键帧的插值类型（linear / stepped / bezier）与贝塞尔控制点。
+   *  bezier 传 undefined 时保留已有控制点；curve !== 'bezier' 时控制点无效。 */
+  setKeyframeCurve: (
+    boneId: string,
+    property: AnimProperty,
+    time: number,
+    curve: AnimCurveType,
+    bezier?: [number, number, number, number],
+  ) => void;
   /** 删除某骨骼某属性在 time 处的关键帧（入历史；随后采样应用） */
   removeKeyframe: (boneId: string, property: AnimProperty, time: number) => void;
   /** 把 fromTime 处的关键帧移到 toTime（入历史；随后采样应用） */
@@ -866,9 +885,25 @@ function fillMeshDefaults(m: MeshData): MeshData {
 //  动画采样（纯函数，供 applyActiveAnimation 等调用）
 // =================================================================================
 
-/** 单属性关键帧插值（线性）。keys 必须按 time 升序、非空。
+/** 三次贝塞尔：给定单位方块内控制点 (cx1,cy1)-(cx2,cy2)，求 x=u 处的 y（0..1）。 */
+function bezierSample(u: number, cx1: number, cy1: number, cx2: number, cy2: number): number {
+  const cubic = (t: number, p1: number, p2: number) => {
+    const mt = 1 - t;
+    return 3 * mt * mt * t * p1 + 3 * mt * t * t * p2 + t * t * t;
+  };
+  // 二分求 t 使 x(t)=u
+  let lo = 0, hi = 1;
+  for (let it = 0; it < 14; it++) {
+    const t = (lo + hi) / 2;
+    if (cubic(t, cx1, cx2) < u) lo = t; else hi = t;
+  }
+  const t = (lo + hi) / 2;
+  return cubic(t, cy1, cy2);
+}
+
+/** 单属性关键帧插值。keys 必须按 time 升序、非空。
  *  - t < 第一个关键帧：从 t=0 的 setupValue 线性插到第一个关键帧（Spine 语义）
- *  - 关键帧之间：线性插值
+ *  - 关键帧之间：按**前一个关键帧**的插值类型采样（linear / stepped / bezier）
  *  - t > 最后一个关键帧：钳在最后一个关键帧的值
  */
 function sampleTrackValue(keys: AnimKeyframe[], t: number, setupValue: number): number {
@@ -886,6 +921,14 @@ function sampleTrackValue(keys: AnimKeyframe[], t: number, setupValue: number): 
   const b = keys[i];
   const span = b.time - a.time;
   const u = span > 1e-9 ? (t - a.time) / span : 0;
+  // 精确落在 b 帧：返回 b 值（与插值类型无关）
+  if (Math.abs(t - b.time) < 1e-9) return b.value;
+  // 按 a（前一个关键帧）的插值类型决定过渡
+  if (a.curve === 'stepped') return a.value;
+  if (a.curve === 'bezier' && a.bezier) {
+    const [cx1, cy1, cx2, cy2] = a.bezier;
+    return a.value + (b.value - a.value) * bezierSample(u, cx1, cy1, cx2, cy2);
+  }
   return a.value + (b.value - a.value) * u;
 }
 
@@ -954,30 +997,30 @@ function sampleAnimationPose(
   });
 }
 
-/** 在 tracks 里 upsert 一条关键帧（同位置已有关键帧则覆盖），返回新 tracks（保持 time 升序）。 */
+/** 在 tracks 里 upsert 一条关键帧（同位置已有关键帧则覆盖），返回新 tracks（保持 time 升序）。
+ *  extra 可带插值属性（curve/bezier），供移动关键帧时保留。 */
 function upsertTrackKey(
   tracks: AnimTrack[],
   boneId: string,
   property: AnimProperty,
   time: number,
   value: number,
+  extra: Partial<AnimKeyframe> = {},
 ): AnimTrack[] {
-  const key: AnimKeyframe = { time, value };
+  const key: AnimKeyframe = { time, value, ...extra };
   const idx = tracks.findIndex((tr) => tr.boneId === boneId && tr.property === property);
   if (idx >= 0) {
+    // 覆盖已有关键帧时保留其插值属性（curve/bezier），除非调用方显式传 extra.curve
+    const oldKey = tracks[idx].keys.find((k) => Math.abs(k.time - time) < 1e-6);
+    const merged: AnimKeyframe = extra.curve
+      ? key
+      : { ...key, ...(oldKey ? { curve: oldKey.curve, bezier: oldKey.bezier } : {}) };
     const keys = tracks[idx].keys.filter((k) => Math.abs(k.time - time) >= 1e-6);
-    keys.push(key);
+    keys.push(merged);
     keys.sort((a, b) => a.time - b.time);
     return tracks.map((tr, i) => (i === idx ? { ...tr, keys } : tr));
   }
   return [...tracks, { boneId, property, keys: [key] }];
-}
-
-/** 读某轨道在精确 time 处的关键帧值（无则 0；moveKeyframe 用）。 */
-function keyValueAt(anim: EditorAnimation, boneId: string, property: AnimProperty, time: number): number {
-  const tr = anim.tracks.find((x) => x.boneId === boneId && x.property === property);
-  const k = tr?.keys.find((kk) => Math.abs(kk.time - time) < 1e-6);
-  return k?.value ?? 0;
 }
 
 // =================================================================================
@@ -1272,6 +1315,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   playing: false,
   loop: true,
   fps: 30,
+  setFps: (v) => set((state) => ({ fps: Math.max(1, Math.min(120, Math.round(v))) })),
   setupPose: {},
   keyframeLock: true,
   constraintRuntimeMix: {},
@@ -2467,6 +2511,31 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       ...buildAnimPatch(s, withAnim),
     }));
   },
+  setKeyframeCurve: (boneId, property, time, curve, bezier) => {
+    const s = get();
+    const anim = s.animations.find((a) => a.id === s.activeAnimationId);
+    if (!anim) return;
+    // 找不到该关键帧则忽略
+    const tr = anim.tracks.find((x) => x.boneId === boneId && x.property === property);
+    const k = tr?.keys.find((kk) => Math.abs(kk.time - time) < 1e-6);
+    if (!tr || !k) return;
+    s.pushHistory();
+    const tracks = anim.tracks.map((x) => {
+      if (x.boneId !== boneId || x.property !== property) return x;
+      return {
+        ...x,
+        keys: x.keys.map((kk) => {
+          if (Math.abs(kk.time - time) >= 1e-6) return kk;
+          return { ...kk, curve, bezier: bezier ?? kk.bezier };
+        }),
+      };
+    });
+    const withAnim = { ...anim, tracks };
+    set((st) => ({
+      animations: st.animations.map((a) => (a.id === anim.id ? withAnim : a)),
+      ...buildAnimPatch(s, withAnim),
+    }));
+  },
   removeKeyframe: (boneId, property, time) => {
     const s = get();
     const anim = s.animations.find((a) => a.id === s.activeAnimationId);
@@ -2493,7 +2562,10 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     if (!anim) return;
     s.pushHistory();
     const t = Math.max(0, toTime);
-    const value = keyValueAt(anim, boneId, property, fromTime);
+    // 原关键帧对象（保留插值属性 curve/bezier）
+    const srcTr = anim.tracks.find((x) => x.boneId === boneId && x.property === property);
+    const srcKey = srcTr?.keys.find((k) => Math.abs(k.time - fromTime) < 1e-6);
+    if (!srcKey) return;
     // 判断是否为约束 mix 轨道（移动后要保留 constraintMix 标记）
     const isConstraintTrack = anim.tracks.some((x) => x.boneId === boneId && x.property === property && x.constraintMix);
     // 先从原处移除
@@ -2504,7 +2576,10 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
         return { ...x, keys };
       })
       .filter((x) => x.keys.length > 0);
-    tracks = upsertTrackKey(tracks, boneId, property, t, value);
+    tracks = upsertTrackKey(tracks, boneId, property, t, srcKey.value, {
+      curve: srcKey.curve,
+      bezier: srcKey.bezier,
+    });
     if (isConstraintTrack) {
       tracks = tracks.map((tr) => (tr.boneId === boneId && tr.property === property ? { ...tr, constraintMix: true } : tr));
     }
@@ -3251,7 +3326,7 @@ setActiveTool: (t) => set((s) => {
 }));  // end usePixiBonesStore = create<PixiBonesState>((set, get) => ({
 
 // 兼容：导出供 store 外的消费者复用
-export { findBone, collectDescendants };
+export { findBone, collectDescendants, sampleTrackValue };
 
 /**
  * 按 `order`（一串 id）重排任意带 `id` 的对象数组。

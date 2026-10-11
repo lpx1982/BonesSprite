@@ -22,8 +22,7 @@
  *  - 自动关键帧：开关决定拖骨骼时是否自动写关键帧（红色录制按钮 = 开）
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useT } from './i18n';
-import { usePixiBonesStore, ANIM_PROPERTIES, type AnimProperty, type BoneNode } from './store';
+import { usePixiBonesStore, sampleTrackValue, ANIM_PROPERTIES, type AnimProperty, type AnimCurveType, type BoneNode } from './store';
 
 const MIN_HEIGHT = 140;
 const MAX_HEIGHT = 600;
@@ -31,11 +30,18 @@ const PX_PER_FRAME = 5;     // 默认缩放值
 const MIN_PX_PER_FRAME = 1; // 最细：1 px/帧，能看到几千帧范围
 const MAX_PX_PER_FRAME = 20; // 最粗：20 px/帧，确保 30 帧动画能占约 600px（精细编辑）
 const RULER_H = 22;
+const KEY_MARK_H = 10;  // 标尺下方菱形关键帧标记行高度（Spine 风）
 const BONE_ROW_H = 22;
 const PROP_ROW_H = 16;
+const GRAPH_TRACK_H = 44;   // Graph 视图中每条属性曲线行的高度
 const KEY_LINE_W = 2;
-const LEFT_W = 180;
 const INDENT = 14;
+// =============== Figma 骨架分层高度（对齐 Spine 底部面板） ===============
+const TITLE_H = 26;    // 标题栏：视图 Tab + 动画管理 + 撤销/重做/同步
+const TOOLBAR_H = 38;  // 工具条①：Spine 图表工具条（4 分区 21 格）
+const PLAYROW_H = 32;  // 工具条②：播放控制 + 固定标尺（RULER_H 22 + KEY_MARK_H 10 叠放）
+const STATUS_H = 26;   // 底部状态栏：缩放 + 属性快捷 + 帧率/时长
+const LEFT_RATIO = 0.23; // 左树宽度 = 容器宽 × 23%（对齐 Figma 主区域比例）
 
 // =============== 颜色 ===============
 /** 骨骼颜色（与画布 / 权重面板一致）。 */
@@ -48,6 +54,50 @@ function boneColor(index: number): string {
 }
 
 /** 属性 → 关键帧竖线颜色（Spine 风格：每种属性不同色）。 */
+// =============== 统一行模型（第0波：左树/右侧共用同一行序列） ===============
+/** 扁平化的时间轴行：左侧树与右侧时间轴从同一数组渲染，天然左右对齐。
+ *  骨行 = BONE_ROW_H（两种视图一致）；属性行 = PROP_ROW_H（DopeSheet）或 GRAPH_TRACK_H（Graph）。 */
+interface TimelineRow {
+  kind: 'bone' | 'prop';
+  bone: BoneNodeT;
+  depth: number;
+  height: number;
+  property?: AnimProperty;
+  isConstraint?: boolean;
+  keys?: PropKey[];
+}
+
+function flattenRows(
+  nodes: BoneNodeT[],
+  collapsed: Record<string, boolean>,
+  viewMode: 'dopesheet' | 'graph',
+): TimelineRow[] {
+  const rows: TimelineRow[] = [];
+  const propH = viewMode === 'graph' ? GRAPH_TRACK_H : PROP_ROW_H;
+  const walk = (list: BoneNodeT[], depth: number) => {
+    for (const n of list) {
+      rows.push({ kind: 'bone', bone: n, depth, height: BONE_ROW_H });
+      if (collapsed[n.bone.id]) continue;
+      // 属性行：同一属性聚合关键帧（按 time 序），constraintMix 以 mix 属性并入
+      const byProp = new Map<AnimProperty, PropKey[]>();
+      for (const k of n.props) {
+        const arr = byProp.get(k.property) ?? [];
+        arr.push(k);
+        byProp.set(k.property, arr);
+      }
+      for (const [p, ks] of byProp) {
+        rows.push({
+          kind: 'prop', bone: n, depth: depth + 1, height: propH,
+          property: p, isConstraint: ks[0]?.isConstraint, keys: ks,
+        });
+      }
+      walk(n.children, depth + 1);
+    }
+  };
+  walk(nodes, 0);
+  return rows;
+}
+
 // =============== 子组件：时间轴行（右侧） ===============
 const PROP_COLOR: Record<AnimProperty, string> = {
   x: '#E61E1E',
@@ -96,7 +146,6 @@ interface BoneNodeT {
 
 // =============== 主组件 ===============
 export function AnimationTimeline() {
-  const { t } = useT();
   const height = usePixiBonesStore((s) => s.timelineHeight);
   const setHeight = usePixiBonesStore((s) => s.setTimelineHeight);
 
@@ -150,10 +199,13 @@ export function AnimationTimeline() {
     setScrollerW(el.clientWidth);
     return () => ro.disconnect();
   }, []);
+  // =============== Figma 布局：左树宽 = 容器宽 × 23%，标尺宽 = 剩余 ===============
+  const leftW = Math.max(140, Math.round(scrollerW * LEFT_RATIO));
+  const rulerW = Math.max(0, scrollerW - leftW);
   // 「全部展开」：让动画最后帧刚好在容器右边缘
   const fitTimeline = () => {
     const total = totalFrames * pxPerFrame;
-    const avail = Math.max(scrollerW - LEFT_W, 200);
+    const avail = Math.max(scrollerW - leftW, 200);
     if (total > avail) {
       setPxPerFrame(Math.max(MIN_PX_PER_FRAME, avail / totalFrames));
     } else if (total < avail * 0.6) {
@@ -260,6 +312,52 @@ export function AnimationTimeline() {
   const [dragKey, setDragKey] = useState<{ boneId: string; property: AnimProperty; fromTime: number; isConstraint?: boolean } | null>(null);
   const [dragTime, setDragTime] = useState(0);
 
+  // =============== 视图切换（DopeSheet / Graph）+ 关键帧选中（设插值用）===============
+  const [viewMode, setViewMode] = useState<'dopesheet' | 'graph'>('dopesheet');
+  // =============== Graph Filter（漏斗）：控制图中显示的内容类型（骨骼/图片/其他） ===============
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [filterFlags, setFilterFlags] = useState<{ bone: boolean; image: boolean; other: boolean }>({ bone: true, image: false, other: false });
+  const [selectedKey, setSelectedKey] = useState<{ boneId: string; property: AnimProperty; time: number; isConstraint?: boolean } | null>(null);
+  // ★ 统一行模型：左树与右侧时间轴共用同一行序列（行高按视图决定），天然左右对齐。
+  //   依赖 [tree, collapsed, viewMode]：播放采样不改变三者 → rows 引用稳定 → memo 子组件不重渲。
+  const rows = useMemo(
+    () => flattenRows(tree, collapsed, viewMode),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tree, collapsed, viewMode],
+  );
+  // ★ 标尺菱形标记需要的关键帧时间集合（去重，跨所有行聚合）；rows 稳定 → 引用稳定
+  const keyTimes = useMemo(() => {
+    const s = new Set<number>();
+    for (const r of rows) if (r.kind === 'prop' && r.keys) for (const k of r.keys) s.add(k.time);
+    return s;
+  }, [rows]);
+  // Graph Filter 过滤后的行序列：骨骼被过滤 → 左树提示 + 轨道清空（保持左右对齐）
+  const visibleRows = useMemo(
+    () => (filterFlags.bone ? rows : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rows, filterFlags.bone],
+  );
+  // 点击 Graph Filter 菜单外部 → 关闭菜单
+  useEffect(() => {
+    if (!filterOpen) return;
+    const onDown = (e: PointerEvent) => {
+      if (!(e.target as HTMLElement).closest('[data-graph-filter]')) setFilterOpen(false);
+    };
+    document.addEventListener('pointerdown', onDown);
+    return () => document.removeEventListener('pointerdown', onDown);
+  }, [filterOpen]);
+  const setKeyframeCurve = usePixiBonesStore((s) => s.setKeyframeCurve);
+  // 设置当前选中关键帧的插值类型（bezier 时给一组默认控制点，用户后续在 Graph 里细调）
+  const applyCurve = useCallback((curve: AnimCurveType) => {
+    const sk = selectedKey;
+    if (!sk) return;
+    const bezier: [number, number, number, number] | undefined = curve === 'bezier'
+      ? [0.5, 0, 0.5, 1]
+      : undefined;
+    setKeyframeCurve(sk.boneId, sk.property, sk.time, curve, bezier);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedKey]);
+
   // =============== 稳定回调（memo 子组件要求 props 引用稳定，播放时才不会整树重渲）===============
   const dragStartCb = useCallback((boneId: string, prop: AnimProperty, fromTime: number, isC?: boolean) => {
     setDragKey({ boneId, property: prop, fromTime, isConstraint: isC });
@@ -310,7 +408,12 @@ export function AnimationTimeline() {
 
   // =============== 渲染 ===============
   const frameOf = (time: number) => Math.floor(time * fps);
-  const showTree = true;  // 未来可作为开关
+  // 当前选中关键帧的插值类型（用于顶栏按钮高亮）
+  const selectedCurve: AnimCurveType | undefined = (() => {
+    if (!selectedKey || !anim) return undefined;
+    const tr = anim.tracks.find((x) => x.boneId === selectedKey.boneId && x.property === selectedKey.property);
+    return tr?.keys.find((k) => Math.abs(k.time - selectedKey.time) < 1e-6)?.curve;
+  })();
 
   return (
     <div
@@ -328,11 +431,36 @@ export function AnimationTimeline() {
         title="拖动调整高度"
       />
 
-      {/* ============ 顶部工具条（Spine 风格）============ */}
+      {/* ============ 标题栏（TITLE_H）：视图 Tab + 动画管理 + 撤销/重做/同步 ============ */}
       <div
         className="flex items-center gap-1 px-1.5 shrink-0"
-        style={{ height: 30, background: 'var(--spine-bg-panel-dark)', borderBottom: '1px solid var(--spine-border)' }}
+        style={{ height: TITLE_H, background: 'var(--spine-bg-panel-dark)', borderBottom: '1px solid var(--spine-border)' }}
       >
+        {/* 视图 Tab（Spine 风格：图表 / 摄影表，点击切换） */}
+        <div
+          className="flex items-center"
+          style={{ border: '1px solid var(--spine-border)', borderRadius: 3, overflow: 'hidden', marginRight: 4 }}
+        >
+          {([
+            ['graph', '图表', '图表视图（曲线编辑）'],
+            ['dopesheet', '摄影表', '摄影表视图（关键帧条）'],
+          ] as const).map(([m, label, tip], i) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setViewMode(m)}
+              title={tip}
+              style={{
+                height: 20, padding: '0 10px', fontSize: 10, lineHeight: '20px',
+                background: viewMode === m ? 'var(--spine-accent)' : 'transparent',
+                color: viewMode === m ? '#fff' : 'var(--spine-text)',
+                border: 'none', borderLeft: i === 0 ? 'none' : '1px solid var(--spine-border)',
+                cursor: 'pointer', whiteSpace: 'nowrap',
+              }}
+            >{label}</button>
+          ))}
+        </div>
+
         {/* 撤销/重做 */}
         <IconBtn title="撤销 (Cmd+Z)" onClick={undo}>{ICON.undo}</IconBtn>
         <IconBtn title="重做 (Cmd+Shift+Z)" onClick={redo}>{ICON.redo}</IconBtn>
@@ -343,45 +471,9 @@ export function AnimationTimeline() {
           title="同步：编辑时画布跟随当前时间"
           onClick={() => usePixiBonesStore.getState().seekTo(usePixiBonesStore.getState().currentTime)}
         >{ICON.sync}</IconBtn>
-
-        {/* 自动关键帧（红点 = 开） */}
-        <IconBtn
-          title={keyframeLock ? '自动关键帧已开启（点击关闭）' : '自动关键帧已关闭（点击开启）'}
-          onClick={toggleKeyframeLock}
-          active={keyframeLock}
-          color={keyframeLock ? '#E61E1E' : undefined}
-        >{keyframeLock ? ICON.autoKeyOn : ICON.autoKeyOff}</IconBtn>
         <Sep />
 
-        {/* 8 个属性快捷按钮（Spine 风格：点击 = 给所有选中骨写该属性关键帧） */}
-        {ANIM_PROPERTIES.map((p) => (
-          <IconBtn
-            key={p}
-            title={`${PROP_SHORT[p]}（点击给所有选中骨写 ${PROP_SHORT[p]} 关键帧）`}
-            color={PROP_COLOR[p]}
-            onClick={() => {
-              // 给所有选中骨在 currentTime 写一个该属性关键帧（值 = 当前骨值）
-              const st = usePixiBonesStore.getState();
-              const t = st.currentTime;
-              const ids = st.selectedBoneIds.length > 0 ? st.selectedBoneIds : (st.selectedBoneId ? [st.selectedBoneId] : []);
-              for (const id of ids) {
-                const b = st.bones.find((x) => x.id === id);
-                if (!b) continue;
-                if (p === 'mix') continue;  // mix 是约束轨道，不走这里
-                setKeyframe(id, p, t, b[p]);
-              }
-            }}
-          >{PROP_SHORT[p]}</IconBtn>
-        ))}
-        <Sep />
-
-        {/* 动画时长（顶栏保留） */}
-        <GroupLabel>当前</GroupLabel><SmallInput width={50} placeholder="0" />
-        <IconBtn title="循环开始（占位）">{ICON.loopStart}</IconBtn>
-        <IconBtn title="循环结束（占位）">{ICON.loopEnd}</IconBtn>
-        <Sep />
-
-        {/* 动画管理（增/复制/重命名/删除） */}
+        {/* 动画管理（下拉 + 增/复制/重命名/删除） */}
         <select
           value={anim?.id ?? ''}
           onChange={(e) => { setActiveAnimation(e.target.value); seekTo(usePixiBonesStore.getState().currentTime); }}
@@ -402,20 +494,6 @@ export function AnimationTimeline() {
           }}
         >{ICON.renameAnim}</IconBtn>
         <IconBtn title="删除当前动画（至少保留一个）" disabled={!anim || animations.length <= 1} onClick={() => anim && removeAnimation(anim.id)}>{ICON.delAnim}</IconBtn>
-        <Sep />
-
-        {/* 当前 / 循环开始 / 结束（占位） */}
-        <GroupLabel>当前</GroupLabel><SmallInput width={50} placeholder="0" />
-        <IconBtn title="循环开始（占位）">{ICON.loopStart}</IconBtn>
-        <IconBtn title="循环结束（占位）">{ICON.loopEnd}</IconBtn>
-
-        <Sep />
-
-        {/* 动画时长（顶栏保留） */}
-        <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'var(--spine-text-dim)' }}>
-          时长
-          <DurationInput duration={duration} animId={anim?.id} set={setAnimationDuration} />
-        </label>
 
         {/* 右侧：当前帧 + 时间 */}
         <div className="ml-auto flex items-center gap-3" style={{ color: 'var(--spine-text-dim)', fontSize: 10, fontVariantNumeric: 'tabular-nums' }}>
@@ -424,98 +502,233 @@ export function AnimationTimeline() {
         </div>
       </div>
 
-      {/* ============ 主体：左树 + 右时间轴 ============ */}
+      {/* ============ 工具条①（TOOLBAR_H）：Spine 图表工具条（4 分区 21 格） ============ */}
+      <div
+        className="flex items-center gap-1 px-1.5 shrink-0"
+        style={{ height: TOOLBAR_H, background: 'var(--spine-bg-panel-dark)', borderBottom: '1px solid var(--spine-border)', position: 'relative' }}
+      >
+        {/* 分区1：Graph Filter（漏斗，左键弹菜单 / 右键快速切换）+ 锁定 + 刷新 */}
+        <div data-graph-filter style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+          <button
+            type="button"
+            onClick={() => setFilterOpen((o) => !o)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setFilterFlags((f) => ({ ...f, bone: !f.bone }));
+            }}
+            title="Graph Filter：自定义图中显示的内容，右键单击可切换"
+            style={{
+              width: 22, height: 22, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              background: filterOpen ? 'rgba(255,255,255,0.10)' : 'transparent',
+              color: 'var(--spine-text)', border: '1px solid transparent', borderRadius: 3, cursor: 'pointer',
+            }}
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12"><path d="M1 1H11L7 6V10L5 11V6L1 1Z" fill="currentColor" /></svg>
+          </button>
+          {filterOpen && (
+            <div data-graph-filter style={{ position: 'absolute', top: '100%', left: 0, zIndex: 50, minWidth: 110, background: '#333', border: '1px solid var(--spine-border)', borderRadius: 4, padding: '4px 0' }}>
+              {([['bone', '骨骼'], ['image', '图片'], ['other', '其他']] as const).map(([k, label]) => (
+                <label
+                  key={k}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 6, padding: '3px 10px',
+                    fontSize: 11, color: 'var(--spine-text)', cursor: 'pointer', whiteSpace: 'nowrap',
+                  }}
+                >
+                  <input type="checkbox" checked={filterFlags[k]} onChange={() => setFilterFlags((f) => ({ ...f, [k]: !f[k] }))} />
+                  {label}
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+        <IconBtn title="锁定（占位）">🔒</IconBtn>
+        <IconBtn title="刷新（占位）">⟳</IconBtn>
+        <Sep />
+
+        {/* 分区2：编辑工具（占位）+ 曲线工具（占位）+ 插值类型（已实现）+ 更多（占位） */}
+        <IconBtn title="选择工具（占位）">▣</IconBtn>
+        <IconBtn title="移动工具（占位）">✕</IconBtn>
+        <IconBtn title="旋转工具（占位）">⌫</IconBtn>
+        <IconBtn title="缩放工具（占位）">✎</IconBtn>
+        <Sep />
+        <IconBtn title="直线曲线（占位）">∕</IconBtn>
+        <IconBtn title="自由曲线（占位）">∿</IconBtn>
+        <Sep />
+        <span className="flex items-center gap-0.5" style={{ fontSize: 10, color: 'var(--spine-text-dim)' }} title={selectedKey ? '设置选中关键帧的插值类型' : '先在时间轴选中一个关键帧'}>
+          插值
+          {(['linear', 'stepped', 'bezier'] as AnimCurveType[]).map((c) => (
+            <button
+              key={c}
+              type="button"
+              disabled={!selectedKey}
+              onClick={() => applyCurve(c)}
+              title={c === 'linear' ? '线性过渡' : c === 'stepped' ? '步进（保持到下一帧跳变）' : '贝塞尔曲线（可在 Graph 视图调节）'}
+              style={{
+                height: 20, padding: '0 6px', fontSize: 10,
+                background: selectedCurve === c ? 'var(--spine-accent)' : 'transparent',
+                color: selectedCurve === c ? '#fff' : 'var(--spine-text)',
+                border: '1px solid ' + (selectedCurve === c ? 'var(--spine-accent)' : 'var(--spine-border)'),
+                borderRadius: 3, cursor: selectedKey ? 'pointer' : 'not-allowed',
+                opacity: selectedKey ? 1 : 0.4,
+              }}
+            >{c === 'linear' ? '线性' : c === 'stepped' ? '步进' : '贝塞尔'}</button>
+          ))}
+        </span>
+        <Sep />
+        <IconBtn title="更多工具（占位）">⋯</IconBtn>
+        <Sep />
+
+        {/* 分区3：位移（active）/ 偏移（占位）—— Spine 图表工具条的变换模式 */}
+        <button
+          type="button"
+          title="位移（当前模式）"
+          style={{
+            height: 22, padding: '0 10px', fontSize: 10, borderRadius: 3, cursor: 'pointer',
+            background: 'var(--spine-accent)', color: '#fff', border: '1px solid var(--spine-accent)',
+          }}
+        >位移</button>
+        <button
+          type="button"
+          title="偏移（占位）"
+          style={{
+            height: 22, padding: '0 10px', fontSize: 10, borderRadius: 3, cursor: 'not-allowed',
+            background: 'transparent', color: 'var(--spine-text)', border: '1px solid var(--spine-border)', opacity: 0.5,
+          }}
+        >偏移</button>
+        <Sep />
+
+        {/* 分区4：帧（active）/ 自动 / ♡ / ✦ / ⤓ / ⋯（占位）+ 右侧时长输入 */}
+        <button
+          type="button"
+          title="帧（当前模式）"
+          style={{
+            height: 22, padding: '0 10px', fontSize: 10, borderRadius: 3, cursor: 'pointer',
+            background: 'rgba(255,255,255,0.10)', color: 'var(--spine-text)', border: '1px solid var(--spine-border)',
+          }}
+        >帧</button>
+        <IconBtn title="自动（占位）">自动</IconBtn>
+        <IconBtn title="♡（占位）">♡</IconBtn>
+        <IconBtn title="✦（占位）">✦</IconBtn>
+        <IconBtn title="⤓（占位）">⤓</IconBtn>
+        <IconBtn title="⋯（占位）">⋯</IconBtn>
+
+        {/* 右侧：动画时长 */}
+        <label className="ml-auto flex items-center gap-1" style={{ fontSize: 10, color: 'var(--spine-text-dim)' }}>
+          时长
+          <DurationInput duration={duration} animId={anim?.id} set={setAnimationDuration} />
+        </label>
+      </div>
+
+      {/* ============ 工具条②（PLAYROW_H）：播放控制 + 固定标尺（对齐 Figma 第二行） ============ */}
+      <div
+        className="flex items-center shrink-0"
+        style={{ height: PLAYROW_H, paddingLeft: 6, background: 'var(--spine-bg-panel-dark)', borderBottom: '1px solid var(--spine-border)' }}
+      >
+        {/* 播放按钮区（宽 = 左树宽，标尺起点正好对齐左树右缘） */}
+        <div style={{ width: leftW - 6, flex: 'none', display: 'flex', alignItems: 'center', gap: 2 }}>
+          <IconBtn title="到首帧" onClick={() => seekTo(0)}>⏮</IconBtn>
+          <IconBtn title="上一帧" onClick={() => stepFrame(-1)}>◀</IconBtn>
+          <IconBtn title={playing ? '暂停' : '播放'} onClick={togglePlay} active={playing} highlight>{playing ? '⏸' : '▶'}</IconBtn>
+          <IconBtn title="下一帧" onClick={() => stepFrame(1)}>⏭</IconBtn>
+          <IconBtn title="到末帧" onClick={() => seekTo(duration)}>⏭|</IconBtn>
+          <IconBtn title={loop ? '循环（开）' : '循环（关）'} onClick={() => setLoop(!loop)} active={loop}>⟳</IconBtn>
+          {/* 自动关键帧（红点 = 开） */}
+          <IconBtn
+            title={keyframeLock ? '自动关键帧已开启（点击关闭）' : '自动关键帧已关闭（点击开启）'}
+            onClick={toggleKeyframeLock}
+            active={keyframeLock}
+            color={keyframeLock ? '#E61E1E' : undefined}
+          >{keyframeLock ? ICON.autoKeyOn : ICON.autoKeyOff}</IconBtn>
+        </div>
+        {/* 标尺区：固定可视宽（不随轨道横滚）+ 菱形关键帧标记 */}
+        <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
+          <Ruler
+            totalFrames={totalFrames}
+            pxPerFrame={pxPerFrame}
+            width={rulerW}
+            innerRef={rulerRef}
+            onPointerDown={rulerPointerDownCb}
+          />
+          <KeyMarkers
+            keyTimes={keyTimes}
+            fps={fps}
+            pxPerFrame={pxPerFrame}
+            width={rulerW}
+          />
+        </div>
+      </div>
+
+      {/* ============ 主体：左树 + 右轨道（横滚） ============ */}
       <div ref={scrollerRef} className="flex-1 overflow-auto" style={{ position: 'relative' }}>
-        <div style={{ width: LEFT_W + timelineW, minHeight: '100%', position: 'relative' }}>
-          {/* 左：轨道树（缩进，sticky） */}
+        <div style={{ width: leftW + timelineW, minHeight: '100%', position: 'relative' }}>
+          {/* 左：轨道树（缩进，sticky；Graph Filter 过滤掉骨骼时显示提示） */}
           <div
             style={{
-              position: 'sticky', left: 0, zIndex: 4, width: LEFT_W, float: 'left',
+              position: 'sticky', left: 0, zIndex: 4, width: leftW, float: 'left',
               background: 'var(--spine-bg-panel-dark)', borderRight: '1px solid var(--spine-border)',
             }}
           >
-            {/* 标尺高度占位 */}
-            <div style={{ height: RULER_H, borderBottom: '1px solid var(--spine-border)', display: 'flex', alignItems: 'center', paddingLeft: 8, fontSize: 10, color: 'var(--spine-text-dim)' }}>
-              {showTree ? t('tab.timeline_anim') : t('tab.timeline_phot')}
-            </div>
-            {showTree ? (
-              <BoneTree
-                nodes={tree}
-                depth={0}
+            {filterFlags.bone ? (
+              <TreeRows
+                rows={rows}
                 collapsed={collapsed}
                 onToggle={toggleCollapsed}
-                onSelectBone={(id) => selectBone(id)}
+                onSelectBone={selectBoneCb}
               />
             ) : (
-              <div style={{ padding: '10px 8px', fontSize: 11, color: 'var(--spine-text-dim)' }}>摄影表：占位</div>
+              <div style={{ padding: '10px 8px', fontSize: 11, color: 'var(--spine-text-dim)' }}>骨骼已过滤（Graph Filter）</div>
             )}
           </div>
 
-          {/* 右：时间轴（标尺 + 关键帧）—— 用固定宽度的绝对布局，方便每行叠加 */}
-          <div style={{ marginLeft: LEFT_W, position: 'relative' }}>
-            {/* 标尺 sticky 顶部（memo：播放时 270+ 格子不重建） */}
-            <Ruler
-              totalFrames={totalFrames}
+          {/* 右：时间轴轨道（统一行序列，DopeSheet / Graph 共用） */}
+          <div style={{ marginLeft: leftW, position: 'relative' }}>
+            <TrackRows
+              rows={visibleRows}
+              viewMode={viewMode}
+              duration={duration}
+              fps={fps}
               pxPerFrame={pxPerFrame}
-              innerRef={rulerRef}
-              onPointerDown={rulerPointerDownCb}
-            />
-
-            {/* 关键帧：每个骨头 + 它的属性各自一行 */}
-            {showTree && tree.map((n) => (
-              <BoneRow
-                key={n.bone.id}
-                node={n}
-                depth={0}
-                duration={duration}
-                fps={fps}
-                pxPerFrame={pxPerFrame}
-                dragKey={dragKey}
-                dragTime={dragTime}
-                onDragStart={dragStartCb}
-                onDragMove={dragMoveCb}
-                onDragEnd={dragEndCb}
-                onClickRow={clickRowCb}
-                onSelectBone={selectBoneCb}
-                onRemoveKey={removeKeyCb}
-              />
-            ))}
-
-            {/* 播放头（醒目绿线 + 顶三角） */}
-            <div
-              style={{
-                position: 'absolute', top: 0, bottom: 0,
-                left: currentTime * fps * pxPerFrame, width: 1,
-                background: '#5BFF5B', pointerEvents: 'none', zIndex: 5,
-                boxShadow: '0 0 4px rgba(91,255,91,0.5)',
-              }}
-            />
-            <div
-              style={{
-                position: 'absolute', top: 0,
-                left: currentTime * fps * pxPerFrame - 7, width: 14, height: 12,
-                background: '#5BFF5B', clipPath: 'polygon(0 0, 100% 0, 50% 100%)',
-                pointerEvents: 'none', zIndex: 6,
-              }}
+              dragKey={dragKey}
+              dragTime={dragTime}
+              selectedKey={selectedKey}
+              onDragStart={dragStartCb}
+              onDragMove={dragMoveCb}
+              onDragEnd={dragEndCb}
+              onClickRow={clickRowCb}
+              onSelectBone={selectBoneCb}
+              onRemoveKey={removeKeyCb}
+              onSelectKey={setSelectedKey}
+              onMoveKey={moveKeyframe}
+              onSetValue={setKeyframe}
             />
           </div>
         </div>
       </div>
 
-      {/* ============ 底部工具条（Spine 风格）：播放控制 + 缩放滑块 ============ */}
+      {/* 播放头（Spine 风：青色竖线 + 顶三角；固定层覆盖轨道区，不随横滚） */}
+      <div
+        style={{
+          position: 'absolute', top: TITLE_H + TOOLBAR_H + PLAYROW_H, bottom: STATUS_H,
+          left: leftW + currentTime * fps * pxPerFrame, width: 1,
+          background: 'var(--spine-accent)', pointerEvents: 'none', zIndex: 5,
+          boxShadow: '0 0 4px rgba(79,184,248,0.5)',
+        }}
+      />
+      <div
+        style={{
+          position: 'absolute', top: TITLE_H + TOOLBAR_H + PLAYROW_H,
+          left: leftW + currentTime * fps * pxPerFrame - 7, width: 14, height: 12,
+          background: 'var(--spine-accent)', clipPath: 'polygon(0 0, 100% 0, 50% 100%)',
+          pointerEvents: 'none', zIndex: 6,
+        }}
+      />
+
+      {/* ============ 底部状态栏（STATUS_H）：缩放滑块 + 8 属性快捷 + 帧率 ============ */}
       <div
         className="flex items-center gap-1 px-1.5 shrink-0"
-        style={{ height: 26, background: 'var(--spine-bg-panel-dark)', borderTop: '1px solid var(--spine-border)' }}
+        style={{ height: STATUS_H, background: 'var(--spine-bg-panel-dark)', borderTop: '1px solid var(--spine-border)' }}
       >
-        {/* 播放控制（Spine 风位置：左下角） */}
-        <IconBtn title="到首帧" onClick={() => seekTo(0)}>⏮</IconBtn>
-        <IconBtn title="上一帧" onClick={() => stepFrame(-1)}>◀</IconBtn>
-        <IconBtn title={playing ? '暂停' : '播放'} onClick={togglePlay} active={playing} highlight>{playing ? '⏸' : '▶'}</IconBtn>
-        <IconBtn title="下一帧" onClick={() => stepFrame(1)}>⏭</IconBtn>
-        <IconBtn title="到末帧" onClick={() => seekTo(duration)}>⏭|</IconBtn>
-        <IconBtn title={loop ? '循环（开）' : '循环（关）'} onClick={() => setLoop(!loop)} active={loop}>⟳</IconBtn>
-        <Sep />
-
         {/* 缩放滑块（Spine 风位置：左下角，水平拖动调节 px/帧） */}
         <span style={{ color: 'var(--spine-text-dim)', fontSize: 10, marginRight: 2 }}>－</span>
         <input
@@ -525,12 +738,51 @@ export function AnimationTimeline() {
           step={0.5}
           value={pxPerFrame}
           onChange={(e) => setPxPerFrame(Number(e.target.value))}
-          style={{ width: 180, accentColor: 'var(--spine-accent)' }}
+          style={{ width: 140, accentColor: 'var(--spine-accent)' }}
           title={`缩放时间轴（${pxPerFrame.toFixed(1)} px/帧）`}
         />
         <span style={{ color: 'var(--spine-text-dim)', fontSize: 10, marginLeft: 2 }}>＋</span>
         <IconBtn title="全部展开（按容器宽度自动算 px/帧）" onClick={fitTimeline}>⊕</IconBtn>
         <IconBtn title="全部收起（每帧 1 px）" onClick={() => setPxPerFrame(MIN_PX_PER_FRAME)}>⊖</IconBtn>
+        <Sep />
+
+        {/* 8 个属性快捷按钮（Spine 风格：点击 = 给所有选中骨写该属性关键帧） */}
+        {ANIM_PROPERTIES.map((p) => (
+          <IconBtn
+            key={p}
+            title={`${PROP_SHORT[p]}（点击给所有选中骨写 ${PROP_SHORT[p]} 关键帧）`}
+            color={PROP_COLOR[p]}
+            onClick={() => {
+              const st = usePixiBonesStore.getState();
+              const t = st.currentTime;
+              const ids = st.selectedBoneIds.length > 0 ? st.selectedBoneIds : (st.selectedBoneId ? [st.selectedBoneId] : []);
+              for (const id of ids) {
+                const b = st.bones.find((x) => x.id === id);
+                if (!b) continue;
+                if (p === 'mix') continue;
+                setKeyframe(id, p, t, b[p]);
+              }
+            }}
+          >{PROP_SHORT[p]}</IconBtn>
+        ))}
+        <Sep />
+
+        {/* 右侧：帧率显示 */}
+        <div className="ml-auto flex items-center gap-2" style={{ color: 'var(--spine-text-dim)', fontSize: 10, fontVariantNumeric: 'tabular-nums' }}>
+          <span>帧率</span>
+          <input
+            type="number"
+            min={1} max={120} step={1}
+            value={fps}
+            onChange={(e) => { const v = Number(e.target.value); if (Number.isFinite(v) && v > 0) usePixiBonesStore.getState().setFps(v); }}
+            style={{
+              width: 40, height: 18, background: '#3a3a3a', color: 'var(--spine-text)',
+              border: '1px solid var(--spine-border)', borderRadius: 3, fontSize: 10,
+              outline: 'none', textAlign: 'center',
+            }}
+            title="帧率（fps）"
+          />
+        </div>
       </div>
     </div>
   );
@@ -608,28 +860,31 @@ function rulerStep(pxPerFrame: number): number {
   return candidates[candidates.length - 1];
 }
 
-/** 标尺（时间刻度条）：memo 化。只依赖 totalFrames / pxPerFrame（播放时不变），
- *  播放头（父组件里的绿线）单独渲染，因此播放时标尺的 270+ 个格子完全不会重建。 */
+/** 标尺（时间刻度条）：memo 化。固定可视宽度（不随轨道横滚，对齐 Spine/Figma 第二行布局），
+ *  只渲染可视范围内的帧格子。播放头（父组件里的青色线）单独渲染。 */
 const Ruler = memo(function Ruler({
-  totalFrames, pxPerFrame, innerRef, onPointerDown,
+  totalFrames, pxPerFrame, width, innerRef, onPointerDown,
 }: {
   totalFrames: number;
   pxPerFrame: number;
+  width: number;
   innerRef: React.RefObject<HTMLDivElement>;
   onPointerDown: (e: React.PointerEvent) => void;
 }) {
+  const visibleFrames = Math.min(totalFrames, Math.max(0, Math.ceil(width / pxPerFrame)));
   return (
     <div
       ref={innerRef}
       onPointerDown={onPointerDown}
       style={{
-        position: 'sticky', top: 0, zIndex: 3, height: RULER_H,
+        position: 'relative', height: RULER_H, width, flex: 'none',
+        overflow: 'hidden',
         background: 'var(--spine-bg-panel-dark)', borderBottom: '1px solid var(--spine-border)',
         fontSize: 10, color: 'var(--spine-text-dim)', userSelect: 'none',
         display: 'flex',
       }}
     >
-      {Array.from({ length: totalFrames + 1 }, (_, f) => {
+      {Array.from({ length: visibleFrames + 1 }, (_, f) => {
         const isLabel = f % rulerStep(pxPerFrame) === 0;
         return (
           <div
@@ -651,27 +906,71 @@ const Ruler = memo(function Ruler({
   );
 });
 
-// =============== 子组件：轨道树（左侧） ===============
-const BoneTree = memo(function BoneTree({
-  nodes, depth, collapsed, onToggle, onSelectBone,
+/** 菱形关键帧标记行：标尺下方，橙色菱形 = 该帧存在关键帧，白竖线向下延伸至轨道区。
+ *  固定可视宽度（随标尺固定，不随轨道横滚）；可视范围外的菱形裁剪掉。 */
+const KeyMarkers = memo(function KeyMarkers({
+  keyTimes, fps, pxPerFrame, width,
 }: {
-  nodes: BoneNodeT[];
-  depth: number;
+  keyTimes: Set<number>;
+  fps: number;
+  pxPerFrame: number;
+  width: number;
+}) {
+  const times = Array.from(keyTimes).sort((a, b) => a - b);
+  return (
+    <div
+      style={{
+        position: 'relative', height: KEY_MARK_H, width, flex: 'none',
+        overflow: 'hidden',
+        background: 'var(--spine-bg-panel-dark)',
+        borderBottom: '1px solid var(--spine-border)',
+        pointerEvents: 'none',
+      }}
+    >
+      {times.map((t) => {
+        const x = t * fps * pxPerFrame;
+        if (x < -4 || x > width + 4) return null;
+        return (
+          <div key={t} style={{ position: 'absolute', left: x, top: 0, width: 0, height: '100%' }}>
+            {/* 白竖线（向下延伸到轨道区） */}
+            <div style={{ position: 'absolute', left: 0, top: 6, bottom: 0, width: 1, background: 'rgba(255,255,255,0.4)' }} />
+            {/* 橙色菱形 */}
+            <div style={{
+              position: 'absolute', left: -3, top: 1, width: 6, height: 6,
+              background: 'var(--spine-warning)',
+              transform: 'rotate(45deg)',
+              border: '1px solid rgba(0,0,0,0.6)',
+            }} />
+          </div>
+        );
+      })}
+    </div>
+  );
+});
+
+// =============== 子组件：轨道树（左侧，基于统一行序列） ===============
+/** 左侧轨道树：从统一的 rows 渲染（骨行 / 属性行），与右侧 TrackRows 严格对齐。 */
+const TreeRows = memo(function TreeRows({
+  rows, collapsed, onToggle, onSelectBone,
+}: {
+  rows: TimelineRow[];
   collapsed: Record<string, boolean>;
   onToggle: (id: string) => void;
   onSelectBone: (id: string) => void;
 }) {
   return (
     <>
-      {nodes.map((n) => {
-        const isCollapsed = collapsed[n.bone.id];
-        return (
-          <div key={n.bone.id}>
+      {rows.map((r) => {
+        if (r.kind === 'bone') {
+          const n = r.bone;
+          const isCollapsed = collapsed[n.bone.id];
+          return (
             <div
+              key={n.bone.id}
               onClick={() => onSelectBone(n.bone.id)}
               style={{
                 display: 'flex', alignItems: 'center',
-                height: BONE_ROW_H, paddingLeft: 8 + depth * INDENT, paddingRight: 8,
+                height: r.height, paddingLeft: 8 + r.depth * INDENT, paddingRight: 8,
                 fontSize: 11, color: 'var(--spine-text)', cursor: 'pointer',
                 borderBottom: '1px solid var(--spine-border)',
                 background: 'transparent',
@@ -703,6 +1002,15 @@ const BoneTree = memo(function BoneTree({
               <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {n.bone.name}
               </span>
+              {/* 该骨是否带关键帧（白点=有，空圈=无，Spine 风） */}
+              <span
+                title={n.props.length > 0 ? '该骨有关键帧' : '该骨无关键帧'}
+                style={{
+                  width: 8, height: 8, borderRadius: '50%', marginRight: 6, flex: 'none',
+                  background: n.props.length > 0 ? '#fff' : 'transparent',
+                  border: '1px solid var(--spine-text-dim)',
+                }}
+              />
               {/* 显示该骨的"继承"标志（Spine 风：圆点） */}
               <span
                 title="继承（点击切换，子骨是否跟随该骨）"
@@ -713,21 +1021,21 @@ const BoneTree = memo(function BoneTree({
                 }}
               />
             </div>
-            {/* 子骨（折叠时隐藏） */}
-            {!isCollapsed && n.children.map((c) => (
-              <BoneTree
-                key={c.bone.id}
-                nodes={[c]}
-                depth={depth + 1}
-                collapsed={collapsed}
-                onToggle={onToggle}
-                onSelectBone={onSelectBone}
-              />
-            ))}
-            {/* 该骨自身的属性行：缩进一格 */}
-            {!isCollapsed && n.props.length > 0 && (
-              <BonePropLabels props={n.props} depth={depth + 1} />
-            )}
+          );
+        }
+        // 属性行
+        return (
+          <div
+            key={`${r.bone.bone.id}|${r.property}`}
+            style={{
+              display: 'flex', alignItems: 'center', height: r.height,
+              paddingLeft: 8 + r.depth * INDENT + 16, paddingRight: 8,
+              fontSize: 10, color: 'var(--spine-text-dim)',
+              borderBottom: '1px solid rgba(255,255,255,0.04)',
+            }}
+          >
+            <span style={{ display: 'inline-block', width: 6, height: 6, background: PROP_COLOR[r.property!], marginRight: 4 }} />
+            {PROP_SHORT[r.property!]}
           </div>
         );
       })}
@@ -748,114 +1056,96 @@ function bonesFlatIndex(id: string): number {
   return i < 0 ? 0 : i;
 }
 
-function BonePropLabels({ props, depth }: { props: PropKey[]; depth: number }) {
-  // 按属性聚合（去重）
-  const propsUnique: AnimProperty[] = [];
-  for (const p of props) {
-    const ap: AnimProperty = p.property;
-    if (!propsUnique.includes(ap)) propsUnique.push(ap);
-  }
-  return (
-    <>
-      {propsUnique.map((p) => (
-        <div
-          key={p}
-          style={{
-            display: 'flex', alignItems: 'center', height: PROP_ROW_H,
-            paddingLeft: 8 + depth * INDENT + 16, paddingRight: 8,
-            fontSize: 10, color: 'var(--spine-text-dim)',
-            borderBottom: '1px solid rgba(255,255,255,0.04)',
-          }}
-        >
-          <span style={{ display: 'inline-block', width: 6, height: 6, background: PROP_COLOR[p], marginRight: 4 }} />
-          {PROP_SHORT[p]}
-        </div>
-      ))}
-    </>
-  );
-}
-
-/** 属性 → 关键帧竖线颜色（Spine 风格：每种属性不同色）。 */
-const BoneRow = memo(function BoneRow({
-  node, depth, duration, fps, dragKey, dragTime, pxPerFrame,
+// =============== 子组件：右侧统一行序列（DopeSheet / Graph 共用） ===============
+const TrackRows = memo(function TrackRows({
+  rows, viewMode, duration, fps, pxPerFrame,
+  dragKey, dragTime, selectedKey,
   onDragStart, onDragMove, onDragEnd, onClickRow, onSelectBone, onRemoveKey,
+  onSelectKey, onMoveKey, onSetValue,
 }: {
-  node: BoneNodeT;
-  depth: number;
+  rows: TimelineRow[];
+  viewMode: 'dopesheet' | 'graph';
   duration: number;
   fps: number;
   pxPerFrame: number;
   dragKey: { boneId: string; property: AnimProperty; fromTime: number; isConstraint?: boolean } | null;
   dragTime: number;
+  selectedKey: SelectedKeyInfo | null;
   onDragStart: (boneId: string, prop: AnimProperty, fromTime: number, isC?: boolean) => void;
   onDragMove: (t: number) => void;
   onDragEnd: (t: number) => void;
   onClickRow: (boneId: string, prop: AnimProperty, isC?: boolean) => void;
   onSelectBone: (id: string) => void;
   onRemoveKey: (boneId: string, prop: AnimProperty, t: number, isC?: boolean) => void;
+  onSelectKey: (sel: SelectedKeyInfo) => void;
+  onMoveKey: (boneId: string, prop: AnimProperty, fromTime: number, toTime: number) => void;
+  onSetValue: (boneId: string, prop: AnimProperty, time: number, value: number) => void;
 }) {
-  // 收集每条属性的关键帧（按属性分组）
-  const byProp = new Map<AnimProperty, PropKey[]>();
-  for (const k of node.props) {
-    const arr = byProp.get(k.property) ?? [];
-    arr.push(k);
-    byProp.set(k.property, arr);
-  }
-  // 关键帧竖线渲染：每个 (property, time) 一个竖线
-  const isCollapsed = false;  // 折叠态由 useState 控制
   return (
     <>
-      {/* 骨行（无关键帧，仅占位 → 仍可点击选中骨） */}
-      <div
-        onClick={() => onSelectBone(node.bone.id)}
-        style={{ height: BONE_ROW_H, position: 'relative', borderBottom: '1px solid var(--spine-border)', cursor: 'pointer' }}
-      />
-      {/* 属性行：每行 = 一种属性的关键帧轨道 */}
-      {Array.from(byProp.entries()).map(([p, ks]) => (
-        <PropRow
-          key={p}
-          boneId={node.bone.id}
-          property={p}
-          isConstraint={ks[0]?.isConstraint}
-          keys={ks}
-          fps={fps}
-          duration={duration}
-          pxPerFrame={pxPerFrame}
-          dragKey={dragKey}
-          dragTime={dragTime}
-          onDragStart={onDragStart}
-          onDragMove={onDragMove}
-          onDragEnd={onDragEnd}
-          onClickRow={onClickRow}
-          onRemoveKey={onRemoveKey}
-        />
-      ))}
-      {/* 子骨行递归 */}
-      {!isCollapsed && node.children.map((c) => (
-        <BoneRow
-          key={c.bone.id}
-          node={c}
-          depth={depth + 1}
-          duration={duration}
-          fps={fps}
-          pxPerFrame={pxPerFrame}
-          dragKey={dragKey}
-          dragTime={dragTime}
-          onDragStart={onDragStart}
-          onDragMove={onDragMove}
-          onDragEnd={onDragEnd}
-          onClickRow={onClickRow}
-          onSelectBone={onSelectBone}
-          onRemoveKey={onRemoveKey}
-        />
-      ))}
+      {rows.map((r) => {
+        if (r.kind === 'bone') {
+          // 骨行：无关键帧，仅占位（可点击选中骨）
+          return (
+            <div
+              key={r.bone.bone.id}
+              onClick={() => onSelectBone(r.bone.bone.id)}
+              style={{ height: r.height, position: 'relative', borderBottom: '1px solid var(--spine-border)', cursor: 'pointer' }}
+            />
+          );
+        }
+        const boneId = r.bone.bone.id;
+        const property = r.property!;
+        if (viewMode === 'dopesheet') {
+          return (
+            <PropRow
+              key={`${boneId}|${property}`}
+              boneId={boneId}
+              property={property}
+              isConstraint={r.isConstraint}
+              keys={r.keys!}
+              fps={fps}
+              duration={duration}
+              pxPerFrame={pxPerFrame}
+              dragKey={dragKey}
+              dragTime={dragTime}
+              onDragStart={onDragStart}
+              onDragMove={onDragMove}
+              onDragEnd={onDragEnd}
+              onClickRow={onClickRow}
+              onRemoveKey={onRemoveKey}
+              selectedKey={selectedKey}
+              onSelectKey={onSelectKey}
+            />
+          );
+        }
+        return (
+          <GraphTrack
+            key={`${boneId}|${property}`}
+            boneId={boneId}
+            property={property}
+            isConstraint={r.isConstraint}
+            keys={r.keys!}
+            fps={fps}
+            duration={duration}
+            pxPerFrame={pxPerFrame}
+            color={PROP_COLOR[property]}
+            selectedKey={selectedKey}
+            onSelectKey={onSelectKey}
+            onMoveKey={onMoveKey}
+            onSetValue={onSetValue}
+          />
+        );
+      })}
     </>
   );
 });
 
+/** 属性 → 关键帧竖线颜色（Spine 风格：每种属性不同色）。 */
 const PropRow = memo(function PropRow({
   boneId, property, isConstraint, keys, fps, duration, dragKey, dragTime, pxPerFrame,
   onDragStart, onDragMove, onDragEnd, onClickRow, onRemoveKey,
+  selectedKey, onSelectKey,
 }: {
   boneId: string;
   property: AnimProperty;
@@ -871,6 +1161,8 @@ const PropRow = memo(function PropRow({
   onDragEnd: (t: number) => void;
   onClickRow: (boneId: string, prop: AnimProperty, isC?: boolean) => void;
   onRemoveKey: (boneId: string, prop: AnimProperty, t: number, isC?: boolean) => void;
+  selectedKey: { boneId: string; property: AnimProperty; time: number; isConstraint?: boolean } | null;
+  onSelectKey: (sel: { boneId: string; property: AnimProperty; time: number; isConstraint?: boolean }) => void;
 }) {
   return (
     <div
@@ -885,11 +1177,31 @@ const PropRow = memo(function PropRow({
         cursor: 'crosshair',
       }}
     >
+      {/* 关键帧之间的插值连接线（Spine 风：两关键帧间按属性色画水平细线） */}
+      {keys.length > 1 && keys.slice(0, -1).map((k, i) => {
+        const next = keys[i + 1];
+        const x1 = k.time * fps * pxPerFrame;
+        const x2 = next.time * fps * pxPerFrame;
+        const midY = PROP_ROW_H / 2;
+        return (
+          <div
+            key={`${k.time}-${next.time}`}
+            style={{
+              position: 'absolute', left: x1, width: Math.max(0, x2 - x1), top: midY - 1, height: 2,
+              background: PROP_COLOR[property], opacity: 0.55, zIndex: 2, pointerEvents: 'none',
+            }}
+          />
+        );
+      })}
       {keys.map((k) => {
         const isDragging = dragKey
           && dragKey.boneId === boneId
           && dragKey.property === property
           && Math.abs(dragKey.fromTime - k.time) < 1e-6;
+        const isSelected = selectedKey
+          && selectedKey.boneId === boneId
+          && selectedKey.property === property
+          && Math.abs(selectedKey.time - k.time) < 1e-6;
         const showLeft = isDragging ? dragTime * fps * pxPerFrame - KEY_LINE_W / 2 : k.time * fps * pxPerFrame - KEY_LINE_W / 2;
         return (
           <div
@@ -898,6 +1210,7 @@ const PropRow = memo(function PropRow({
             onPointerDown={(e) => {
               e.stopPropagation(); e.preventDefault();
               (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+              onSelectKey({ boneId, property, time: k.time, isConstraint });
               onDragStart(boneId, property, k.time, isConstraint);
             }}
             onPointerMove={(e) => {
@@ -916,15 +1229,152 @@ const PropRow = memo(function PropRow({
             }}
             style={{
               position: 'absolute', top: 0,
-              left: showLeft, width: KEY_LINE_W,
+              left: showLeft, width: isSelected ? KEY_LINE_W + 2 : KEY_LINE_W,
               height: '100%',
               background: PROP_COLOR[property],
               cursor: 'grab', userSelect: 'none', zIndex: 4,
-              boxShadow: isDragging ? '0 0 0 1px #fff' : 'none',
+              boxShadow: isSelected ? '0 0 0 1px #fff, 0 0 6px rgba(255,255,255,0.6)' : (isDragging ? '0 0 0 1px #fff' : 'none'),
             }}
           />
         );
       })}
+    </div>
+  );
+});
+
+// =============== Graph 视图（曲线） ===============
+type SelectedKeyInfo = { boneId: string; property: AnimProperty; time: number; isConstraint?: boolean };
+
+const GraphTrack = memo(function GraphTrack({
+  boneId, property, isConstraint, keys, fps, duration, pxPerFrame, color,
+  selectedKey, onSelectKey, onMoveKey, onSetValue,
+}: {
+  boneId: string;
+  property: AnimProperty;
+  isConstraint?: boolean;
+  keys: PropKey[];
+  fps: number;
+  duration: number;
+  pxPerFrame: number;
+  color: string;
+  selectedKey: SelectedKeyInfo | null;
+  onSelectKey: (sel: SelectedKeyInfo) => void;
+  onMoveKey: (boneId: string, prop: AnimProperty, fromTime: number, toTime: number) => void;
+  onSetValue: (boneId: string, prop: AnimProperty, time: number, value: number) => void;
+}) {
+  const W = Math.max(duration * fps * pxPerFrame + 20, 40);
+  const H = GRAPH_TRACK_H;
+  const pad = 6;
+  // 值域（含两端 padding）→ 取整到好看刻度（对齐 Spine 右侧数值轴）
+  let minV = Math.min(...keys.map((k) => k.value));
+  let maxV = Math.max(...keys.map((k) => k.value));
+  if (maxV - minV < 1e-6) { maxV += 1; minV -= 1; }
+  const range = maxV - minV;
+  const yOf = (v: number) => pad + (maxV - v) / range * (H - pad * 2);
+  const xOf = (t: number) => t * fps * pxPerFrame;
+  const vOf = (clientY: number, top: number) => maxV - (clientY - top - pad) / (H - pad * 2) * range;
+  // 右侧数值刻度：niceStep 按 range 取 1-2-5 序列，最多 4 根刻度线
+  const niceStep = (() => {
+    const raw = range / 4;
+    for (const c of [0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000]) if (raw <= c) return c;
+    return 1000;
+  })();
+  const ticks: number[] = [];
+  for (let v = Math.ceil(minV / niceStep) * niceStep; v <= maxV; v += niceStep) ticks.push(v);
+  // 曲线采样（用 store 的采样函数，linear/stepped/bezier 全部正确）
+  const steps = Math.max(2, Math.ceil(duration * fps * 4));
+  const setupV = keys[0]?.value ?? 0;
+  const path = (() => {
+    const pts: string[] = [];
+    for (let i = 0; i <= steps; i++) {
+      const t = (i / steps) * duration;
+      const v = sampleTrackValue(keys, t, setupV);
+      pts.push(`${(i === 0 ? 'M' : 'L')}${xOf(t).toFixed(1)},${yOf(v).toFixed(1)}`);
+    }
+    return pts.join(' ');
+  })();
+  // 拖动关键帧点（同时改时间 + 值）
+  const [drag, setDrag] = useState<{ fromTime: number } | null>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const onPointMove = (e: React.PointerEvent) => {
+    if (!drag || !svgRef.current) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    const t = Math.max(0, Math.min(duration, (e.clientX - rect.left) / pxPerFrame / fps));
+    const v = vOf(e.clientY, rect.top);
+    // 移动时间 + 更新值（都保留关键帧的插值属性）
+    if (Math.abs(t - drag.fromTime) > 1e-6) {
+      onMoveKey(boneId, property, drag.fromTime, t);
+      setDrag({ fromTime: t });
+    }
+    onSetValue(boneId, property, t, v);
+  };
+  const SQ = 6;  // 方形关键帧点边长
+  return (
+    <div style={{ position: 'relative', height: GRAPH_TRACK_H, borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+      {/* 行背景 + 属性标签 */}
+      <span style={{ position: 'absolute', top: 2, left: 4, fontSize: 9, color: 'var(--spine-text-dim)', pointerEvents: 'none' }}>
+        <span style={{ display: 'inline-block', width: 6, height: 6, background: color, marginRight: 3 }} />
+        {PROP_SHORT[property]}
+      </span>
+      {/* 中线（值 = 0，超出值域时画在中值）+ 水平网格虚线 */}
+      <div style={{ position: 'absolute', left: 0, right: 0, top: yOf(Math.max(minV, Math.min(0, maxV))), height: 0, borderTop: '1px dashed rgba(255,255,255,0.08)' }} />
+      {ticks.map((v) => (
+        <div
+          key={v}
+          style={{ position: 'absolute', left: 0, right: 0, top: yOf(v), height: 0, borderTop: '1px dashed rgba(255,255,255,0.05)' }}
+        />
+      ))}
+      <svg
+        ref={svgRef}
+        width={W}
+        height={H}
+        style={{ position: 'absolute', left: 0, top: 0, overflow: 'visible', touchAction: 'none' }}
+      >
+        {/* 曲线 */}
+        <path d={path} fill="none" stroke={color} strokeWidth={1.5} opacity={0.9} />
+        {/* 关键帧点（Spine 风：方形控制点） */}
+        {keys.map((k) => {
+          const isSel = selectedKey
+            && selectedKey.boneId === boneId
+            && selectedKey.property === property
+            && Math.abs(selectedKey.time - k.time) < 1e-6;
+          const cx = xOf(k.time);
+          const cy = yOf(k.value);
+          const s = isSel ? SQ + 2 : SQ;
+          return (
+            <rect
+              key={k.time}
+              x={cx - s / 2}
+              y={cy - s / 2}
+              width={s}
+              height={s}
+              fill={isSel ? '#fff' : color}
+              stroke="#111"
+              strokeWidth={1}
+              style={{ cursor: 'grab' }}
+              onPointerDown={(e) => {
+                e.stopPropagation(); e.preventDefault();
+                (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+                onSelectKey({ boneId, property, time: k.time, isConstraint });
+                setDrag({ fromTime: k.time });
+              }}
+              onPointerMove={onPointMove}
+              onPointerUp={() => setDrag(null)}
+              onPointerCancel={() => setDrag(null)}
+            >
+              <title>{`${PROP_SHORT[property]} @ ${k.time.toFixed(2)}s = ${k.value.toFixed(2)}`}</title>
+            </rect>
+          );
+        })}
+      </svg>
+      {/* 右侧 Y 轴数值刻度（Spine 风：右侧垂直数值轴） */}
+      <div style={{ position: 'absolute', right: 2, top: 0, bottom: 0, width: 34, pointerEvents: 'none', fontSize: 8, color: 'var(--spine-text-dim)' }}>
+        {ticks.map((v) => (
+          <div key={v} style={{ position: 'absolute', right: 0, top: yOf(v) - 4, textAlign: 'right', lineHeight: '8px' }}>
+            {v % 1 === 0 ? v.toFixed(0) : v.toFixed(1)}
+          </div>
+        ))}
+      </div>
     </div>
   );
 });
@@ -963,25 +1413,6 @@ function IconBtn({
 
 function Sep() {
   return <span style={{ display: 'inline-block', width: 1, height: 18, background: 'var(--spine-border)', margin: '0 4px' }} />;
-}
-
-function GroupLabel({ children }: { children: React.ReactNode }) {
-  return <span style={{ color: 'var(--spine-text-dim)', fontSize: 10 }}>{children}</span>;
-}
-
-function SmallInput({ width = 40, placeholder }: { width?: number; placeholder?: string }) {
-  return (
-    <input
-      type="text"
-      placeholder={placeholder}
-      style={{
-        width, height: 18, padding: '0 4px',
-        background: '#3a3a3a', color: 'var(--spine-text)',
-        border: '1px solid var(--spine-border)', borderRadius: 3, fontSize: 10,
-        outline: 'none', textAlign: 'center',
-      }}
-    />
-  );
 }
 
 function selectStyle(extra: React.CSSProperties = {}): React.CSSProperties {
