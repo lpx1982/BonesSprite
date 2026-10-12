@@ -3524,18 +3524,14 @@ interface PathConstraintsSectionPropsBlockProps {
 
 function PathConstraintsSectionPropsBlock(props: PathConstraintsSectionPropsBlockProps) {
   const {
-    pathConstraints, bones, slots, attachmentPaths,
-    onRemove, onTarget, onSetBones, onBoneOrder,
+    pathConstraints, slots, attachmentPaths,
+    onRemove, onTarget,
     onPositionMode, onPosition, onSpacingMode, onSpacing, onRotateMode,
-    onRotateMix, onTranslateMix, onRotationOffset, onMove, pushHistory, C,
+    onRotateMix, onTranslateMix, onRotationOffset, pushHistory, C,
   } = props;
   // ★ 选中态收敛到 store：树里的路径约束行点击 → selectConstraint → 这里同步高亮
   const selectedId = usePixiBonesStore((s) => s.selectedConstraintId);
-  const selectConstraint = usePixiBonesStore((s) => s.selectConstraint);
   const selected = pathConstraints.find((c) => c.id === selectedId) ?? null;
-
-  const slotName = (id: string) => slots.find((x) => x.id === id)?.name ?? '(已删)';
-  const boneName = (id: string) => bones.find((b) => b.id === id)?.name ?? '(已删)';
 
   // ★ Spine 风格面板：折叠区 / 链接滑块 UI 状态
   const [offsetOpen, setOffsetOpen] = useState(true);
@@ -3547,8 +3543,6 @@ function PathConstraintsSectionPropsBlock(props: PathConstraintsSectionPropsBloc
   const targetPathAid = targetSlotObj?.activeAttachmentId ?? null;
   const targetPathName = targetPathAid && attachmentPaths[targetPathAid] ? targetPathAid : null;
 
-  // Spine 新建流程：选中骨骼 → 新建... → 拾取路径（与「新建→约束→路径约束」同源）
-  const startPathConstraintPick = usePixiBonesStore((s) => s.startPathConstraintPick);
   const selectAttachment = usePixiBonesStore((s) => s.selectAttachment);
   const setPathEdit = usePixiBonesStore((s) => s.setPathEdit);
 
@@ -3581,59 +3575,6 @@ function PathConstraintsSectionPropsBlock(props: PathConstraintsSectionPropsBloc
         ) : (
           <span className="text-[12px] shrink-0" style={{ color: C.dim }}>{pathConstraints.length} 条</span>
         )}
-      </div>
-
-      {/* 约束列表（顺序 = 应用顺序） */}
-      <div className="px-2 py-1 flex flex-col gap-0.5 overflow-y-auto shrink-0" style={{ maxHeight: 130 }}>
-        {pathConstraints.length === 0 && (
-          <div className="text-[13px]" style={{ color: C.dim }}>尚未创建路径约束。点下方「新建...」创建。</div>
-        )}
-        {pathConstraints.map((c, i) => (
-          <div
-            key={c.id}
-            onClick={() => selectConstraint(c.id)}
-            className="flex items-center gap-1 rounded px-1.5 py-1 text-[13px] cursor-pointer select-none"
-            style={{
-              background: selectedId === c.id ? C.accentDk : 'transparent',
-              color: selectedId === c.id ? '#fff' : C.text,
-            }}
-          >
-            <span className="flex-1 truncate">
-              {i + 1}. {c.name}
-              <span style={{ color: C.dim }}> · {slotName(c.targetSlotId)} → {c.boneIds.map((bid) => boneName(bid)).join(',')}</span>
-            </span>
-            <button
-              className="w-4 h-4 flex items-center justify-center rounded text-[12px]"
-              style={{ background: 'transparent', border: 'none', color: C.dim, cursor: i === 0 ? 'default' : 'pointer' }}
-              disabled={i === 0}
-              title="上移（更先应用）"
-              onClick={(e) => { e.stopPropagation(); onMove(c.id, i - 1); }}
-            >▲</button>
-            <button
-              className="w-4 h-4 flex items-center justify-center rounded text-[12px]"
-              style={{ background: 'transparent', border: 'none', color: C.dim, cursor: i === pathConstraints.length - 1 ? 'default' : 'pointer' }}
-              disabled={i === pathConstraints.length - 1}
-              title="下移（更后应用）"
-              onClick={(e) => { e.stopPropagation(); onMove(c.id, i + 1); }}
-            >▼</button>
-          </div>
-        ))}
-      </div>
-
-      {/* 底部：新建...（Spine 流程：选中骨骼 → 新建 → 拾取路径） */}
-      <div className="px-2 py-1.5 border-t flex items-center gap-1 shrink-0" style={{ borderColor: C.border }}>
-        <button
-          className="flex-1 rounded px-1 py-1 flex items-center justify-center gap-0.5 text-[13px]"
-          style={{
-            background: C.panel,
-            color: C.text,
-            border: '1px solid ' + C.border,
-            cursor: 'pointer',
-          }}
-          onClick={() => startPathConstraintPick()}
-        >
-          <span style={{ color: C.accent }}>＋</span> 新建...
-        </button>
       </div>
 
       {/* 目标插槽未显示路径附件时提示（约束不生效） */}
@@ -3856,48 +3797,6 @@ function PathConstraintsSectionPropsBlock(props: PathConstraintsSectionPropsBloc
                 </div>
               </>
             )}
-          </div>
-
-          {/* 骨骼（顺序 = 沿路径；Spine 的 Bones 区） */}
-          <div className="border-t pt-1.5 flex flex-col gap-0.5" style={{ borderColor: C.border }}>
-            <span className="shrink-0" style={{ color: C.accent }}>骨骼（顺序 = 沿路径）</span>
-            {selected.boneIds.map((bid, i) => (
-              <div key={bid} className="flex items-center gap-1">
-                <span className="flex-1 truncate">{i + 1}. {boneName(bid)}</span>
-                <button
-                  className="w-4 h-4 flex items-center justify-center rounded text-[12px]"
-                  style={{ background: 'transparent', border: 'none', color: C.dim, cursor: i === 0 ? 'default' : 'pointer' }}
-                  disabled={i === 0}
-                  title="上移（更靠路径起点）"
-                  onClick={() => onBoneOrder(selected.id, i, i - 1)}
-                >▲</button>
-                <button
-                  className="w-4 h-4 flex items-center justify-center rounded text-[12px]"
-                  style={{ background: 'transparent', border: 'none', color: C.dim, cursor: i === selected.boneIds.length - 1 ? 'default' : 'pointer' }}
-                  disabled={i === selected.boneIds.length - 1}
-                  title="下移（更靠路径末端）"
-                  onClick={() => onBoneOrder(selected.id, i, i + 1)}
-                >▼</button>
-                <button
-                  className="w-4 h-4 flex items-center justify-center rounded text-[12px]"
-                  style={{ background: 'transparent', border: 'none', color: C.warning, cursor: 'pointer' }}
-                  title="移除骨骼"
-                  onClick={() => onSetBones(selected.id, selected.boneIds.filter((x) => x !== bid))}
-                >✕</button>
-              </div>
-            ))}
-            <select
-              className="w-full rounded px-1 py-0.5 outline-none text-[13px]"
-              style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
-              value=""
-              onChange={(e) => {
-                const v = e.target.value;
-                if (v && !selected.boneIds.includes(v)) onSetBones(selected.id, [...selected.boneIds, v]);
-              }}
-            >
-              <option value="">+ 添加骨骼</option>
-              {bones.filter((b) => !selected.boneIds.includes(b.id)).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-            </select>
           </div>
         </div>
       )}
