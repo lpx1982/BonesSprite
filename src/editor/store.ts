@@ -2284,7 +2284,11 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     const s = get();
     if (s.pcPickMode !== 'bone') return;
     if (!s.bones.some((b) => b.id === boneId)) return;
-    if (s.pcPickBoneIds.includes(boneId)) return;   // 不重复添加
+    // 已在列表：非 Shift 再点 = 确认完成；Shift 重复点 = 忽略
+    if (s.pcPickBoneIds.includes(boneId)) {
+      if (!shiftKey) set({ pcPickMode: 'done' });
+      return;
+    }
     const boneIds = [...s.pcPickBoneIds, boneId];
     // Shift = 累加继续选；否则完成（触发命名弹窗）
     set(shiftKey
@@ -2901,7 +2905,25 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     _pathConstraintIdCounter = 0;
     get().pushRecentProject(id, trimmed);
   },
-  closeProject:     () => set({ currentProjectId: null, selectedBoneId: null, selectedBoneIds: [] }),
+  closeProject:     () => set({
+    currentProjectId: null,
+    selectedBoneId: null,
+    selectedBoneIds: [],
+    selectedSlotId: null,
+    selectedSlotIds: [],
+    selectedAttachmentId: null, selectedAttachmentIds: [],
+    selectedRowKey: null,
+    selectedSectionKey: null,
+    attachingSlotId: null,
+    ikPickBoneId: null,
+    ikPickChildBoneId: null,
+    ikPickTargetBoneId: null,
+    pcPickMode: null,
+    pcPickPathSlotId: null,
+    pcPickBoneIds: [],
+    pathEditAttachmentId: null,
+    meshEditSlotId: null,
+  }),
   /**
    * 载入一份已保存的工程：一次性覆盖全部工程态，并清掉撤销栈与各种"编辑中"临时状态。
    * 同时把 id 自增计数器推到已载入 id 之后，避免之后新建骨骼/插槽与旧 id 撞号。

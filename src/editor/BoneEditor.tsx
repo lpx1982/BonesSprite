@@ -4335,18 +4335,18 @@ export function BoneEditor() {
           if (!moved) {
             // 单击：若点在图层上 → 选中它所属的**插槽**（Shift = 加选，跟骨骼一致）
             if (hitSlotId && layerSelectable) {
-              // ★ 变换工具下的选择分类锁定：当前已选「骨骼类」→ 点图层被忽略（保持骨骼选中）
               const stLock2 = usePixiBonesStore.getState();
+              const sl2 = stLock2.slots.find((x) => x.id === hitSlotId) ?? null;
+              const aid2 = sl2?.activeAttachmentId ?? null;
+              // ★ 路径约束创建拾取：优先于一切（含变换工具分类锁定），点路径即拾取目标
+              if (aid2 && stLock2.attachmentPaths[aid2] && stLock2.pcPickMode === 'path') {
+                stLock2.pickPathConstraintPath(hitSlotId);
+                return;
+              }
+              // ★ 变换工具下的选择分类锁定：当前已选「骨骼类」→ 点图层被忽略（保持骨骼选中）
               if (!(stLock2.activeTool !== null && stLock2.selectedBoneIds.length > 0)) {
                 // ★ 点击路径曲线 → 选中该**路径附件**（Shift = 加选/反选；显示路径属性面板）
-                const sl2 = stLock2.slots.find((x) => x.id === hitSlotId) ?? null;
-                const aid2 = sl2?.activeAttachmentId ?? null;
                 if (aid2 && stLock2.attachmentPaths[aid2]) {
-                  // ★ 路径约束创建：拾取目标路径阶段点路径 = 拾取为约束目标
-                  if (stLock2.pcPickMode === 'path') {
-                    stLock2.pickPathConstraintPath(hitSlotId);
-                    return;
-                  }
                   store.selectAttachment(hitSlotId, aid2, 'slotatt:' + hitSlotId + ':' + aid2, additive);
                 } else if (additive) {
                   store.selectSlots([...prevSlotIds, hitSlotId], false);
@@ -4623,8 +4623,29 @@ export function BoneEditor() {
       a.stage.on('pointerdown', (ev: FederatedPointerEvent) => {
         if (ev.button !== 0) return;
         const stGrid = usePixiBonesStore.getState();
+        // ★ 路径约束拾取优先：拾取目标路径阶段（即使正编辑路径），点路径 = 拾取；点其它忽略
+        if (stGrid.pcPickMode === 'path') {
+          const tSlot = (ev.target as { __slotId?: string } | null)?.__slotId ?? null;
+          if (tSlot) {
+            const stHitP = usePixiBonesStore.getState();
+            const slP = stHitP.slots.find((x) => x.id === tSlot) ?? null;
+            const aidP = slP?.activeAttachmentId ?? null;
+            if (aidP && stHitP.attachmentPaths[aidP]) {
+              ev.stopPropagation();
+              stHitP.pickPathConstraintPath(tSlot);
+              return;
+            }
+          }
+          ev.stopPropagation();   // 拾取阶段忽略其它点击（避免误进入路径/骨骼编辑）
+          return;
+        }
         // ★ 路径编辑模式优先：新建顶点 / 拖柄 / 拖结 / 删结 / 段上插结 / 框选
         if (stGrid.pathEditAttachmentId) {
+          // ★ 拾取受约束骨骼阶段：不进入路径编辑（避免误加结 / 误编辑）
+          if (stGrid.pcPickMode === 'bone') {
+            ev.stopPropagation();
+            return;
+          }
           const pctx = pathEditContext();
           if (pctx && pctx.attachmentId === stGrid.pathEditAttachmentId) {
             const path = pctx.path;
