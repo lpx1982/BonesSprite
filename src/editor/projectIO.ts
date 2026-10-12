@@ -9,7 +9,7 @@
  * dataURL 按图层 id 缓存（图层的 canvas 导入后不再变化），避免每次自动保存都重编码。
  */
 import { useEffect, useRef } from 'react';
-import { usePixiBonesStore, type ProjectData, type BoneNode, type SlotBinding, type EditorAnimation, type BonePose, type IkConstraintDef, type PathConstraintDef } from './store';
+import { usePixiBonesStore, type ProjectData, type BoneNode, type SlotBinding, type EditorAnimation, type BonePose, type IkConstraintDef, type PathConstraintDef, type PhysicsConstraintDef } from './store';
 import type { PixiBonesLayer, PixiBonesPsd, PixiBonesSlot, MeshData, PathData } from '@psd/types';
 import { idbPut, idbGet } from './idb';
 
@@ -69,6 +69,8 @@ interface SerializedProject {
   constraints: IkConstraintDef[];
   // 路径约束（顺序 = 应用顺序；旧存档缺省为空）
   pathConstraints: PathConstraintDef[];
+  // 物理约束（仿 Spine 4.1；旧存档缺省为空）
+  physicsConstraints: PhysicsConstraintDef[];
 }
 
 // =================================================================================
@@ -196,6 +198,7 @@ function buildSnapshot(): SerializedProject {
     setupPose: s.setupPose,
     constraints: s.constraints,
     pathConstraints: s.pathConstraints,
+    physicsConstraints: s.physicsConstraints,
   };
 }
 
@@ -314,6 +317,7 @@ async function snapshotToProjectData(snap: SerializedProject): Promise<ProjectDa
     setupPose: snap.setupPose ?? {},
     constraints: snap.constraints ?? [],
     pathConstraints: snap.pathConstraints ?? [],
+    physicsConstraints: snap.physicsConstraints ?? [],
   };
 }
 
