@@ -3542,7 +3542,7 @@ interface PathConstraintsSectionPropsBlockProps {
 
 function PathConstraintsSectionPropsBlock(props: PathConstraintsSectionPropsBlockProps) {
   const {
-    pathConstraints, slots, attachmentPaths,
+    pathConstraints, bones, slots, attachmentPaths,
     onRemove, onRename, onRenamePopup, onCopy, onTarget,
     onPositionMode, onPosition, onSpacingMode, onSpacing, onRotateMode,
     onRotateMix, onTranslateMix, onRotationOffset, pushHistory, C,
@@ -3550,6 +3550,8 @@ function PathConstraintsSectionPropsBlock(props: PathConstraintsSectionPropsBloc
   // ★ 选中态收敛到 store：树里的路径约束行点击 → selectConstraint → 这里同步高亮
   const selectedId = usePixiBonesStore((s) => s.selectedConstraintId);
   const selected = pathConstraints.find((c) => c.id === selectedId) ?? null;
+
+  const boneName = (id: string) => bones.find((b) => b.id === id)?.name ?? '(已删)';
 
   // ★ Spine 风格面板：折叠区 / 链接滑块 UI 状态
   const [offsetOpen, setOffsetOpen] = useState(true);
@@ -3606,7 +3608,7 @@ function PathConstraintsSectionPropsBlock(props: PathConstraintsSectionPropsBloc
       {/* 选中约束的属性编辑（Spine 布局） */}
       {selected && (
         <div className="px-2 py-1.5 border-t flex flex-col gap-1.5 text-[13px] overflow-y-auto" style={{ borderColor: C.border }}>
-          {/* 路径 */}
+          {/* 路径 + 骨骼（Spine：路径行显示路径，骨骼随行显示） */}
           <div className="flex items-center gap-1">
             <span className="shrink-0 w-10" style={{ color: C.accent }}>路径</span>
             <span className="flex-1 min-w-0 truncate" style={{ color: targetPathName ? C.text : C.dim }}>
@@ -3620,6 +3622,13 @@ function PathConstraintsSectionPropsBlock(props: PathConstraintsSectionPropsBloc
                 onClick={() => { selectAttachment(targetSlotObj.id, targetPathAid); setPathEdit(targetPathAid); }}
               >✎</button>
             )}
+          </div>
+          {/* 骨骼（受约束骨骼，顺序 = 沿路径） */}
+          <div className="flex items-center gap-1">
+            <span className="shrink-0 w-10" style={{ color: C.accent }}>骨骼</span>
+            <span className="flex-1 min-w-0 truncate" style={{ color: C.text }}>
+              {selected.boneIds.map((bid) => boneName(bid)).join(' → ')}
+            </span>
           </div>
 
           {/* 目标（目标插槽） */}
