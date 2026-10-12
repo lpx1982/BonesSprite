@@ -287,6 +287,18 @@ export function BoneEditor() {
           /** 按下时已选中的结 */
           prevSel: number[];
         }
+      /** 路径创建（新建顶点模式）：单击 = 加直线结；按住拖动 = 加结并拖出出柄（调弧度） */
+      | {
+          kind: 'path-new-vertex';
+          slotId: string;
+          attachmentId: string;
+          /** 新结的路径局部坐标（按下位置） */
+          startLocal: { x: number; y: number };
+          /** 按下时屏幕坐标 */
+          startScreen: { x: number; y: number };
+          /** 是否已拖出（>3px = 带出柄） */
+          moved: boolean;
+        }
       /** 路径约束：拖动 position 控制柄（沿路径滑动） */
       | {
           kind: 'path-position';
@@ -3633,6 +3645,23 @@ export function BoneEditor() {
         }
         const st = usePixiBonesStore.getState();
 
+        // 路径创建拖动：实时预览「新结 → 鼠标」的虚线出柄（提示即将生成的弧度）
+        if (dragState.kind === 'path-new-vertex') {
+          const nv = dragState;
+          const movedNow = Math.hypot(ev.global.x - nv.startScreen.x, ev.global.y - nv.startScreen.y) > 3;
+          if (movedNow) nv.moved = true;
+          const stNv = usePixiBonesStore.getState();
+          const path = stNv.attachmentPaths[nv.attachmentId];
+          if (path && nv.moved) {
+            const p0 = pathLocalToScreen(nv.slotId, nv.startLocal.x, nv.startLocal.y);
+            pathHandles.clear();
+            drawDashedLine(pathHandles, p0.x, p0.y, ev.global.x, ev.global.y, 6, 4, 0x7EC8FF, 1.2);
+            pathHandles.rect(p0.x - 3, p0.y - 3, 6, 6);
+            pathHandles.fill({ color: 0xFFFFFF, alpha: 0.85 });
+          }
+          return;
+        }
+
         if (dragState.kind === 'tip') {
           const dxScreen = ev.global.x - dragState.startScreen.x;
           const dyScreen = ev.global.y - dragState.startScreen.y;
@@ -4138,6 +4167,31 @@ export function BoneEditor() {
           deletePathVertex(pDel.attachmentId, pDel.index);
           return;
         }
+        // 路径创建（新建顶点模式）松开：加结 —— 单击 = 直线结；按住拖动 = 带出柄（弧度）
+        if (dragState.kind === 'path-new-vertex') {
+          const nv = dragState;
+          const stNv = usePixiBonesStore.getState();
+          const path = stNv.attachmentPaths[nv.attachmentId];
+          dragState = null;
+          if (!path) return;
+          // 拖动判定：位移 > 3px → 出柄 = 新结 → 松开位置（路径局部向量）
+          const moved = Math.hypot(ev.global.x - nv.startScreen.x, ev.global.y - nv.startScreen.y) > 3;
+          let hx = 0, hy = 0;
+          if (moved) {
+            const pEnd = screenToPathLocal(nv.slotId, ev.global.x, ev.global.y);
+            if (pEnd) {
+              hx = pEnd.x - nv.startLocal.x;
+              hy = pEnd.y - nv.startLocal.y;
+            }
+          }
+          stNv.pushHistory();
+          stNv.setPathVertices(nv.attachmentId, [...path.vertices, {
+            x: nv.startLocal.x, y: nv.startLocal.y,
+            handleInX: 0, handleInY: 0, handleOutX: hx, handleOutY: hy,
+          }]);
+          drawPathGizmos();   // 清掉拖动预览，恢复结 / 柄显示
+          return;
+        }
         // 创建子骨骼：pointerup 时如果在 create-from 状态，根据当前鼠标位置 addBone
         if (dragState.kind === 'create-from') {
           // 单击（没有 pointermove）时鼠标世界坐标就是按下点
@@ -4516,7 +4570,8 @@ export function BoneEditor() {
             const slotId = pctx.slot.id;
             const attachmentId = pctx.attachmentId;
 
-            // 新建顶点模式：单击加结；点回第一个结（12px 内）= 封闭并退出；右键 = 结束开放路径（见 onCanvasContextMenu）
+            // 新建顶点模式：单击 = 加直线结；按住拖动 = 加结 + 拖出出柄（调弧度）；
+            // 点回第一个结（12px 内）= 封闭并退出；右键 = 结束开放路径（见 onCanvasContextMenu）
             if (stGrid.pathNewVertexMode) {
               ev.stopPropagation();
               const pn = screenToPathLocal(slotId, ev.global.x, ev.global.y);
@@ -4530,12 +4585,15 @@ export function BoneEditor() {
                   return;
                 }
               }
-              // 加结：一次推一条历史（撤销可逐结回退）
-              stGrid.pushHistory();
-              stGrid.setPathVertices(attachmentId, [...path.vertices, {
-                x: pn.x, y: pn.y,
-                handleInX: 0, handleInY: 0, handleOutX: 0, handleOutY: 0,
-              }]);
+              // ★ 进入「拖出柄」状态：松开时加结（单击无柄 / 拖动带出柄）
+              dragState = {
+                kind: 'path-new-vertex',
+                slotId,
+                attachmentId,
+                startLocal: pn,
+                startScreen: { x: ev.global.x, y: ev.global.y },
+                moved: false,
+              };
               return;
             }
 
