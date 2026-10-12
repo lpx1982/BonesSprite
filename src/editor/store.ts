@@ -239,6 +239,48 @@ export interface PathConstraintDef {
   rotationOffset: number;
 }
 
+/**
+ * 物理约束定义（仿 Spine 4.1 PhysicsConstraint）。
+ * 让一根骨骼对平移/旋转/缩放做「滞后偏移」模拟（惯性 + 弹簧 + 阻尼 + 风/重力）。
+ * 各 Setup 区字段（x/y/rotate/shearX/scaleX/limit/fps）控制属性受物理影响的程度；
+ * Properties 区字段（inertia/strength/damping/massInverse/wind/gravity/mix）控制模拟行为。
+ * 数值约定：影响程度与惯性等均为 0..1；wind/gravity 为缩放因子乘数（与骨长杠杆比配合）。
+ */
+export interface PhysicsConstraintDef {
+  id: string;                 // 前缀 phy_
+  name: string;
+  /** 受约束骨骼（单根） */
+  boneId: string;
+  /** Setup：平移 X 受物理影响程度 0..1 */
+  x: number;
+  /** Setup：平移 Y 受物理影响程度 0..1 */
+  y: number;
+  /** Setup：旋转受物理影响程度 0..1 */
+  rotate: number;
+  /** Setup：剪切 X 受物理影响程度 0..1 */
+  shearX: number;
+  /** Setup：缩放 X 受物理影响程度 0..1 */
+  scaleX: number;
+  /** Setup：单帧偏移上限（世界像素；限速） */
+  limit: number;
+  /** Setup：物理更新率（Hz，30-60 推荐） */
+  fps: number;
+  /** Properties：惯性 0..1（骨骼移动量转成滞后偏移的比例） */
+  inertia: number;
+  /** Properties：回复力 0..1（把 offset 拉回 0 的弹簧强度） */
+  strength: number;
+  /** Properties：阻尼 0..1（削弱速度，抑制振荡） */
+  damping: number;
+  /** Properties：质量倒数（越大越「轻」，越容易被拉/被推） */
+  massInverse: number;
+  /** Properties：风（世界 X 恒定力） */
+  wind: number;
+  /** Properties：重力（世界 Y 恒定力） */
+  gravity: number;
+  /** Properties：混合 0..1（约束影响力） */
+  mix: number;
+}
+
 /** 撤销 / 重做快照的内容（骨树 + 插槽变换 + 网格顶点 + 选中骨 + 动画 + 约束）。 */
 export type HistorySnapshot = {
   bones: BoneNode[];
@@ -254,6 +296,8 @@ export type HistorySnapshot = {
   constraints: IkConstraintDef[];
   /** 路径约束也纳入快照（增删/改参数/调顺序都能 Cmd+Z 撤销） */
   pathConstraints: PathConstraintDef[];
+  /** 物理约束也纳入快照（增删/改参数都能 Cmd+Z 撤销） */
+  physicsConstraints: PhysicsConstraintDef[];
   // ===== 素材 / 插槽相关（让插槽/附件的删除、重命名、复制也能 Cmd+Z / Cmd+Shift+Z）=====
   slots: PixiBonesSlot[];
   /** 素材库：canvas 保留同一引用（canvas 内容创建后不变），数组结构可还原 */
@@ -290,6 +334,7 @@ function makeSnapshot(s: PixiBonesState): HistorySnapshot {
     animations: JSON.parse(JSON.stringify(s.animations)),
     constraints: JSON.parse(JSON.stringify(s.constraints)),
     pathConstraints: JSON.parse(JSON.stringify(s.pathConstraints)),
+    physicsConstraints: JSON.parse(JSON.stringify(s.physicsConstraints)),
     slots: JSON.parse(JSON.stringify(s.slots)),
     images: s.images.map(cloneLayerTree),
     slotVisibility: JSON.parse(JSON.stringify(s.slotVisibility)),
@@ -315,6 +360,7 @@ function snapshotToState(snap: HistorySnapshot) {
     animations: snap.animations,
     constraints: snap.constraints,
     pathConstraints: snap.pathConstraints,
+    physicsConstraints: snap.physicsConstraints,
     slots: snap.slots,
     images: snap.images,
     slotVisibility: snap.slotVisibility,
@@ -826,6 +872,24 @@ export interface PixiBonesState {
   /** 调整路径约束的应用顺序：把 id 对应约束移到新索引（0 = 最先应用；Spine 固定全部 IK → 全部 Path） */
   movePathConstraint: (id: string, toIndex: number) => void;
 
+  // ---- 物理约束（仿 Spine 4.1 Physics Constraint；单骨滞后模拟）----
+  /** 物理约束列表。 */
+  physicsConstraints: PhysicsConstraintDef[];
+  /** 新建一条物理约束：boneId = 受约束骨骼。name 可自定义（默认 `物理约束 ${n}`）。返回新 id。 */
+  addPhysicsConstraint: (boneId: string, name?: string) => string;
+  /** 删除物理约束（id 不存在则忽略） */
+  removePhysicsConstraint: (id: string) => void;
+  /** 重命名物理约束 */
+  renamePhysicsConstraint: (id: string, name: string) => void;
+  /** 复制物理约束：深拷贝一份（新 id，name 加「 副本」），插入到原约束后并选中副本 */
+  duplicatePhysicsConstraint: (id: string) => void;
+  /** 改受约束骨骼 */
+  setPhysicsConstraintBone: (id: string, boneId: string) => void;
+  /** 通用数值属性设置（Setup 区 x/y/rotate/shearX/scaleX/limit/fps + Properties 区 inertia/strength/damping/massInverse/wind/gravity/mix）。推历史。 */
+  setPhysicsConstraintProp: (id: string, key: keyof Omit<PhysicsConstraintDef, 'id' | 'name' | 'boneId'>, v: number) => void;
+  /** 调整物理约束的应用顺序：把 id 对应约束移到新索引 */
+  movePhysicsConstraint: (id: string, toIndex: number) => void;
+
   // ---- IK 约束创建流程（仿 Spine：选骨 → 新建 → IK → 拾取目标 → 弹窗命名）----
   /** 正在等待拾取 IK 目标骨（非 null = 「新建 ik 约束：选择目标」拾取模式）。 */
   ikPickBoneId: string | null;
@@ -1306,6 +1370,13 @@ let _pathConstraintIdCounter = 0;
 function genPathConstraintId(): string {
   _pathConstraintIdCounter++;
   return `pc_${_pathConstraintIdCounter}`;
+}
+
+/** 物理约束 id 自增（前缀 phy_，独立计数）。 */
+let _physicsConstraintIdCounter = 0;
+function genPhysicsConstraintId(): string {
+  _physicsConstraintIdCounter++;
+  return `phy_${_physicsConstraintIdCounter}`;
 }
 
 /** 路径附件 id 自增（独立 id 空间，不在 images / 图层里）。 */
@@ -2696,6 +2767,96 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     set({ pathConstraints: list });
   },
 
+  // ---- 物理约束（仿 Spine 4.1 Physics Constraint）----
+  physicsConstraints: [],
+  addPhysicsConstraint: (boneId, name) => {
+    const s = get();
+    if (!s.bones.some((b) => b.id === boneId)) return '';
+    const id = genPhysicsConstraintId();
+    const cName = name && name.trim() ? name.trim() : `物理约束 ${s.physicsConstraints.length + 1}`;
+    s.pushHistory();
+    const def: PhysicsConstraintDef = {
+      id,
+      name: cName,
+      boneId,
+      // Setup：默认让平移 X/Y 受影响（最直观），其余关闭
+      x: 1,
+      y: 1,
+      rotate: 0,
+      shearX: 0,
+      scaleX: 0,
+      limit: 0,
+      fps: 60,
+      // Properties：Spine 默认值
+      inertia: 1,
+      strength: 0.5,
+      damping: 0.5,
+      massInverse: 0.5,
+      wind: 0,
+      gravity: 0,
+      mix: 1,
+    };
+    set((st) => ({
+      physicsConstraints: [...st.physicsConstraints, def],
+      // 与 IK / 路径约束共用 selectedConstraintId（id 前缀 phy_ 区分）
+      selectedConstraintId: id,
+    }));
+    return id;
+  },
+  removePhysicsConstraint: (id) => {
+    const s = get();
+    if (!s.physicsConstraints.some((c) => c.id === id)) return;
+    s.pushHistory();
+    set((st) => ({ physicsConstraints: st.physicsConstraints.filter((c) => c.id !== id) }));
+  },
+  renamePhysicsConstraint: (id, name) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    get().pushHistory();
+    set((st) => ({
+      physicsConstraints: st.physicsConstraints.map((c) => (c.id === id ? { ...c, name: trimmed } : c)),
+    }));
+  },
+  duplicatePhysicsConstraint: (id) => {
+    const s = get();
+    const src = s.physicsConstraints.find((c) => c.id === id);
+    if (!src) return;
+    const newId = genPhysicsConstraintId();
+    s.pushHistory();
+    set((st) => {
+      const idx = st.physicsConstraints.findIndex((c) => c.id === id);
+      const copy: PhysicsConstraintDef = { ...src, id: newId, name: src.name + ' 副本' };
+      const list = st.physicsConstraints.slice();
+      list.splice(idx < 0 ? list.length : idx + 1, 0, copy);
+      return { physicsConstraints: list, selectedConstraintId: newId };
+    });
+  },
+  setPhysicsConstraintBone: (id, boneId) => {
+    const s = get();
+    if (!s.bones.some((b) => b.id === boneId)) return;
+    s.pushHistory();
+    set((st) => ({
+      physicsConstraints: st.physicsConstraints.map((x) => (x.id === id ? { ...x, boneId } : x)),
+    }));
+  },
+  setPhysicsConstraintProp: (id, key, v) => {
+    get().pushHistory();
+    set((st) => ({
+      physicsConstraints: st.physicsConstraints.map((x) => (x.id === id ? { ...x, [key]: v } : x)),
+    }));
+  },
+  movePhysicsConstraint: (id, toIndex) => {
+    const s = get();
+    const from = s.physicsConstraints.findIndex((c) => c.id === id);
+    if (from < 0) return;
+    const list = s.physicsConstraints.slice();
+    const [item] = list.splice(from, 1);
+    const idx = Math.max(0, Math.min(list.length, toIndex));
+    list.splice(idx, 0, item);
+    s.pushHistory();
+    set({ physicsConstraints: list });
+  },
+
   showLeftPanel: false,
   showRightPanel: false,  // 默认隐藏层级树，用户从 View 菜单手动开启
   showRulers: true,
@@ -3803,8 +3964,10 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   }),
   selectConstraint: (id) => {
     const s = get();
-    // IK 与路径约束共用 selectedConstraintId（id 前缀区分：ik_ / pc_）
-    if (!s.constraints.some((c) => c.id === id) && !s.pathConstraints.some((c) => c.id === id)) return;
+    // IK / 路径约束 / 物理约束共用 selectedConstraintId（id 前缀区分：ik_ / pc_ / phy_）
+    if (!s.constraints.some((c) => c.id === id)
+      && !s.pathConstraints.some((c) => c.id === id)
+      && !s.physicsConstraints.some((c) => c.id === id)) return;
     set({
       selectedConstraintId: id,
       selectedSectionKey: 'constraints',
