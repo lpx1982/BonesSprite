@@ -799,6 +799,8 @@ export interface PixiBonesState {
   removePathConstraint: (id: string) => void;
   /** 重命名路径约束 */
   renamePathConstraint: (id: string, name: string) => void;
+  /** 复制路径约束：深拷贝一份（新 id，name 加「 副本」），插入到原约束后并选中副本 */
+  duplicatePathConstraint: (id: string) => void;
   /** 改目标插槽 */
   setPathConstraintTarget: (id: string, slotId: string) => void;
   /** 整数组替换受约束骨骼 */
@@ -2555,6 +2557,23 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     set((st) => ({
       pathConstraints: st.pathConstraints.map((c) => (c.id === id ? { ...c, name: trimmed } : c)),
     }));
+  },
+  duplicatePathConstraint: (id) => {
+    const s = get();
+    const src = s.pathConstraints.find((c) => c.id === id);
+    if (!src) return;
+    const newId = genPathConstraintId();
+    // 名称追加「 副本」（Spine 复制行为）
+    const newName = src.name + ' 副本';
+    s.pushHistory();
+    set((st) => {
+      const idx = st.pathConstraints.findIndex((c) => c.id === id);
+      const copy: PathConstraintDef = { ...src, id: newId, name: newName };
+      const list = st.pathConstraints.slice();
+      // 插到原约束之后
+      list.splice(idx < 0 ? list.length : idx + 1, 0, copy);
+      return { pathConstraints: list, selectedConstraintId: newId };
+    });
   },
   setPathConstraintTarget: (id, slotId) => {
     const s = get();

@@ -213,6 +213,7 @@ export function HierarchyPanel() {
   const addPathConstraint = usePixiBonesStore((s) => s.addPathConstraint);
   const removePathConstraint = usePixiBonesStore((s) => s.removePathConstraint);
   const renamePathConstraint = usePixiBonesStore((s) => s.renamePathConstraint);
+  const duplicatePathConstraint = usePixiBonesStore((s) => s.duplicatePathConstraint);
   const setPathConstraintTarget = usePixiBonesStore((s) => s.setPathConstraintTarget);
   const setPathConstraintBones = usePixiBonesStore((s) => s.setPathConstraintBones);
   const setPathConstraintPositionMode = usePixiBonesStore((s) => s.setPathConstraintPositionMode);
@@ -367,6 +368,17 @@ export function HierarchyPanel() {
       message: '为此约束输入一个新名称:',
       initialValue: cur.name,
       onConfirm: (v) => { renameConstraint(id, v); closeRename(); },
+    });
+  };
+  // 路径约束标题栏「✎」→ 弹窗重命名（仿 openConstraintRename）
+  const openPathConstraintRename = (id: string) => {
+    const cur = usePixiBonesStore.getState().pathConstraints.find((x) => x.id === id);
+    if (!cur) return;
+    setPendingRename({
+      title: '重命名路径约束',
+      message: '为此路径约束输入一个新名称:',
+      initialValue: cur.name,
+      onConfirm: (v) => { renamePathConstraint(id, v); closeRename(); },
     });
   };
   // ===== 大预览（hover 附件图标 2s 后弹出该素材的大图） =====
@@ -1625,6 +1637,8 @@ export function HierarchyPanel() {
             onAdd={(targetSlotId, boneIds) => addPathConstraint(targetSlotId, boneIds)}
             onRemove={(id) => removePathConstraint(id)}
             onRename={(id, name) => renamePathConstraint(id, name)}
+            onRenamePopup={(id) => openPathConstraintRename(id)}
+            onCopy={(id) => duplicatePathConstraint(id)}
             onTarget={(id, slotId) => setPathConstraintTarget(id, slotId)}
             onSetBones={(id, boneIds) => setPathConstraintBones(id, boneIds)}
             onBoneOrder={(id, fromIndex, toIndex) => setPathConstraintBoneOrder(id, fromIndex, toIndex)}
@@ -3505,6 +3519,10 @@ interface PathConstraintsSectionPropsBlockProps {
   onAdd: (targetSlotId: string, boneIds: string[]) => void;
   onRemove: (id: string) => void;
   onRename: (id: string, name: string) => void;
+  /** 标题栏「✎」→ 弹窗重命名 */
+  onRenamePopup?: (id: string) => void;
+  /** 标题栏「⧉」→ 复制 */
+  onCopy?: (id: string) => void;
   onTarget: (id: string, slotId: string) => void;
   onSetBones: (id: string, boneIds: string[]) => void;
   onBoneOrder: (id: string, fromIndex: number, toIndex: number) => void;
@@ -3525,7 +3543,7 @@ interface PathConstraintsSectionPropsBlockProps {
 function PathConstraintsSectionPropsBlock(props: PathConstraintsSectionPropsBlockProps) {
   const {
     pathConstraints, slots, attachmentPaths,
-    onRemove, onTarget,
+    onRemove, onRename, onRenamePopup, onCopy, onTarget,
     onPositionMode, onPosition, onSpacingMode, onSpacing, onRotateMode,
     onRotateMix, onTranslateMix, onRotationOffset, pushHistory, C,
   } = props;
@@ -3560,22 +3578,20 @@ function PathConstraintsSectionPropsBlock(props: PathConstraintsSectionPropsBloc
 
   return (
     <div style={{ borderTop: '1px solid ' + C.border, background: C.panelDk, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      {/* 标题行（Spine：路径约束: <name> + 删除） */}
-      <div className="flex items-center px-2 py-1.5 gap-1 shrink-0" style={{ background: C.toolbar, borderBottom: '1px solid ' + C.border }}>
-        <span className="text-[14px] font-semibold truncate flex-1" style={{ color: C.selected }}>
-          {selected ? `路径约束: ${selected.name}` : '路径约束'}
-        </span>
-        {selected ? (
-          <button
-            className="w-4 h-4 flex items-center justify-center rounded text-[12px] shrink-0"
-            style={{ background: 'transparent', border: 'none', color: C.warning, cursor: 'pointer' }}
-            title="删除约束"
-            onClick={() => { onRemove(selected.id); usePixiBonesStore.getState().selectSection('constraints'); }}
-          >✕</button>
-        ) : (
-          <span className="text-[12px] shrink-0" style={{ color: C.dim }}>{pathConstraints.length} 条</span>
-        )}
-      </div>
+      {/* 标题栏：📐 路径约束: <name> + 右上角 复制 / 重命名 / 删除（参考其它属性面板） */}
+      <PanelTitleBar
+        icon="📐"
+        kindLabel="路径约束"
+        name={selected?.name ?? '（未选中）'}
+        C={C}
+        onDelete={selected ? () => {
+          onRemove(selected.id);
+          usePixiBonesStore.getState().selectSection('constraints');
+        } : undefined}
+        deleteTitle="删除该路径约束"
+        onRename={selected ? (onRenamePopup ? () => onRenamePopup!(selected.id) : () => onRename(selected.id, selected.name)) : undefined}
+        onCopy={selected ? (onCopy ? () => onCopy!(selected.id) : undefined) : undefined}
+      />
 
       {/* 目标插槽未显示路径附件时提示（约束不生效） */}
       {selected && (() => {
