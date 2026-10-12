@@ -5039,12 +5039,12 @@ export function BoneEditor() {
       const meshToolOrder: Array<'modify' | 'create' | 'delete'> = ['modify', 'create', 'delete'];
       const onCanvasContextMenu = (e: MouseEvent) => {
         const st = usePixiBonesStore.getState();
-        // 路径编辑优先（新建顶点模式下右键 = 结束开放路径；否则轮转 create ↔ delete）
+        // 路径编辑优先（新建顶点模式下右键 = 结束开放路径并退出编辑；否则轮转 create ↔ delete）
         if (st.pathEditAttachmentId) {
           e.preventDefault();
           if (st.pathNewVertexMode) {
-            // ★ Spine 行为：右键结束开放路径（不闭合，直接收尾）；保持编辑态可继续拖结 / 柄
-            st.togglePathNewVertexMode();
+            // ★ Spine 行为：右键结束开放路径（不闭合），并退出路径编辑（按钮回到「编辑路径」）
+            st.setPathEdit(null);
             drawPathGizmos();
             return;
           }
