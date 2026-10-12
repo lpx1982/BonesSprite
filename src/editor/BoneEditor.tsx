@@ -1792,9 +1792,25 @@ export function BoneEditor() {
         }
 
         // 新建顶点模式：最后一个结 → 当前鼠标 的虚线预览
+        //   - 最后结有出柄 → 贝塞尔曲线虚线（下一段将按此弧度弯曲）
+        //   - 无柄 → 直线虚线
         if (editingNew && v.length > 0) {
-          const last = pathLocalToScreen(slot.id, v[v.length - 1].x, v[v.length - 1].y);
-          drawDashedLine(pathHandles, last.x, last.y, lastPointer.x, lastPointer.y, 6, 4, 0xFFFFFF, 1.2);
+          const lv = v[v.length - 1];
+          const last = pathLocalToScreen(slot.id, lv.x, lv.y);
+          const hasOut = lv.handleOutX !== 0 || lv.handleOutY !== 0;
+          if (hasOut) {
+            const pOut = pathLocalToScreen(slot.id, lv.x + lv.handleOutX, lv.y + lv.handleOutY);
+            drawDashedCubic(
+              pathHandles,
+              last.x, last.y,
+              pOut.x, pOut.y,
+              lastPointer.x, lastPointer.y,
+              lastPointer.x, lastPointer.y,
+              6, 4, 0x8EC9FF, 1.2,
+            );
+          } else {
+            drawDashedLine(pathHandles, last.x, last.y, lastPointer.x, lastPointer.y, 6, 4, 0xFFFFFF, 1.2);
+          }
         }
       };
 
@@ -3641,11 +3657,13 @@ export function BoneEditor() {
           updateWeightHover(ev.global.x, ev.global.y);
           // 网格「新建」描绘中：鼠标移动 → 刷新「最后一点 → 鼠标」的预览虚线
           if (stHover.meshNewPolygon) drawMeshHandles();
+          // ★ 路径新建顶点模式：刷新「最后结 → 鼠标」的虚线预览（跟随鼠标，含出柄弧度）
+          if (stHover.pathEditAttachmentId && stHover.pathNewVertexMode) drawPathGizmos();
           return;
         }
         const st = usePixiBonesStore.getState();
 
-        // 路径创建拖动：实时预览「新结 + 控制手柄 + 前一段曲线弧度」
+        // 路径创建拖动：实时预览「新结 + 出柄」（出柄远离上一结，控制下一段弧度）
         if (dragState.kind === 'path-new-vertex') {
           const nv = dragState;
           const movedNow = Math.hypot(ev.global.x - nv.startScreen.x, ev.global.y - nv.startScreen.y) > 3;
@@ -3659,27 +3677,11 @@ export function BoneEditor() {
             pathHandles.rect(pB.x - 3, pB.y - 3, 6, 6);
             pathHandles.fill({ color: 0xFFFFFF, alpha: 0.85 });
             if (nv.moved) {
-              // 控制手柄：新结 → 鼠标 蓝色直线 + 端点
+              // 出柄预览：新结 → 鼠标 蓝色直线 + 端点
               pathHandles.moveTo(pB.x, pB.y).lineTo(ev.global.x, ev.global.y);
               pathHandles.stroke({ width: 1, color: 0x7EC8FF, alpha: 0.9 });
               pathHandles.circle(ev.global.x, ev.global.y, 3);
               pathHandles.fill({ color: 0x7EC8FF, alpha: 0.95 });
-              // 前一段（A → 新结）实时显示弧度：新结入柄 = 鼠标相对新结
-              const lastIdx = path.vertices.length - 1;
-              const endLocal = screenToPathLocal(nv.slotId, ev.global.x, ev.global.y);
-              if (lastIdx >= 0 && endLocal) {
-                const A = path.vertices[lastIdx];
-                const pA = pathLocalToScreen(nv.slotId, A.x, A.y);
-                const aOut = pathLocalToScreen(nv.slotId, A.x + A.handleOutX, A.y + A.handleOutY);
-                const bIn = pathLocalToScreen(
-                  nv.slotId,
-                  nv.startLocal.x + (endLocal.x - nv.startLocal.x),
-                  nv.startLocal.y + (endLocal.y - nv.startLocal.y),
-                );
-                pathHandles.moveTo(pA.x, pA.y);
-                pathHandles.bezierCurveTo(aOut.x, aOut.y, bIn.x, bIn.y, pB.x, pB.y);
-                pathHandles.stroke({ width: 1.5, color: 0x8EC9FF, alpha: 0.9 });
-              }
             }
           }
           return;
@@ -4190,27 +4192,27 @@ export function BoneEditor() {
           deletePathVertex(pDel.attachmentId, pDel.index);
           return;
         }
-        // 路径创建（新建顶点模式）松开：加结 —— 单击 = 直线结；按住拖动 = 带入柄（调节前一段弧度）
+        // 路径创建（新建顶点模式）松开：加结 —— 单击 = 直线结；按住拖动 = 带出柄（远离上一结，控制下一段弧度）
         if (dragState.kind === 'path-new-vertex') {
           const nv = dragState;
           const stNv = usePixiBonesStore.getState();
           const path = stNv.attachmentPaths[nv.attachmentId];
           dragState = null;
           if (!path) return;
-          // 拖动判定：位移 > 3px → 入柄 = 鼠标相对新结（路径局部向量），A→B 段随之弯曲
+          // 拖动判定：位移 > 3px → 出柄 = 鼠标相对新结（路径局部向量）
           const moved = Math.hypot(ev.global.x - nv.startScreen.x, ev.global.y - nv.startScreen.y) > 3;
-          let ix = 0, iy = 0;
+          let ox = 0, oy = 0;
           if (moved) {
             const pEnd = screenToPathLocal(nv.slotId, ev.global.x, ev.global.y);
             if (pEnd) {
-              ix = pEnd.x - nv.startLocal.x;
-              iy = pEnd.y - nv.startLocal.y;
+              ox = pEnd.x - nv.startLocal.x;
+              oy = pEnd.y - nv.startLocal.y;
             }
           }
           stNv.pushHistory();
           stNv.setPathVertices(nv.attachmentId, [...path.vertices, {
             x: nv.startLocal.x, y: nv.startLocal.y,
-            handleInX: ix, handleInY: iy, handleOutX: 0, handleOutY: 0,
+            handleInX: 0, handleInY: 0, handleOutX: ox, handleOutY: oy,
           }]);
           drawPathGizmos();   // 清掉拖动预览，恢复结 / 柄显示
           return;
@@ -5833,6 +5835,28 @@ function drawDashedLine(
     d = d2 + gap;
   }
   g.stroke({ width, color, alpha });
+}
+
+/** 三次贝塞尔曲线按虚线采样绘制（预览「下一段弧度」用）。 */
+function drawDashedCubic(
+  g: Gfx,
+  x0: number, y0: number,
+  cx1: number, cy1: number, cx2: number, cy2: number,
+  x3: number, y3: number,
+  dash: number, gap: number,
+  color: number, width: number,
+  alpha = 1,
+) {
+  const SEGS = 24;
+  let px = x0, py = y0;
+  for (let i = 1; i <= SEGS; i++) {
+    const t = i / SEGS;
+    const mt = 1 - t;
+    const x = mt * mt * mt * x0 + 3 * mt * mt * t * cx1 + 3 * mt * t * t * cx2 + t * t * t * x3;
+    const y = mt * mt * mt * y0 + 3 * mt * mt * t * cy1 + 3 * mt * t * t * cy2 + t * t * t * y3;
+    drawDashedLine(g, px, py, x, y, dash, gap, color, width, alpha);
+    px = x; py = y;
+  }
 }
 
 /** 闭合多边形的有符号面积（正 = 逆时针）。 */
