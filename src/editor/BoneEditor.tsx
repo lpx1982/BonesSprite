@@ -2995,6 +2995,12 @@ export function BoneEditor() {
                 stIk.createIkTargetBone(wp.x, wp.y);
                 return;
               }
+              // ★ 路径约束创建：拾取受约束骨骼阶段点骨骼 = 拾取（Shift 累加；单击完成）
+              const stPc = usePixiBonesStore.getState();
+              if (stPc.pcPickMode === 'bone') {
+                stPc.pickPathConstraintBone(node.id, ev.shiftKey);
+                return;
+              }
               // ★ 权重「绑定模式」：点击骨骼 → 绑到当前选中网格（流程 A：先选网格）
               //   若当前已选骨骼 + 又点骨骼 → 累加绑定（多根一起绑）
               const stBind = usePixiBonesStore.getState();
@@ -4336,6 +4342,11 @@ export function BoneEditor() {
                 const sl2 = stLock2.slots.find((x) => x.id === hitSlotId) ?? null;
                 const aid2 = sl2?.activeAttachmentId ?? null;
                 if (aid2 && stLock2.attachmentPaths[aid2]) {
+                  // ★ 路径约束创建：拾取目标路径阶段点路径 = 拾取为约束目标
+                  if (stLock2.pcPickMode === 'path') {
+                    stLock2.pickPathConstraintPath(hitSlotId);
+                    return;
+                  }
                   store.selectAttachment(hitSlotId, aid2, 'slotatt:' + hitSlotId + ':' + aid2, additive);
                 } else if (additive) {
                   store.selectSlots([...prevSlotIds, hitSlotId], false);

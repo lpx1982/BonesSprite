@@ -179,6 +179,9 @@ export function HierarchyPanel() {
   const setPathConstantSpeed = usePixiBonesStore((s) => s.setPathConstantSpeed);
   const setPathColor = usePixiBonesStore((s) => s.setPathColor);
   const setPathOption = usePixiBonesStore((s) => s.setPathOption);
+  const startPathConstraintPick = usePixiBonesStore((s) => s.startPathConstraintPick);
+  const pickPathConstraintPath = usePixiBonesStore((s) => s.pickPathConstraintPath);
+  const pcPickMode = usePixiBonesStore((s) => s.pcPickMode);
   const pushHistory = usePixiBonesStore((s) => s.pushHistory);
   const selectedSectionKey = usePixiBonesStore((s) => s.selectedSectionKey);
   const selectSection = usePixiBonesStore((s) => s.selectSection);
@@ -1469,6 +1472,10 @@ export function HierarchyPanel() {
               onConfirm: (v) => { createPathSlotForBone(selectedBone.id, v); closeRename(); },
             });
           }}
+          onCreatePathConstraint={() => {
+            // 「新建 → 约束 → 路径约束」：进入拾取模式（先选目标路径，再选受约束骨骼）
+            startPathConstraintPick();
+          }}
           onDelete={() => {
             if (confirm(`删除 "${selectedBone.name}" 及其子骨？`)) removeBone(selectedBone.id);
           }}
@@ -1848,6 +1855,9 @@ function TreeRowView(props: TreeRowViewProps) {
     onRequestRename,
     attachmentById,
   } = props;
+  // ★ 路径约束创建拾取：TreeRowView 是独立组件，直接读 store（避免层层传 prop）
+  const pcPickMode = usePixiBonesStore((s) => s.pcPickMode);
+  const pickPathConstraintPath = usePixiBonesStore((s) => s.pickPathConstraintPath);
   const isBone = row.kind === 'bone';
   /** 附件行（🖼） */
   const isAsset = row.kind === 'asset';
@@ -1955,6 +1965,11 @@ function TreeRowView(props: TreeRowViewProps) {
           const aid = asset ? asset.id : (row.pathAttachmentId ?? '');
           if (!aid) return;
           if (assetSlotId) onActivateAttachment(assetSlotId, aid);
+          // ★ 路径约束创建：拾取目标路径阶段点路径行 = 拾取为约束目标
+          if (row.isPath && pcPickMode === 'path' && assetSlotId) {
+            pickPathConstraintPath(assetSlotId);
+            return;
+          }
           onSelectAttachment(assetSlotId, aid, row.key, row.isPath ? e.shiftKey : undefined);
         }
         else if (isConstraint && row.constraint) onSelectConstraint(row.constraint.id);
@@ -2280,6 +2295,8 @@ interface BonePropsBlockProps {
   onCreateIk?: () => void;
   /** 「新建 → 路径」：先弹命名对话框，确认后创建绑定到当前骨骼的新路径 */
   onCreatePath?: () => void;
+  /** 「新建 → 约束 → 路径约束」：进入拾取模式（先选目标路径，再选受约束骨骼） */
+  onCreatePathConstraint?: () => void;
   onDelete: () => void;
   /** 重命名骨骼 */
   onRename?: () => void;
@@ -2291,7 +2308,7 @@ interface BonePropsBlockProps {
 }
 
 function BonePropsBlock(props: BonePropsBlockProps) {
-  const { node, parentOptions, onMove, onRotate, onLength, onParent, onAddChild, onCreateIk, onCreatePath, onDelete, onRename, onCopy, onToggleIsolate, isolated, C } = props;
+  const { node, parentOptions, onMove, onRotate, onLength, onParent, onAddChild, onCreateIk, onCreatePath, onCreatePathConstraint, onDelete, onRename, onCopy, onToggleIsolate, isolated, C } = props;
   const rotDeg = (node.rotation * 180) / Math.PI;
   // 输入框统一样式
   const inputStyle: React.CSSProperties = {
@@ -2335,7 +2352,7 @@ function BonePropsBlock(props: BonePropsBlockProps) {
       icon: '🪢', label: '约束',
       children: [
         { icon: '🪝', label: 'IK 约束', action: onCreateIk },
-        { icon: '⤳', label: '路径约束' }, // 未实现
+        { icon: '⤳', label: '路径约束', action: onCreatePathConstraint ? () => onCreatePathConstraint() : undefined },
         { icon: '⇄', label: '变换约束' }, // 未实现
       ],
     },

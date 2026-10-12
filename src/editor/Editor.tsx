@@ -171,6 +171,9 @@ export function Editor() {
           } else if (s.ikPickBoneId) {
             e.preventDefault();
             s.cancelIkPick();
+          } else if (s.pcPickMode) {
+            e.preventDefault();
+            s.cancelPathConstraintPick();
           } else if (s.weightBindMode) {
             // 退出权重绑定模式
             e.preventDefault();
@@ -335,6 +338,8 @@ export function Editor() {
         {editorTab === 'animate' && <AnimationTimeline />}
         {/* IK 约束创建流程：顶部横幅 + PICK 光标 + 命名弹窗 */}
         <IkPickOverlay />
+        {/* 路径约束创建流程：顶部横幅 + PICK 光标 + 命名弹窗 */}
+        <PathConstraintPickOverlay />
       </main>
     </div>
   );
@@ -425,6 +430,117 @@ function IkPickOverlay() {
         </div>
       </div>
       {/* 鼠标旁 PICK 文字（对齐 Spine：出现在指针左侧） */}
+      {cursor && (
+        <div
+          className="fixed z-[9997] pointer-events-none"
+          style={{
+            left: Math.max(4, cursor.x - 62),
+            top: cursor.y + 8,
+            color: '#fff',
+            fontSize: 11,
+            fontWeight: 700,
+            textShadow: '0 1px 3px rgba(0,0,0,0.9)',
+            background: 'rgba(0,0,0,0.55)',
+            padding: '1px 6px',
+            borderRadius: 3,
+            letterSpacing: 1,
+          }}
+        >
+          PICK
+        </div>
+      )}
+    </>
+  );
+}
+
+// =================================================================================
+//  路径约束创建流程（仿 Spine）
+//    1. 选中骨 → 属性面板「新建」→「约束 → 路径约束」→ 进入拾取模式（pcPickMode = 'path'）
+//    2. 屏幕上方显示横幅「新建路径约束：选择目标路径」；鼠标旁显示 PICK
+//    3. 点击画布路径 / 层级树路径行 = 拾取目标路径（pcPickMode → 'bone'）
+//    4. 横幅变「选择受约束骨骼」；Shift+点骨累加，单击骨完成（pcPickMode → 'done'）
+//    5. 弹命名对话框 → addPathConstraint(slotId, boneIds) → 选中新约束
+// =================================================================================
+function PathConstraintPickOverlay() {
+  const pcPickMode = usePixiBonesStore((s) => s.pcPickMode);
+  const pcPickPathSlotId = usePixiBonesStore((s) => s.pcPickPathSlotId);
+  const pcPickBoneIds = usePixiBonesStore((s) => s.pcPickBoneIds);
+  const slots = usePixiBonesStore((s) => s.slots);
+  const bones = usePixiBonesStore((s) => s.bones);
+  const pathConstraints = usePixiBonesStore((s) => s.pathConstraints);
+  const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
+
+  // PICK 光标跟随鼠标
+  useEffect(() => {
+    if (!pcPickMode || pcPickMode === 'done') { setCursor(null); return; }
+    const onMove = (e: MouseEvent) => setCursor({ x: e.clientX, y: e.clientY });
+    window.addEventListener('mousemove', onMove);
+    return () => window.removeEventListener('mousemove', onMove);
+  }, [pcPickMode]);
+
+  // 已完成（选好路径 + 骨骼）→ 弹命名对话框
+  if (pcPickMode === 'done') {
+    const pathSlot = slots.find((s) => s.id === pcPickPathSlotId) ?? null;
+    const pathName = pathSlot?.name ?? '';
+    const boneNames = pcPickBoneIds
+      .map((id) => bones.find((b) => b.id === id)?.name ?? '')
+      .filter((x) => !!x);
+    const defaultName = `路径约束 ${pathConstraints.length + 1}`;
+    return (
+      <PromptDialog
+        open
+        title="新建路径约束"
+        message={
+          boneNames.length > 0
+            ? `目标路径「${pathName}」→ 受约束骨骼「${boneNames.join('、')}」。为此约束输入一个新名称:`
+            : `目标路径「${pathName}」。为此约束输入一个新名称:`
+        }
+        initialValue={defaultName}
+        select="all"
+        confirmLabel="确定"
+        cancelLabel="取消"
+        onCancel={() => usePixiBonesStore.getState().cancelPathConstraintPick()}
+        onConfirm={(value) => {
+          const s = usePixiBonesStore.getState();
+          const name = value.trim() || defaultName;
+          const id = s.addPathConstraint(s.pcPickPathSlotId!, s.pcPickBoneIds);
+          s.cancelPathConstraintPick();
+          if (id) s.selectConstraint(id);
+        }}
+      />
+    );
+  }
+
+  if (!pcPickMode) return null;
+
+  const bannerText = pcPickMode === 'path' ? '新建路径约束：选择目标路径' : '新建路径约束：选择受约束骨骼（Shift 多选）';
+  return (
+    <>
+      {/* 顶部横幅 */}
+      <div
+        className="fixed z-[9997] pointer-events-none"
+        style={{
+          top: 0, left: 0, right: 0,
+          display: 'flex', justifyContent: 'center',
+          paddingTop: 8,
+        }}
+      >
+        <div
+          style={{
+            background: 'var(--spine-accent-dim)',
+            color: '#fff',
+            fontSize: 13,
+            fontWeight: 600,
+            padding: '4px 14px',
+            borderRadius: 4,
+            border: '1px solid var(--spine-accent)',
+            boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+          }}
+        >
+          {bannerText}
+        </div>
+      </div>
+      {/* 鼠标旁 PICK 文字 */}
       {cursor && (
         <div
           className="fixed z-[9997] pointer-events-none"

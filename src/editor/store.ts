@@ -792,8 +792,9 @@ export interface PixiBonesState {
   // ---- 路径约束（仿 Spine 3.8 Path Constraint；独立列表，Spine 应用顺序固定为全部 IK → 全部 Path）----
   /** 路径约束列表。boneIds 数组顺序 = 骨骼沿路径的排列顺序。 */
   pathConstraints: PathConstraintDef[];
-  /** 新建一条路径约束：targetSlotId = 目标插槽（解算时读其激活的路径附件），boneIds = 受约束骨骼。返回新 id（失败返回 ''）。 */
-  addPathConstraint: (targetSlotId: string, boneIds: string[]) => string;
+  /** 新建一条路径约束：targetSlotId = 目标插槽（解算时读其激活的路径附件），boneIds = 受约束骨骼。
+   *  name 缺省时命名 `路径约束 ${n}`。返回新 id（失败返回 ''）。 */
+  addPathConstraint: (targetSlotId: string, boneIds: string[], name?: string) => string;
   /** 删除路径约束（id 不存在则忽略） */
   removePathConstraint: (id: string) => void;
   /** 重命名路径约束 */
@@ -838,6 +839,22 @@ export interface PixiBonesState {
   setIkPickTarget: (targetBoneId: string) => void;
   /** 点空白画布：创建一根新的目标骨「target n」（父级 = root，长度 0 = 可拖手柄）并设为目标。 */
   createIkTargetBone: (worldX: number, worldY: number) => string;
+
+  // ---- 路径约束创建流程（仿 Spine：选路径 → 选骨骼 → 弹窗命名）----
+  /** 路径约束拾取阶段：null = 未在拾取；'path' = 等选目标路径；'bone' = 等选受约束骨骼；'done' = 已完成等命名 */
+  pcPickMode: 'path' | 'bone' | 'done' | null;
+  /** 已拾取的目标路径所在插槽 id（点击路径曲线 / 层级树路径行拾取）。 */
+  pcPickPathSlotId: string | null;
+  /** 已拾取的受约束骨骼 id（Shift 加选多骨；非 Shift 点击 = 单骨并完成）。 */
+  pcPickBoneIds: string[];
+  /** 从「新建 → 约束 → 路径约束」进入拾取模式（先选目标路径）。 */
+  startPathConstraintPick: () => void;
+  /** 拾取目标路径（slotId = 引用该路径的插槽）→ 进入选骨骼阶段。 */
+  pickPathConstraintPath: (slotId: string) => void;
+  /** 拾取受约束骨骼：shiftKey=true 累加；false = 加入并完成（触发命名弹窗）。 */
+  pickPathConstraintBone: (boneId: string, shiftKey?: boolean) => void;
+  /** 取消拾取模式 */
+  cancelPathConstraintPick: () => void;
 
   // ---- UI state ----
   showLeftPanel: boolean;
@@ -2246,6 +2263,40 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   startAttach: (slotId) => set({ attachingSlotId: slotId }),
   cancelAttach: () => set({ attachingSlotId: null }),
 
+  // ===== 路径约束创建流程（仿 Spine：选路径 → 选骨骼 → 弹窗命名）=====
+  pcPickMode: null,
+  pcPickPathSlotId: null,
+  pcPickBoneIds: [],
+  startPathConstraintPick: () => set({
+    pcPickMode: 'path',
+    pcPickPathSlotId: null,
+    pcPickBoneIds: [],
+  }),
+  pickPathConstraintPath: (slotId) => {
+    const s = get();
+    // 目标插槽必须正在显示一个路径附件
+    const slot = s.slots.find((sl) => sl.id === slotId);
+    const aid = slot?.activeAttachmentId ?? null;
+    if (!aid || !s.attachmentPaths[aid]) return;
+    set({ pcPickMode: 'bone', pcPickPathSlotId: slotId });
+  },
+  pickPathConstraintBone: (boneId, shiftKey = false) => {
+    const s = get();
+    if (s.pcPickMode !== 'bone') return;
+    if (!s.bones.some((b) => b.id === boneId)) return;
+    if (s.pcPickBoneIds.includes(boneId)) return;   // 不重复添加
+    const boneIds = [...s.pcPickBoneIds, boneId];
+    // Shift = 累加继续选；否则完成（触发命名弹窗）
+    set(shiftKey
+      ? { pcPickBoneIds: boneIds }
+      : { pcPickBoneIds: boneIds, pcPickMode: 'done' });
+  },
+  cancelPathConstraintPick: () => set({
+    pcPickMode: null,
+    pcPickPathSlotId: null,
+    pcPickBoneIds: [],
+  }),
+
   bones: [],
   selectedBoneId: null,
   selectedBoneIds: [],
@@ -2444,17 +2495,18 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
 
   // ---- 路径约束（仿 Spine 3.8 Path Constraint；独立列表，应用顺序固定为全部 IK → 全部 Path）----
   pathConstraints: [],
-  addPathConstraint: (targetSlotId, boneIds) => {
+  addPathConstraint: (targetSlotId, boneIds, name) => {
     const s = get();
     if (!s.slots.some((sl) => sl.id === targetSlotId)) return '';
     const validBones = boneIds.filter((bid) => s.bones.some((b) => b.id === bid));
     if (validBones.length === 0) return '';
     const id = genPathConstraintId();
-    // 命名规则：`路径约束 ${n}`（n = 当前路径约束数 + 1）
+    // 命名：优先用调用方传入的名称（命名对话框），否则「路径约束 n」
+    const cName = name && name.trim() ? name.trim() : `路径约束 ${s.pathConstraints.length + 1}`;
     s.pushHistory();
     const def: PathConstraintDef = {
       id,
-      name: `路径约束 ${s.pathConstraints.length + 1}`,
+      name: cName,
       targetSlotId,
       boneIds: validBones,
       positionMode: 'percent',
@@ -2818,6 +2870,9 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       ikPickBoneId: null,
       ikPickChildBoneId: null,
       ikPickTargetBoneId: null,
+      pcPickMode: null,
+      pcPickPathSlotId: null,
+      pcPickBoneIds: [],
       weightBindMode: false,
       weightMeshId: null,
       traceDialogOpen: false,
@@ -2896,6 +2951,9 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       ikPickBoneId: null,
       ikPickChildBoneId: null,
       ikPickTargetBoneId: null,
+      pcPickMode: null,
+      pcPickPathSlotId: null,
+      pcPickBoneIds: [],
       weightBindMode: false,
       weightMeshId: null,
       traceDialogOpen: false,
