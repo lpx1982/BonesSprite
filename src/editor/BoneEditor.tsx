@@ -4286,17 +4286,15 @@ export function BoneEditor() {
                 }
               }
             }
-            // 骨骼与插槽一起选中（两个选中集独立）：
+            // 骨骼与插槽命中集（增量 Shift 时与「按下时已有的选中」合并）：
             //   - 骨骼被框中的判定：关节/尖端在框内
             //   - 插槽被框中的判定：其激活附件矩形与框相交
-            // 增量（Shift）时各自与「按下时已有的选中」合并。
             const mergedBones = additive ? Array.from(new Set([...prevSelIds, ...hitBones])) : hitBones;
             // 姿势模式：插槽选中集保持为空（不选图层）
             const mergedLayers = layerSelectable
               ? (additive ? Array.from(new Set([...prevSlotIds, ...hitSlots])) : hitSlots)
               : [];
-            store.selectBox(mergedBones, mergedLayers);
-            // ★ 3) 框内路径附件：任一路径结（顶点）落在框内即命中；姿势模式不参与
+            // ★ 框内路径附件：任一路径结（顶点）落在框内即命中；姿势模式不参与
             const hitPaths: string[] = [];
             if (layerSelectable) {
               for (const [aid, path] of Object.entries(store.attachmentPaths)) {
@@ -4312,13 +4310,21 @@ export function BoneEditor() {
                 }
               }
             }
-            if (hitPaths.length > 0) {
-              // 主选中 = 框内最后一条；增量（Shift）时与「已有附件选择」合并
-              const prevPathSel = store.selectedAttachmentIds;
-              const mergedPaths = additive
-                ? Array.from(new Set([...prevPathSel, ...hitPaths]))
-                : hitPaths;
+            const prevPathSel = store.selectedAttachmentIds;
+            const mergedPaths = additive
+              ? Array.from(new Set([...prevPathSel, ...hitPaths]))
+              : hitPaths;
+            // ★ 框选优先级（三者互斥，重的类别吞掉轻的）：骨骼 > 图片 > 路径
+            //   同时框中骨骼+图片 → 只选骨骼；骨骼+图片+路径 → 只选骨骼；图片+路径 → 只选图片
+            if (mergedBones.length > 0) {
+              store.selectBox(mergedBones, []);   // 只选骨骼（selectBox 会一并清路径）
+            } else if (mergedLayers.length > 0) {
+              store.selectBox([], mergedLayers);  // 只选图片（清骨骼 + 路径）
+            } else if (mergedPaths.length > 0) {
+              // 只选路径（主选中 = 框内/集合最后一条）
               store.setSelectedAttachments(mergedPaths, mergedPaths[mergedPaths.length - 1] ?? null);
+            } else {
+              store.selectBox([], []);            // 框内无任何可选中物 → 清空
             }
           }
           // 清理框选矩形
