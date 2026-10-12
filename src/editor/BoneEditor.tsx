@@ -1557,27 +1557,32 @@ export function BoneEditor() {
         if (v.length === 0) return;
         // 闭合且 ≥2 结 → 首尾也连一段；否则 结数-1 段
         const segs = path.closed && v.length > 1 ? v.length : v.length - 1;
-        for (let i = 0; i < segs; i++) {
-          const a = v[i];
-          const b = v[(i + 1) % v.length];
-          const hasCtl = a.handleOutX !== 0 || a.handleOutY !== 0 || b.handleInX !== 0 || b.handleInY !== 0;
-          if (i === 0) g.moveTo(a.x, a.y);
-          if (hasCtl) {
-            g.bezierCurveTo(
-              a.x + a.handleOutX, a.y + a.handleOutY,
-              b.x + b.handleInX, b.y + b.handleInY,
-              b.x, b.y,
-            );
-          } else {
-            g.lineTo(b.x, b.y);
+        // 追踪路径段（PIXI v8 一条路径只能 stroke 一次，画两遍分别描边：命中粗线 + 可见线）
+        const trace = () => {
+          for (let i = 0; i < segs; i++) {
+            const a = v[i];
+            const b = v[(i + 1) % v.length];
+            const hasCtl = a.handleOutX !== 0 || a.handleOutY !== 0 || b.handleInX !== 0 || b.handleInY !== 0;
+            if (i === 0) g.moveTo(a.x, a.y);
+            if (hasCtl) {
+              g.bezierCurveTo(
+                a.x + a.handleOutX, a.y + a.handleOutY,
+                b.x + b.handleInX, b.y + b.handleInY,
+                b.x, b.y,
+              );
+            } else {
+              g.lineTo(b.x, b.y);
+            }
           }
-        }
-        // ★ 选中高亮：当前选中的路径附件（支持多选）→ 黄色加粗描边；否则用路径颜色
+        };
+        // ★ 命中区：透明粗描边（不占视觉），把点击容差扩大到 ~6px
+        trace();
+        g.stroke({ width: 12, color: 0xFFFFFF, alpha: 0 });
+        // ★ 可见线：选中高亮（多选）→ 黄色加粗；否则用路径颜色
         const stDraw = usePixiBonesStore.getState();
         const selected = !!attachmentId
           && stDraw.selectedAttachmentIds.includes(attachmentId);
-        // ★ 命中区：先画一条透明粗描边（不占视觉），把点击容差扩大到 ~6px
-        g.stroke({ width: 12, color: 0xFFFFFF, alpha: 0 });
+        trace();
         if (selected) {
           g.stroke({ width: 3.5, color: 0xFFD34D, alpha: 1 });
         } else {
