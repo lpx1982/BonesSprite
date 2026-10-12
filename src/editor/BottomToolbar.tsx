@@ -117,9 +117,10 @@ export function BottomToolbar() {
     (sum, k) => sum + (dockPanelWidths[k] ?? DOCK_PANEL_DEFAULT_WIDTH[k] ?? 300) + DOCK_RESIZER_WIDTH,
     0,
   );
-  /** 网格编辑模式：底部卡片组向下渐隐让位给「编辑网格」浮动面板 */
+  /** 网格 / 路径编辑模式：底部卡片组向下渐隐让位给「编辑网格 / 编辑路径」浮动面板 */
   const meshEditSlotId = usePixiBonesStore((s) => s.meshEditSlotId);
-  const toolbarHidden = !!meshEditSlotId;
+  const pathEditAttachmentId = usePixiBonesStore((s) => s.pathEditAttachmentId);
+  const toolbarHidden = !!meshEditSlotId || !!pathEditAttachmentId;
   const { t } = useT();
 
   // 卡片组横向拖动：pointer events + setPointerCapture（在卡片下方同一目标下）
