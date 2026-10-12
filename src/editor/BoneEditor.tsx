@@ -81,6 +81,7 @@ function applyPathConstraintsToSkeleton(
 ): void {
   const st = usePixiBonesStore.getState();
   const byId = new Map(attachmentLayers(psd, images).map((l) => [l.id, l]));
+  const pcRuntime = st.pathConstraintRuntime;
   const contexts: PathSolveContext[] = [];
   for (const c of pathConstraints) {
     // 受约束骨骼：数组顺序 = 沿路径顺序（过滤掉已删除的骨骼）
@@ -97,18 +98,20 @@ function applyPathConstraintsToSkeleton(
     const layer = aid ? (byId.get(aid) ?? null) : null;
     const binding = slotBindings[slot.id];
     const slotWorld = computeSlotWorldMatrix(slot, binding, boneById, slotTransforms, path ?? layer, st.attachmentMeshes);
+    // 动画 tab 下用采样运行时值覆盖定义值（缺省回退定义值，对齐 IK 的 runtimeMix 模式）
+    const rt = pcRuntime[c.id] ?? {};
     contexts.push({
       bones,
       slotWorld,
       path,
       positionMode: c.positionMode,
-      position: c.position,
+      position: rt.position ?? c.position,
       spacingMode: c.spacingMode,
-      spacing: c.spacing,
+      spacing: rt.spacing ?? c.spacing,
       rotateMode: c.rotateMode,
-      rotateMix: c.rotateMix,
-      translateMix: c.translateMix,
-      rotationOffset: c.rotationOffset,
+      rotateMix: rt.rotateMix ?? c.rotateMix,
+      translateMix: rt.translateMix ?? c.translateMix,
+      rotationOffset: rt.rotationOffset ?? c.rotationOffset,
     });
   }
   if (contexts.length > 0) applyPathConstraints(skeleton, contexts);

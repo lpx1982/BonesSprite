@@ -22,7 +22,7 @@
  *  - 自动关键帧：开关决定拖骨骼时是否自动写关键帧（红色录制按钮 = 开）
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { usePixiBonesStore, sampleTrackValue, ANIM_PROPERTIES, type AnimProperty, type AnimCurveType, type BoneNode } from './store';
+import { usePixiBonesStore, sampleTrackValue, ANIM_PROPERTIES, PC_ANIM_PROPS, PC_PROP_ANIM, PC_ANIM_PROP, isPathConstraintAnimProperty, type AnimProperty, type AnimCurveType, type BoneAnimProperty, type BoneNode } from './store';
 
 const MIN_HEIGHT = 140;
 const MAX_HEIGHT = 600;
@@ -64,6 +64,8 @@ interface TimelineRow {
   height: number;
   property?: AnimProperty;
   isConstraint?: boolean;
+  /** 路径约束属性轨道行（pc_ 前缀属性；行点击 / 拖动走路径约束专用分发） */
+  isPc?: boolean;
   keys?: PropKey[];
 }
 
@@ -88,7 +90,7 @@ function flattenRows(
       for (const [p, ks] of byProp) {
         rows.push({
           kind: 'prop', bone: n, depth: depth + 1, height: propH,
-          property: p, isConstraint: ks[0]?.isConstraint, keys: ks,
+          property: p, isConstraint: ks[0]?.isConstraint, isPc: ks[0]?.isPc, keys: ks,
         });
       }
       walk(n.children, depth + 1);
@@ -106,11 +108,17 @@ const PROP_COLOR: Record<AnimProperty, string> = {
   scaleX: '#1E78E6',
   scaleY: '#9B59B6',
   mix: '#F0E020',
+  pc_position: '#4FE0B0',
+  pc_spacing: '#8A7DFF',
+  pc_rotateMix: '#FF8AD8',
+  pc_translateMix: '#7DDBFF',
+  pc_rotationOffset: '#FFC46B',
 };
 
 /** 属性 → 行末短标签。 */
 const PROP_SHORT: Record<AnimProperty, string> = {
   x: 'X', y: 'Y', rotation: '↻', scaleX: '⇆', scaleY: '⇅', mix: 'mix',
+  pc_position: '位置', pc_spacing: '间距', pc_rotateMix: '旋混', pc_translateMix: '平混', pc_rotationOffset: '偏角',
 };
 
 // =============== 工具条图标（emoji 占位，无字体实现） ===============
@@ -131,6 +139,8 @@ interface PropKey {
   time: number;
   value: number;
   isConstraint?: boolean;
+  /** 路径约束属性关键帧（pc_ 前缀属性轨道） */
+  isPc?: boolean;
 }
 interface BoneNodeT {
   bone: BoneNode;
@@ -160,6 +170,7 @@ export function AnimationTimeline() {
   const keyframeLock = usePixiBonesStore((s) => s.keyframeLock);
   const constraints = usePixiBonesStore((s) => s.constraints);
   const constraintRuntimeMix = usePixiBonesStore((s) => s.constraintRuntimeMix);
+  const pathConstraints = usePixiBonesStore((s) => s.pathConstraints);
 
   // ---- actions ----
   const setActiveAnimation = usePixiBonesStore((s) => s.setActiveAnimation);
@@ -225,10 +236,11 @@ export function AnimationTimeline() {
   //   不改变 id/name/parent → id 序列不变 → tree 不重算 → 时间轴轨道行（memo 子组件）
   //   在播放时完全不重渲染（这是时间轴流畅的关键）。
   const bonesIdsKey = bones.map((b) => b.id).join('|');
+  const pcKey = pathConstraints.map((c) => c.id).join('|');
   const tree = useMemo(
-    () => buildBoneTree(bones, anim, constraints, constraintRuntimeMix),
+    () => buildBoneTree(bones, anim, constraints, pathConstraints, constraintRuntimeMix),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [bonesIdsKey, anim, constraints, constraintRuntimeMix],
+    [bonesIdsKey, pcKey, anim, constraints, pathConstraints, constraintRuntimeMix],
   );
 
   // =============== 播放循环 ===============
@@ -384,22 +396,37 @@ export function AnimationTimeline() {
     setDragKey(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dragKey]);
-  const clickRowCb = useCallback((boneId: string, prop: AnimProperty, isC?: boolean) => {
+  const clickRowCb = useCallback((boneId: string, prop: AnimProperty, isC?: boolean, isPc?: boolean) => {
     // 点击轨道空白写关键帧（值从 store 实时读，避免闭包依赖 bones 导致回调每帧变化）
     if (dragKey) return;
     const st = usePixiBonesStore.getState();
     const t = st.currentTime;
-    if (isC) {
+    if (isPc) {
+      // 路径约束属性轨道：值 = 运行时采样 ?? 约束定义值
+      const pcProp = PC_ANIM_PROP[prop]!;
+      const def = st.pathConstraints.find((c) => c.id === boneId);
+      const rt = st.pathConstraintRuntime[boneId];
+      const cur = rt?.[pcProp] ?? def?.[pcProp] ?? 0;
+      st.setPathConstraintKeyframe(boneId, pcProp, t, cur);
+    } else if (isC) {
       const def = st.constraints.find((c) => c.id === boneId);
       const cur = st.constraintRuntimeMix[boneId] ?? def?.mix ?? 1;
       st.setConstraintMixKeyframe(boneId, t, cur);
     } else {
       const b = st.bones.find((x) => x.id === boneId);
-      if (b) st.setKeyframe(boneId, prop, t, b[prop as Exclude<AnimProperty, 'mix'>]);
+      if (b) st.setKeyframe(boneId, prop, t, b[prop as BoneAnimProperty]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dragKey]);
-  const selectBoneCb = useCallback((id: string) => selectBone(id), [selectBone]);
+  const selectBoneCb = useCallback((id: string) => {
+    // 顶层路径约束行：点行名选中约束（约束 id 前缀 pc_）；IK 约束没有顶层行不会走到
+    const st = usePixiBonesStore.getState();
+    if (st.pathConstraints.some((c) => c.id === id)) {
+      st.selectConstraint(id);
+      return;
+    }
+    selectBone(id);
+  }, [selectBone]);
   const removeKeyCb = useCallback((boneId: string, prop: AnimProperty, t: number, isC?: boolean) => {
     if (isC) removeConstraintMixKeyframe(boneId, t);
     else removeKeyframe(boneId, prop, t);
@@ -759,7 +786,6 @@ export function AnimationTimeline() {
               for (const id of ids) {
                 const b = st.bones.find((x) => x.id === id);
                 if (!b) continue;
-                if (p === 'mix') continue;
                 setKeyframe(id, p, t, b[p]);
               }
             }}
@@ -793,6 +819,7 @@ function buildBoneTree(
   bones: BoneNode[],
   anim: ReturnType<typeof usePixiBonesStore.getState>['animations'][number] | null,
   constraints: ReturnType<typeof usePixiBonesStore.getState>['constraints'],
+  pathConstraints: ReturnType<typeof usePixiBonesStore.getState>['pathConstraints'],
   _runtimeMix: Record<string, number>,
 ): BoneNodeT[] {
   if (!anim) return [];
@@ -803,7 +830,13 @@ function buildBoneTree(
     if (tr.keys.length === 0) continue;
     const arr = byKey.get(keyOf(tr.boneId, tr.property)) ?? [];
     for (const k of tr.keys) {
-      arr.push({ property: tr.property, time: k.time, value: k.value, isConstraint: !!tr.constraintMix });
+      arr.push({
+        property: tr.property,
+        time: k.time,
+        value: k.value,
+        isConstraint: !!tr.constraintMix,
+        isPc: isPathConstraintAnimProperty(tr.property),
+      });
     }
     byKey.set(keyOf(tr.boneId, tr.property), arr);
   }
@@ -843,7 +876,25 @@ function buildBoneTree(
       };
     });
   };
-  return build(null);
+  // 路径约束作为「顶层虚拟行」追加（对齐 Spine：路径约束在树里单独一行，
+  // 其下 5 个可动画属性轨道；id 用约束 id 便于行点击 / 拖动分发）。
+  const pcNodes: BoneNodeT[] = pathConstraints.map((c) => {
+    const props: PropKey[] = [];
+    for (const prop of PC_ANIM_PROPS) {
+      const ks = byKey.get(keyOf(c.id, PC_PROP_ANIM[prop]));
+      if (ks && ks.length > 0) {
+        for (const k of ks) props.push({ ...k, isPc: true });
+      }
+    }
+    const synth: BoneNode = {
+      id: c.id,
+      name: c.name,
+      parentId: null,
+      x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, length: 0, slotId: null,
+    };
+    return { bone: synth, props, children: [], collapsed: false, inherited: false };
+  });
+  return [...build(null), ...pcNodes];
 }
 
 /** 标尺标签密度：根据 pxPerFrame 算"每多少帧一个数字标签"，
@@ -1074,7 +1125,7 @@ const TrackRows = memo(function TrackRows({
   onDragStart: (boneId: string, prop: AnimProperty, fromTime: number, isC?: boolean) => void;
   onDragMove: (t: number) => void;
   onDragEnd: (t: number) => void;
-  onClickRow: (boneId: string, prop: AnimProperty, isC?: boolean) => void;
+  onClickRow: (boneId: string, prop: AnimProperty, isC?: boolean, isPc?: boolean) => void;
   onSelectBone: (id: string) => void;
   onRemoveKey: (boneId: string, prop: AnimProperty, t: number, isC?: boolean) => void;
   onSelectKey: (sel: SelectedKeyInfo) => void;
@@ -1103,6 +1154,7 @@ const TrackRows = memo(function TrackRows({
               boneId={boneId}
               property={property}
               isConstraint={r.isConstraint}
+              isPc={r.isPc}
               keys={r.keys!}
               fps={fps}
               duration={duration}
@@ -1143,13 +1195,14 @@ const TrackRows = memo(function TrackRows({
 
 /** 属性 → 关键帧竖线颜色（Spine 风格：每种属性不同色）。 */
 const PropRow = memo(function PropRow({
-  boneId, property, isConstraint, keys, fps, duration, dragKey, dragTime, pxPerFrame,
+  boneId, property, isConstraint, isPc, keys, fps, duration, dragKey, dragTime, pxPerFrame,
   onDragStart, onDragMove, onDragEnd, onClickRow, onRemoveKey,
   selectedKey, onSelectKey,
 }: {
   boneId: string;
   property: AnimProperty;
   isConstraint?: boolean;
+  isPc?: boolean;
   keys: PropKey[];
   fps: number;
   duration: number;
@@ -1159,7 +1212,7 @@ const PropRow = memo(function PropRow({
   onDragStart: (boneId: string, prop: AnimProperty, fromTime: number, isC?: boolean) => void;
   onDragMove: (t: number) => void;
   onDragEnd: (t: number) => void;
-  onClickRow: (boneId: string, prop: AnimProperty, isC?: boolean) => void;
+  onClickRow: (boneId: string, prop: AnimProperty, isC?: boolean, isPc?: boolean) => void;
   onRemoveKey: (boneId: string, prop: AnimProperty, t: number, isC?: boolean) => void;
   selectedKey: { boneId: string; property: AnimProperty; time: number; isConstraint?: boolean } | null;
   onSelectKey: (sel: { boneId: string; property: AnimProperty; time: number; isConstraint?: boolean }) => void;
@@ -1169,7 +1222,7 @@ const PropRow = memo(function PropRow({
       onPointerDown={() => {
         if (dragKey) return;
         // 不用本地 t：onClickRow 内部用 store 的 currentTime
-        onClickRow(boneId, property, isConstraint);
+        onClickRow(boneId, property, isConstraint, isPc);
       }}
       style={{
         position: 'relative', height: PROP_ROW_H,

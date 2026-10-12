@@ -15,9 +15,41 @@ export type EditorTool = 'pose' | 'weights' | 'create' | 'rotate' | 'move' | 'sc
 //    Spine 语义：每根骨骼按「属性」分轨道，每条轨道一串关键帧。
 //    动画 tab 下 bones 的姿态 = 采样结果；未覆盖的属性回退到 setupPose（设置姿态）。
 // =================================================================================
-export type AnimProperty = 'x' | 'y' | 'rotation' | 'scaleX' | 'scaleY' | 'mix';
-/** 骨骼全部可动画属性（录制 / 采样共用）。'mix' 不在这里 —— 它是约束 mix 专用属性。 */
-export const ANIM_PROPERTIES: AnimProperty[] = ['x', 'y', 'rotation', 'scaleX', 'scaleY'];
+export type AnimProperty = 'x' | 'y' | 'rotation' | 'scaleX' | 'scaleY' | 'mix'
+  | 'pc_position' | 'pc_spacing' | 'pc_rotateMix' | 'pc_translateMix' | 'pc_rotationOffset';
+/** 骨骼全部可动画属性（录制 / 采样共用）。'mix' / 'pc_*' 不在这里 —— 它们是约束专用属性。 */
+export const ANIM_PROPERTIES: BoneAnimProperty[] = ['x', 'y', 'rotation', 'scaleX', 'scaleY'];
+/** 骨骼可动画属性（不含约束专用属性；recordBoneEdits 等按骨骼索引的场合用）。 */
+export type BoneAnimProperty = 'x' | 'y' | 'rotation' | 'scaleX' | 'scaleY';
+
+// =================================================================================
+//  路径约束可动画属性（对齐 Spine 3.8：position / spacing / rotateMix /
+//  translateMix / rotateOffset）。时间轴轨道用 pc_ 前缀的 AnimProperty，
+//  不与骨骼属性（x/y/…）与 IK mix 撞名；路径约束轨道 boneId = 约束 id。
+// =================================================================================
+/** 路径约束可动画属性（编辑器侧名；导出到 Spine JSON 时 rotateOffset 用 Spine 侧命名）。 */
+export type PathConstraintAnimProp = 'position' | 'spacing' | 'rotateMix' | 'translateMix' | 'rotationOffset';
+export const PC_ANIM_PROPS: PathConstraintAnimProp[] = ['position', 'spacing', 'rotateMix', 'translateMix', 'rotationOffset'];
+/** PathConstraintAnimProp → AnimProperty（轨道属性名，pc_ 前缀）。 */
+export const PC_PROP_ANIM: Record<PathConstraintAnimProp, AnimProperty> = {
+  position: 'pc_position',
+  spacing: 'pc_spacing',
+  rotateMix: 'pc_rotateMix',
+  translateMix: 'pc_translateMix',
+  rotationOffset: 'pc_rotationOffset',
+};
+/** AnimProperty → PathConstraintAnimProp（pc_ 属性反查；非路径约束属性返回 undefined）。 */
+export const PC_ANIM_PROP: Partial<Record<AnimProperty, PathConstraintAnimProp>> = {
+  pc_position: 'position',
+  pc_spacing: 'spacing',
+  pc_rotateMix: 'rotateMix',
+  pc_translateMix: 'translateMix',
+  pc_rotationOffset: 'rotationOffset',
+};
+/** 判断某 AnimProperty 是否为路径约束属性轨道（pc_ 前缀）。 */
+export function isPathConstraintAnimProperty(p: AnimProperty): boolean {
+  return p.startsWith('pc_');
+}
 /** 关键帧插值类型（仿 Spine）：
  *  - stepped：步进，前一帧的值保持到下一帧才跳变
  *  - linear：线性（默认）
@@ -377,7 +409,7 @@ export interface PixiBonesState {
   /** 把 fromTime 处的关键帧移到 toTime（入历史；随后采样应用） */
   moveKeyframe: (boneId: string, property: AnimProperty, fromTime: number, toTime: number) => void;
   /** 动画 tab + 关键帧锁开启时：把骨骼当前值的若干属性在 currentTime 写关键帧（一次拖动合并为一步历史） */
-  recordBoneEdits: (boneId: string, props: Array<Exclude<AnimProperty, 'mix'>>) => void;
+  recordBoneEdits: (boneId: string, props: BoneAnimProperty[]) => void;
   /** 用当前激活动画在 currentTime 的采样覆盖 bones（不入历史；仅动画 tab 有效） */
   applyActiveAnimation: () => void;
   /** 写 / 更新某约束在 time 处的 mix 关键帧（入历史；随后采样应用） */
@@ -387,6 +419,16 @@ export interface PixiBonesState {
   /** 动画 tab 下约束 mix 的运行时值（key = 约束 id，由 applyActiveAnimation 采样写入，
    *  离开动画 tab 时清空）。渲染 IK 时用它覆盖 constraints[].mix。 */
   constraintRuntimeMix: Record<string, number>;
+
+  // ---- 路径约束动画（仿 IK 的 constraintRuntimeMix 模式）----
+  /** 写 / 更新某路径约束在 time 处的属性关键帧（入历史；随后采样应用） */
+  setPathConstraintKeyframe: (constraintId: string, prop: PathConstraintAnimProp, time: number, value: number) => void;
+  /** 删除某路径约束在 time 处的属性关键帧（入历史；随后采样应用） */
+  removePathConstraintKeyframe: (constraintId: string, prop: PathConstraintAnimProp, time: number) => void;
+  /** 动画 tab 下路径约束各属性的运行时值（key = 约束 id → 属性 → 值，
+   *  由 applyActiveAnimation 采样写入，离开动画 tab 时清空）。
+   *  渲染路径约束时用它覆盖 pathConstraints[].position/spacing/…。 */
+  pathConstraintRuntime: Record<string, Partial<Record<PathConstraintAnimProp, number>>>;
 
   // ---- Day 2 ----
   psd: PixiBonesPsd | null;
@@ -1068,6 +1110,25 @@ function sampleConstraintMixes(anim: EditorAnimation, t: number): Record<string,
   return out;
 }
 
+/** 采样路径约束属性轨道（pc_ 前缀属性），返回 约束 id → 属性 → 值。
+ *  t 处无轨道 → 不包含该属性（调用方用 pathConstraints[] 定义值缺省）。
+ *  仿 sampleConstraintMixes 的「只收集有轨道的」语义。 */
+function samplePathConstraintValues(
+  anim: EditorAnimation,
+  t: number,
+): Record<string, Partial<Record<PathConstraintAnimProp, number>>> {
+  const out: Record<string, Partial<Record<PathConstraintAnimProp, number>>> = {};
+  for (const tr of anim.tracks) {
+    if (tr.keys.length === 0) continue;
+    const prop = PC_ANIM_PROP[tr.property];
+    if (!prop) continue;
+    const v = sampleTrackValue(tr.keys, t, 0);
+    const slot = out[tr.boneId] ?? (out[tr.boneId] = {});
+    slot[prop] = v;
+  }
+  return out;
+}
+
 /**
  * ★ 动画 tab 下，用「已更新轨道的动画」在 currentTime 采样骨骼姿态 + 约束 mix，
  * 返回可直接展开进 set() 的补丁（一次 set 完成，避免 applyActiveAnimation 的二次 set
@@ -1080,6 +1141,8 @@ function buildAnimPatch(s: PixiBonesState, anim: EditorAnimation): Partial<PixiB
   if (next) patch.bones = next;
   const mixes = sampleConstraintMixes(anim, s.currentTime);
   if (Object.keys(mixes).length > 0) patch.constraintRuntimeMix = mixes;
+  const pcVals = samplePathConstraintValues(anim, s.currentTime);
+  if (Object.keys(pcVals).length > 0) patch.pathConstraintRuntime = pcVals;
   return patch;
 }
 
@@ -1458,6 +1521,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   setupPose: {},
   keyframeLock: true,
   constraintRuntimeMix: {},
+  pathConstraintRuntime: {},
   selectedBoneName: null,
 
   psd: null,
@@ -2569,7 +2633,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
         return sp ? { ...n, x: sp.x, y: sp.y, rotation: sp.rotation, scaleX: sp.scaleX, scaleY: sp.scaleY } : n;
       });
       // 离开动画 tab：清空约束 mix 运行时值（IK 回到设置姿态的 mix）
-      set({ editorTab: 'setup', bones, playing: false, constraintRuntimeMix: {} });
+      set({ editorTab: 'setup', bones, playing: false, constraintRuntimeMix: {}, pathConstraintRuntime: {} });
     }
   },
 
@@ -2644,6 +2708,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       activeAnimationId: null,
       setupPose: {},
       constraintRuntimeMix: {},
+  pathConstraintRuntime: {},
       currentTime: 0,
       playing: false,
       // —— IK 约束 ——
@@ -2725,6 +2790,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       // 路径约束（旧存档缺省为空）
       pathConstraints: d.pathConstraints ?? [],
       constraintRuntimeMix: {},
+  pathConstraintRuntime: {},
       currentTime: 0,
       playing: false,
       loop: true,
@@ -2943,10 +3009,12 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       //   （播放时每帧 2 次全量重画）。现在只触发一次。
       const next = sampleAnimationPose(anim, s.setupPose, s.bones, ct);
       const mixes = sampleConstraintMixes(anim, ct);
+      const pcVals = samplePathConstraintValues(anim, ct);
       set({
         currentTime: ct,
         ...(next ? { bones: next } : {}),
         ...(Object.keys(mixes).length > 0 ? { constraintRuntimeMix: mixes } : {}),
+        ...(Object.keys(pcVals).length > 0 ? { pathConstraintRuntime: pcVals } : {}),
       });
     } else {
       set({ currentTime: ct });
@@ -3112,6 +3180,42 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     const tracks = anim.tracks
       .map((x) => {
         if (x.boneId !== constraintId || x.property !== 'mix' || !x.constraintMix) return x;
+        const keys = x.keys.filter((k) => Math.abs(k.time - time) >= 1e-6);
+        return { ...x, keys };
+      })
+      .filter((x) => x.keys.length > 0);
+    const withAnim = { ...anim, tracks };
+    set((st) => ({
+      animations: st.animations.map((a) => (a.id === anim.id ? withAnim : a)),
+      ...buildAnimPatch(s, withAnim),
+    }));
+  },
+  setPathConstraintKeyframe: (constraintId, prop, time, value) => {
+    const s = get();
+    const anim = s.animations.find((a) => a.id === s.activeAnimationId);
+    if (!anim) return;
+    s.pushHistory();
+    const t = Math.max(0, time);
+    // 复用 upsertTrackKey：路径约束轨道 boneId = 约束 id，property = pc_ 前缀属性名
+    const property = PC_PROP_ANIM[prop];
+    const tracks = upsertTrackKey(anim.tracks, constraintId, property, t, value);
+    const withAnim = { ...anim, tracks };
+    set((st) => ({
+      animations: st.animations.map((a) => (a.id === anim.id ? withAnim : a)),
+      ...buildAnimPatch(s, withAnim),
+    }));
+  },
+  removePathConstraintKeyframe: (constraintId, prop, time) => {
+    const s = get();
+    const anim = s.animations.find((a) => a.id === s.activeAnimationId);
+    if (!anim) return;
+    const property = PC_PROP_ANIM[prop];
+    const tr = anim.tracks.find((x) => x.boneId === constraintId && x.property === property);
+    if (!tr || !tr.keys.some((k) => Math.abs(k.time - time) < 1e-6)) return;
+    s.pushHistory();
+    const tracks = anim.tracks
+      .map((x) => {
+        if (x.boneId !== constraintId || x.property !== property) return x;
         const keys = x.keys.filter((k) => Math.abs(k.time - time) >= 1e-6);
         return { ...x, keys };
       })
