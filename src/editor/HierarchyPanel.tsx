@@ -1704,6 +1704,19 @@ export function HierarchyPanel() {
             pushHistory={pushHistory}
             C={C}
           />
+        ) : (selectedConstraintId && selectedConstraintId.startsWith('phy_')) ? (
+          <PhysicsConstraintsSectionPropsBlock
+            physicsConstraints={physicsConstraints}
+            bones={bones}
+            onRemove={(id) => removePhysicsConstraint(id)}
+            onRename={(id, name) => renamePhysicsConstraint(id, name)}
+            onRenamePopup={(id) => openPhysicsConstraintRename(id)}
+            onCopy={(id) => duplicatePhysicsConstraint(id)}
+            onBone={(id, boneId) => setPhysicsConstraintBone(id, boneId)}
+            onProp={(id, key, v) => setPhysicsConstraintProp(id, key, v)}
+            onMove={(id, toIndex) => movePhysicsConstraint(id, toIndex)}
+            C={C}
+          />
         ) : (
           <ConstraintsSectionPropsBlock
             constraints={constraints}
@@ -1719,19 +1732,6 @@ export function HierarchyPanel() {
             C={C}
           />
         )
-      ) : (selectedConstraintId && selectedConstraintId.startsWith('phy_')) ? (
-        <PhysicsConstraintsSectionPropsBlock
-          physicsConstraints={physicsConstraints}
-          bones={bones}
-          onRemove={(id) => removePhysicsConstraint(id)}
-          onRename={(id, name) => renamePhysicsConstraint(id, name)}
-          onRenamePopup={(id) => openPhysicsConstraintRename(id)}
-          onCopy={(id) => duplicatePhysicsConstraint(id)}
-          onBone={(id, boneId) => setPhysicsConstraintBone(id, boneId)}
-          onProp={(id, key, v) => setPhysicsConstraintProp(id, key, v)}
-          onMove={(id, toIndex) => movePhysicsConstraint(id, toIndex)}
-          C={C}
-        />
       ) : null}
 
       {/* ===== 大预览浮层：hover 附件图标 2s 后弹出（仿 Spine） =====
@@ -4006,12 +4006,12 @@ function PhysicsConstraintsSectionPropsBlock(props: PhysicsConstraintsSectionPro
   const blurOnEnter = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
   };
-  /** 0..1 属性行（百分比显示 ×100）：icon + label + 数值输入 + 滑块 + 百分数值 + [PRO] [🔗] */
+  /** 0..1 属性行（百分比显示 ×100）：icon + label + 数值输入 + 滑块 + 百分数值 + [extra] [PRO] [🔗] */
   const renderPct = (
     key: 'x' | 'y' | 'rotate' | 'shearX' | 'scaleX' | 'inertia' | 'strength' | 'damping' | 'massInverse' | 'wind' | 'gravity' | 'mix',
     icon: string,
     label: string,
-    opts: { signed?: boolean; pro?: boolean; chain?: boolean } = {},
+    opts: { signed?: boolean; pro?: boolean; chain?: boolean; extra?: React.ReactNode } = {},
   ) => {
     if (!selected) return null;
     const v = selected[key];
@@ -4047,6 +4047,7 @@ function PhysicsConstraintsSectionPropsBlock(props: PhysicsConstraintsSectionPro
           onChange={(e) => onProp(selected.id, key, Number(e.target.value) / 100)}
         />
         <span className="shrink-0 w-8 text-right text-[11px]" style={{ color: C.dim }}>{pct}</span>
+        {opts.extra}
         {opts.pro ? <ProBadge C={C} /> : null}
         {opts.chain ? <span className="shrink-0 text-[10px]" style={{ color: C.dim }} title="链式（作用于子骨骼）">🔗</span> : null}
       </div>
@@ -4158,8 +4159,19 @@ function PhysicsConstraintsSectionPropsBlock(props: PhysicsConstraintsSectionPro
               </div>
 
               {renderPct('rotate', '🔄', '旋转')}
-              {renderPct('scaleX', '📐', '缩放X')}
-              {renderPct('shearX', '✛', '倾斜X')}
+              {renderPct('scaleX', '📐', '缩放X', {
+                extra: (
+                  <select
+                    className="shrink-0 rounded px-1 py-0.5 outline-none text-[11px]"
+                    style={numStyle}
+                    value="none"
+                    title="缩放X 模式（Spine 侧下拉，暂无其它模式）"
+                  >
+                    <option value="none">无</option>
+                  </select>
+                ),
+              })}
+              {renderPct('shearX', '➕', '倾斜X')}
 
               {/* 限制：单帧偏移上限（世界像素） */}
               <div className="flex items-center gap-1">
@@ -4219,15 +4231,15 @@ function PhysicsConstraintsSectionPropsBlock(props: PhysicsConstraintsSectionPro
           {/* ── Properties：模拟参数（无标题，仿 Spine）── */}
           <div className="flex flex-col gap-1.5 pt-1.5 border-t" style={{ borderColor: C.border }}>
             {renderPct('inertia', '⚖', '惯性', { pro: true, chain: true })}
-            {renderPct('strength', '🎚', '力度', { pro: true, chain: true })}
+            {renderPct('strength', '🦵', '力度', { pro: true, chain: true })}
             {renderPct('damping', '〰', '阻尼', { pro: true, chain: true })}
             {renderPct('massInverse', '🏋', '质量', { pro: true, chain: true })}
             {renderPct('wind', '💨', '风', { signed: true, pro: true, chain: true })}
             {renderPct('gravity', '⬇', '重力', { signed: true, pro: true, chain: true })}
-            {renderPct('mix', '🔵', '混合', { pro: true, chain: true })}
+            {renderPct('mix', '🎭', '混合', { pro: true, chain: true })}
           </div>
 
-          {/* ── 底部动作栏：模拟 / 确定性 / + 新建 / 皮肤… ── */}
+          {/* ── 底部动作栏：模拟 / 确定性 / + 新建…[PRO] / 皮肤…[PRO] ── */}
           <div className="flex items-center gap-1.5 pt-1.5 border-t" style={{ borderColor: C.border }}>
             <button
               className="flex-1 rounded px-2 py-1 text-[12px] font-semibold"
@@ -4246,29 +4258,34 @@ function PhysicsConstraintsSectionPropsBlock(props: PhysicsConstraintsSectionPro
               style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border, cursor: 'pointer' }}
               onClick={() => usePixiBonesStore.getState().addPhysicsConstraint(selected.boneId)}
               title="以当前目标骨新建一条物理约束"
-            >+ 新建</button>
+            >+ 新建<ProBadge C={C} /></button>
             <button
               className="rounded px-2 py-1 text-[12px] shrink-0 opacity-60"
               style={{ background: C.panel, color: C.dim, border: '1px solid ' + C.border, cursor: 'not-allowed' }}
               disabled
               title="皮肤（PRO 功能，暂不支持）"
-            >皮肤…</button>
+            >皮肤…<ProBadge C={C} /></button>
           </div>
 
-          {/* ── 次级动作栏：重置 / 全部重置（重置模拟偏移，骨骼回设定姿势）── */}
+          {/* ── 次级动作栏：重置[PRO] / 全部重置[PRO] / ⿴ ── */}
           <div className="flex items-center gap-1.5">
             <button
               className="flex-1 rounded px-2 py-1 text-[12px]"
               style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border, cursor: 'pointer' }}
               onClick={() => window.dispatchEvent(new CustomEvent('spine:physics-reset', { detail: { id: selected.id } }))}
               title="重置该约束的物理偏移"
-            >↩ 重置</button>
+            >↩ 重置<ProBadge C={C} /></button>
             <button
               className="flex-1 rounded px-2 py-1 text-[12px]"
               style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border, cursor: 'pointer' }}
               onClick={() => window.dispatchEvent(new CustomEvent('spine:physics-reset', { detail: { all: true } }))}
               title="重置全部物理约束的偏移"
-            >↩ 全部重置</button>
+            >↩ 全部重置<ProBadge C={C} /></button>
+            <button
+              className="w-7 h-6 shrink-0 flex items-center justify-center rounded text-[14px]"
+              style={{ background: 'transparent', border: '1px solid ' + C.border, color: C.dim, cursor: 'pointer' }}
+              title="物理设置（暂为占位）"
+            >⿴</button>
           </div>
         </div>
       )}

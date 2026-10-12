@@ -2810,6 +2810,15 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       physicsConstraints: [...st.physicsConstraints, def],
       // 与 IK / 路径约束共用 selectedConstraintId（id 前缀 phy_ 区分）
       selectedConstraintId: id,
+      // 新建后立即切到「约束」分区并清掉其它选中态，让属性面板能显示出来
+      selectedSectionKey: 'constraints',
+      selectedBoneId: null,
+      selectedBoneIds: [],
+      selectedSlotId: null,
+      selectedSlotIds: [],
+      selectedAttachmentId: null,
+      selectedAttachmentIds: [],
+      selectedRowKey: null,
     }));
     return id;
   },
