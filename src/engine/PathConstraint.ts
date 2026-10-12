@@ -238,23 +238,37 @@ export function pathNearestT(path: PathData, px: number, py: number): number {
   const n = v.length;
   if (n < 2) return 0;
   const segCount = path.closed ? n : n - 1;
-  let bestU = 0;
+  let bestSeg = -1;
+  let bestI = -1;
+  let bestPts: Array<{ x: number; y: number; t: number }> | null = null;
   let bestD = Infinity;
   for (let seg = 0; seg < segCount; seg++) {
     const a = v[seg];
     const b = v[(seg + 1) % n];
-    // ★ 直线段也按 32 细分（线性插值下采样精确），保证最近点命中的精度
-    //   （LINE_SUBDIV=2 的 3 个采样点对命中检测太粗）。
-    const pts = sampleSegment(a, b, isLineSegment(a, b), SEG_SUBDIV);
+    // ★ 最近点命中用 4 倍细分（128 点/段）：直线段按线性插值采样是精确的，
+    //   曲线段 128 点把拖动回写的量化误差压到亚像素（32 点在长段上会一格一格跳）。
+    const pts = sampleSegment(a, b, isLineSegment(a, b), SEG_SUBDIV * 4);
     for (let i = 0; i < pts.length; i++) {
       const d = (pts[i].x - px) * (pts[i].x - px) + (pts[i].y - py) * (pts[i].y - py);
       if (d < bestD) {
         bestD = d;
-        bestU = (seg + pts[i].t) / segCount;
+        bestSeg = seg;
+        bestI = i;
+        bestPts = pts;
       }
     }
   }
-  return bestU;
+  if (bestSeg < 0 || !bestPts) return 0;
+  // ★ 必须返回与 pathPointAt **相同**的参数化，否则 gizmo 控制柄拖动回写会跳变：
+  //   - constantSpeed = true：弧长归一化 u（该点弧长 / 总弧长）
+  //   - false：按段均匀 (seg + t) / segCount
+  //   （弧长用与 buildPathLengthTable 同一套采样累加，保证与 pathPointAt 一致。）
+  if (!path.constantSpeed) return (bestSeg + bestPts[bestI].t) / segCount;
+  const table = buildPathLengthTable(path);
+  const total = table.cumLen[table.segCount];
+  if (total <= 0) return 0;
+  const arcLen = table.cumLen[bestSeg] + arcAt(bestPts, bestI);
+  return Math.max(0, Math.min(1, arcLen / total));
 }
 
 // =================================================================================

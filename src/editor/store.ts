@@ -761,6 +761,8 @@ export interface PixiBonesState {
   setPathConstraintRotationOffset: (id: string, deg: number) => void;
   /** 重排受约束骨骼顺序（上移/下移按钮用）：把 fromIndex 处的骨骼移到 toIndex */
   setPathConstraintBoneOrder: (id: string, fromIndex: number, toIndex: number) => void;
+  /** 调整路径约束的应用顺序：把 id 对应约束移到新索引（0 = 最先应用；Spine 固定全部 IK → 全部 Path） */
+  movePathConstraint: (id: string, toIndex: number) => void;
 
   // ---- IK 约束创建流程（仿 Spine：选骨 → 新建 → IK → 拾取目标 → 弹窗命名）----
   /** 正在等待拾取 IK 目标骨（非 null = 「新建 ik 约束：选择目标」拾取模式）。 */
@@ -2418,6 +2420,17 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       pathConstraints: st.pathConstraints.map((x) => (x.id === id ? { ...x, boneIds: list } : x)),
     }));
   },
+  movePathConstraint: (id, toIndex) => {
+    const s = get();
+    const from = s.pathConstraints.findIndex((c) => c.id === id);
+    if (from < 0) return;
+    const list = s.pathConstraints.slice();
+    const [item] = list.splice(from, 1);
+    const idx = Math.max(0, Math.min(list.length, toIndex));
+    list.splice(idx, 0, item);
+    s.pushHistory();
+    set({ pathConstraints: list });
+  },
 
   showLeftPanel: false,
   showRightPanel: false,  // 默认隐藏层级树，用户从 View 菜单手动开启
@@ -3419,7 +3432,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   }),
   selectConstraint: (id) => {
     const s = get();
-    if (!s.constraints.some((c) => c.id === id)) return;
+    // IK 与路径约束共用 selectedConstraintId（id 前缀区分：ik_ / pc_）
+    if (!s.constraints.some((c) => c.id === id) && !s.pathConstraints.some((c) => c.id === id)) return;
     set({
       selectedConstraintId: id,
       selectedSectionKey: 'constraints',

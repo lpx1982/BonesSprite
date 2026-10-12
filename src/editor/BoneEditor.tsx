@@ -16,7 +16,7 @@ import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, type BoneNo
 import { Bone as EngineBone } from '@engine/Bone';
 import { Skeleton } from '@engine/Skeleton';
 import { applyIkConstraints, type IkSolveContext } from '@engine/IkConstraint';
-import { applyPathConstraints, type PathSolveContext } from '@engine/PathConstraint';
+import { applyPathConstraints, pathPointAt, pathLengthOf, pathNearestT, type PathSolveContext } from '@engine/PathConstraint';
 import { parsePsd, type PixiBonesLayer, type PixiBonesPsd, type PixiBonesSlot } from '@psd/index';
 import type { MeshData, PathData, PathVertex } from '@psd/types';
 import { importAssetFile } from './importAsset';
@@ -284,10 +284,21 @@ export function BoneEditor() {
           /** 按下时已选中的结 */
           prevSel: number[];
         }
+      /** 路径约束：拖动 position 控制柄（沿路径滑动） */
+      | {
+          kind: 'path-position';
+          constraintId: string;
+          slotId: string;
+          startScreen: { x: number; y: number };
+          /** 位移是否已写入 store（首帧才推历史） */
+          moved: boolean;
+        }
       | null;
     /** 0 长度骨骼上的悬停分区（黑圈内=移动，圈外=旋转） */
     type HoverZone = { boneId: string; kind: 'move' | 'rotate' };
     let dragState: DragState = null;
+    /** 路径约束 position 控制柄的屏幕坐标（drawPathConstraintGizmo 写入，pointerdown 命中用）。null = 当前不显示。 */
+    let pathConstraintHandleScreen: { x: number; y: number } | null = null;
     /** 最近一次鼠标在 stage 上的位置（Command 键按下/抬起时刷新悬停虚线框用） */
     let lastPointer = { x: -99999, y: -99999 };
     /** Command（mac ⌘）键是否按下 */
@@ -384,6 +395,12 @@ export function BoneEditor() {
       const pathHandles = new Gfx();
       pathHandles.eventMode = 'none';
       a.stage.addChild(pathHandles);
+
+      // 路径约束 gizmo：虚线路径 + position 控制柄 + 受约束骨骼 origin 圆点（屏幕坐标）。
+      // 不接收事件（命中由 stage 的 pointerdown + 自己算距离处理）。
+      const pathConstraintGfx = new Gfx();
+      pathConstraintGfx.eventMode = 'none';
+      a.stage.addChild(pathConstraintGfx);
 
       // 旋转拖动时跟随鼠标的绿色旋转光标（Spine 风格：按下出现，松开消失）
       const rotateCursor = new Gfx();
@@ -1748,6 +1765,69 @@ export function BoneEditor() {
         if (editingNew && v.length > 0) {
           const last = pathLocalToScreen(slot.id, v[v.length - 1].x, v[v.length - 1].y);
           drawDashedLine(pathHandles, last.x, last.y, lastPointer.x, lastPointer.y, 6, 4, 0xFFFFFF, 1.2);
+        }
+      };
+
+      /**
+       * 画路径约束 gizmo（仿 Spine）：虚线路径 + position 控制柄 + 受约束骨骼 origin 圆点。
+       *  - 仅 setup tab + 选中 pc_ 前缀约束且约束存在时绘制；
+       *  - 路径先经 slotWorld（computeSlotWorldMatrix，与解算同源）变到世界，再按
+       *    root 的平移/缩放映射成屏幕坐标（与 pathHandles 同一坐标约定）；
+       *  - 受约束骨骼读「解算后」的骨架世界位置（skeletonRef 是 buildSkeleton 后的）。
+       */
+      const drawPathConstraintGizmo = () => {
+        pathConstraintGfx.clear();
+        pathConstraintHandleScreen = null;
+        const s = usePixiBonesStore.getState();
+        if (s.editorTab !== 'setup') return;
+        const cid = s.selectedConstraintId;
+        if (!cid || !cid.startsWith('pc_')) return;
+        const c = s.pathConstraints.find((x) => x.id === cid);
+        if (!c) return;
+        const slot = s.slots.find((x) => x.id === c.targetSlotId);
+        if (!slot) return;
+        const aid = slot.activeAttachmentId;
+        const path = aid ? s.attachmentPaths[aid] : null;
+        if (!path || path.vertices.length < 2) return;
+        const slotWorld = computeSlotWorldMatrix(slot, s.slotBindings[slot.id], boneById, s.slotTransforms, path, s.attachmentMeshes);
+        const sx = root.scale.x;
+        const sy = root.scale.y;
+        const toScreen = (px: number, py: number) => {
+          const wx = slotWorld[0] * px + slotWorld[2] * py + slotWorld[4];
+          const wy = slotWorld[1] * px + slotWorld[3] * py + slotWorld[5];
+          return { x: root.x + wx * sx, y: root.y + wy * sy };
+        };
+
+        // 1) 虚线路径：按 u 均匀采样 96 点，相邻点连虚线（闭合路径 u=1 回到起点，自然首尾相接）
+        const SAMPLES = 96;
+        let prev: { x: number; y: number } | null = null;
+        for (let i = 0; i <= SAMPLES; i++) {
+          const p = pathPointAt(path, i / SAMPLES);
+          const sp = toScreen(p.x, p.y);
+          if (prev) drawDashedLine(pathConstraintGfx, prev.x, prev.y, sp.x, sp.y, 6, 4, 0xFFFFFF, 1.2, 0.35);
+          prev = sp;
+        }
+
+        // 2) position 控制柄：percent → u = position/100；fixed → u = position/总弧长
+        const total = pathLengthOf(path);
+        const u = c.positionMode === 'percent' ? c.position / 100 : (total > 0 ? c.position / total : 0);
+        const pp = pathPointAt(path, u);
+        const handle = toScreen(pp.x, pp.y);
+        pathConstraintHandleScreen = handle;
+        // 醒目圆点：半径 6，金色填充 + 白描边（对齐 Spine 约束控制柄风格）
+        pathConstraintGfx.circle(handle.x, handle.y, 6);
+        pathConstraintGfx.fill({ color: 0xFFD34D, alpha: 1 });
+        pathConstraintGfx.stroke({ width: 1.5, color: 0xFFFFFF, alpha: 1 });
+
+        // 3) 受约束骨骼 origin 圆点（解算后的世界位置；半径 3，同路径色）
+        if (skeletonRef) {
+          for (const bid of c.boneIds) {
+            const bone = boneById.get(bid);
+            if (!bone) continue;
+            const wp = skeletonRef.getWorldPosition(bone);
+            pathConstraintGfx.circle(root.x + wp.x * sx, root.y + wp.y * sy, 3);
+            pathConstraintGfx.fill({ color: 0xFFFFFF, alpha: 0.9 });
+          }
         }
       };
 
@@ -3850,6 +3930,43 @@ export function BoneEditor() {
               }
             }
           }
+        } else if (dragState.kind === 'path-position') {
+          // 拖动路径约束的 position 控制柄：沿路径滑动
+          // （屏幕点 → 世界点 → 用 slotWorld 的逆变换到路径局部 → pathNearestT 得 u → 回写 position）
+          // ★ 先解构再进箭头函数：TS 在嵌套函数内引用捕获的 let 变量会丢失外层的判别收窄
+          const cid = dragState.constraintId;
+          const sid = dragState.slotId;
+          const c = st.pathConstraints.find((x) => x.id === cid);
+          const slot = st.slots.find((x) => x.id === sid);
+          const aid = slot?.activeAttachmentId;
+          const path = aid ? st.attachmentPaths[aid] : null;
+          if (c && slot && path && path.vertices.length >= 2) {
+            const sx = root.scale.x;
+            const sy = root.scale.y;
+            // ★ 与 drawPathConstraintGizmo 用同一个 computeSlotWorldMatrix，保证控制柄落点与回写一致
+            const slotWorld = computeSlotWorldMatrix(
+              slot, st.slotBindings[slot.id], boneById, st.slotTransforms, path, st.attachmentMeshes,
+            );
+            const inv = invAffine(slotWorld);
+            if (inv && sx !== 0 && sy !== 0) {
+              // 屏幕点 → 世界点 → 路径局部坐标
+              const wx = (ev.global.x - root.x) / sx;
+              const wy = (ev.global.y - root.y) / sy;
+              const lx = inv[0] * wx + inv[2] * wy + inv[4];
+              const ly = inv[1] * wx + inv[3] * wy + inv[5];
+              const u = pathNearestT(path, lx, ly);
+              const total = pathLengthOf(path);
+              const v = c.positionMode === 'percent' ? u * 100 : (total > 0 ? u * total : 0);
+              if (!dragState.moved && Math.abs(v - c.position) > 0.001) {
+                dragState.moved = true;
+                st.pushHistory();   // 首次真正位移时才推历史（避免点一下也入栈）
+              }
+              if (dragState.moved) {
+                st.setPathConstraintPosition(c.id, v);
+                drawPathConstraintGizmo();
+              }
+            }
+          }
         } else if (dragState.kind === 'path-marquee') {
           // 框选结：实时画矩形 + 更新选中集合
           dragState.nowScreen = { x: ev.global.x, y: ev.global.y };
@@ -4489,6 +4606,21 @@ export function BoneEditor() {
             return;
           }
         }
+        // ★ 路径约束 position 控制柄命中（setup tab + 选中路径约束时；屏幕距离阈值 8px）
+        if (stGrid.editorTab === 'setup' && stGrid.selectedConstraintId?.startsWith('pc_')) {
+          const h = pathConstraintHandleScreen;
+          if (h && Math.hypot(h.x - ev.global.x, h.y - ev.global.y) < 8) {
+            ev.stopPropagation();
+            dragState = {
+              kind: 'path-position',
+              constraintId: stGrid.selectedConstraintId,
+              slotId: stGrid.pathConstraints.find((x) => x.id === stGrid.selectedConstraintId)?.targetSlotId ?? '',
+              startScreen: { x: ev.global.x, y: ev.global.y },
+              moved: false,
+            };
+            return;
+          }
+        }
         // ★ 网格编辑模式优先：拖顶点 / 加顶点 / 删顶点 / 框选顶点
         if (stGrid.meshEditSlotId) {
           const ctx = meshEditContext();
@@ -4943,6 +5075,7 @@ export function BoneEditor() {
       applySlotStyles(initial.psd, initial.images, initial.slots, initial.slotStyle, initial.attachmentStyle);
       drawMeshHandles();
       drawPathGizmos();
+      drawPathConstraintGizmo();
       drawBones(initial.bones, initial.selectedBoneId);
 
       let prev = usePixiBonesStore.getState();
@@ -5013,6 +5146,7 @@ export function BoneEditor() {
             redrawPathCurves(k);
           }
           drawPathGizmos();
+          drawPathConstraintGizmo();
         }
         // 路径编辑态变化（进出编辑 / 新建顶点模式 / 工具 / 选中）→ 重画 gizmo
         if (
@@ -5022,6 +5156,7 @@ export function BoneEditor() {
           || state.pathSelectedVertices !== prev.pathSelectedVertices
         ) {
           drawPathGizmos();
+          drawPathConstraintGizmo();
         }
         if (state.psd !== prev.psd) {
           // 新 PSD：重置视口（用户之前可能 zoom 过）
@@ -5212,6 +5347,7 @@ export function BoneEditor() {
           && state.viewport === prev.viewport
           && state.constraints === prev.constraints
           && state.pathConstraints === prev.pathConstraints
+          && state.selectedConstraintId === prev.selectedConstraintId
         ) {
           prev = state;
           return;  // 只有时间轴在动，PIXI 画布不用重画
@@ -5251,6 +5387,7 @@ export function BoneEditor() {
           drawHighlight(state.psd, state.images, state.slots, state.selectedSlotIds);
           // 路径 gizmo 也跟随骨骼（编辑中的路径柄/结位置会变）
           drawPathGizmos();
+          drawPathConstraintGizmo();
           updateAttachmentHover(lastPointer.x, lastPointer.y, state.editorMode === 'create' && metaDown);
           prev = state;
           return;
@@ -5267,6 +5404,7 @@ export function BoneEditor() {
         drawSlotHandles(state.psd, state.images, state.slots, state.selectedSlotId, state.activeTool, state.slotTransforms);
         drawMeshHandles();
         drawPathGizmos();
+        drawPathConstraintGizmo();
         // 缩放 / 平移后，悬停提示框要跟着重画（否则会残留在旧位置）
         updateAttachmentHover(
           lastPointer.x,
@@ -5518,6 +5656,7 @@ function drawDashedLine(
   x0: number, y0: number, x1: number, y1: number,
   dash: number, gap: number,
   color: number, width: number,
+  alpha = 1,
 ) {
   const len = Math.hypot(x1 - x0, y1 - y0);
   if (len < 0.01) return;
@@ -5529,7 +5668,7 @@ function drawDashedLine(
     g.moveTo(x0 + ux * d, y0 + uy * d).lineTo(x0 + ux * d2, y0 + uy * d2);
     d = d2 + gap;
   }
-  g.stroke({ width, color });
+  g.stroke({ width, color, alpha });
 }
 
 /** 闭合多边形的有符号面积（正 = 逆时针）。 */

@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, DOCK_PANEL_DEFAULT_WIDTH, type BoneNode, type SlotBinding, type IkConstraintDef } from './store';
-import { type PixiBonesLayer, type PixiBonesSlot } from '@psd/index';
+import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, DOCK_PANEL_DEFAULT_WIDTH, type BoneNode, type SlotBinding, type IkConstraintDef, type PathConstraintDef, type PathSpacingMode, type PathRotateMode } from './store';
+import { type PixiBonesLayer, type PixiBonesSlot, type PathData } from '@psd/index';
 import { importAssetFile } from './importAsset';
 import { PromptDialog } from './PromptDialog';
 
@@ -54,7 +54,7 @@ interface TreeRow {
    * slot  = 插槽行（◉ 插槽名），其下挂它全部附件行
    * asset = 附件行（🖼 图片名）
    */
-  kind: 'project' | 'bone' | 'section' | 'asset' | 'slot' | 'animation' | 'constraint';
+  kind: 'project' | 'bone' | 'section' | 'asset' | 'slot' | 'animation' | 'constraint' | 'path-constraint';
   /** 缩进层级：project=0，根骨/分区=1，更深 = 子骨 / 插槽 / 附件 */
   depth: number;
   /** 是否是同层最后一个（决定连线画「└」还是「├」） */
@@ -66,6 +66,13 @@ interface TreeRow {
   asset?: PixiBonesLayer;
   /** 约束行（kind='constraint'）对应的数据 */
   constraint?: IkConstraintDef;
+  /** 路径约束行（kind='path-constraint'）对应的数据 */
+  pathConstraint?: PathConstraintDef;
+  /** 约束行在所在列表里的下标 / 长度（▲▼ 按钮禁用判断用） */
+  listIndex?: number;
+  listLength?: number;
+  /** 路径约束行的副标签（小字：槽名 → 骨1,骨2） */
+  subLabel?: string;
   /** 附件行所属的插槽 id */
   slotId?: string;
   /** 附件行是否是所属插槽「当前显示」的附件 */
@@ -193,6 +200,23 @@ export function HierarchyPanel() {
   const setConstraintMix = usePixiBonesStore((s) => s.setConstraintMix);
   const setConstraintBendDirection = usePixiBonesStore((s) => s.setConstraintBendDirection);
   const moveConstraint = usePixiBonesStore((s) => s.moveConstraint);
+  // ===== 路径约束（仿 Spine「约束」分区；与 IK 共用 selectedConstraintId，id 前缀 pc_）=====
+  const pathConstraints = usePixiBonesStore((s) => s.pathConstraints);
+  const addPathConstraint = usePixiBonesStore((s) => s.addPathConstraint);
+  const removePathConstraint = usePixiBonesStore((s) => s.removePathConstraint);
+  const renamePathConstraint = usePixiBonesStore((s) => s.renamePathConstraint);
+  const setPathConstraintTarget = usePixiBonesStore((s) => s.setPathConstraintTarget);
+  const setPathConstraintBones = usePixiBonesStore((s) => s.setPathConstraintBones);
+  const setPathConstraintPositionMode = usePixiBonesStore((s) => s.setPathConstraintPositionMode);
+  const setPathConstraintPosition = usePixiBonesStore((s) => s.setPathConstraintPosition);
+  const setPathConstraintSpacingMode = usePixiBonesStore((s) => s.setPathConstraintSpacingMode);
+  const setPathConstraintSpacing = usePixiBonesStore((s) => s.setPathConstraintSpacing);
+  const setPathConstraintRotateMode = usePixiBonesStore((s) => s.setPathConstraintRotateMode);
+  const setPathConstraintRotateMix = usePixiBonesStore((s) => s.setPathConstraintRotateMix);
+  const setPathConstraintTranslateMix = usePixiBonesStore((s) => s.setPathConstraintTranslateMix);
+  const setPathConstraintRotationOffset = usePixiBonesStore((s) => s.setPathConstraintRotationOffset);
+  const setPathConstraintBoneOrder = usePixiBonesStore((s) => s.setPathConstraintBoneOrder);
+  const movePathConstraint = usePixiBonesStore((s) => s.movePathConstraint);
   const importInputRef = useRef<HTMLInputElement>(null);
   // 刷新（清缩略图缓存后强制重渲染）
   const [, setRefreshTick] = useState(0);
@@ -286,6 +310,20 @@ export function HierarchyPanel() {
           message: '为此约束输入一个新名称:',
           initialValue: cur.name,
           onConfirm: (v) => { renameConstraint(id, v); closeRename(); },
+        });
+      };
+    }
+    if (r.kind === 'path-constraint' && r.pathConstraint) {
+      // 双击路径约束行 → 重命名路径约束
+      const id = r.pathConstraint.id;
+      return () => {
+        const cur = usePixiBonesStore.getState().pathConstraints.find((x) => x.id === id);
+        if (!cur) return;
+        setPendingRename({
+          title: '重命名路径约束',
+          message: '为此路径约束输入一个新名称:',
+          initialValue: cur.name,
+          onConfirm: (v) => { renamePathConstraint(id, v); closeRename(); },
         });
       };
     }
@@ -644,7 +682,10 @@ export function HierarchyPanel() {
             : isAnimNode && animations.length > 0
               ? [ANIM_KEY]
               : isConstraintsNode
-                ? constraints.map((c) => 'constraint:' + c.id)
+                ? [
+                    ...constraints.map((c) => 'constraint:' + c.id),
+                    ...pathConstraints.map((c) => 'pathconstraint:' + c.id),
+                  ]
                 : [];
           out.push({
             key: sectionKey,
@@ -667,16 +708,38 @@ export function HierarchyPanel() {
               collapsible: false,
             });
           }
-          // 「约束」分区：列出全部 IK 约束（小图标行，仿 Spine）
+          // 「约束」分区：列出全部 IK 约束 + 路径约束（小图标行，仿 Spine；IK 在前，Path 在后）
           if (isConstraintsNode && !isCollapsed) {
             constraints.forEach((c, j) => {
               out.push({
                 key: 'constraint:' + c.id,
                 kind: 'constraint',
                 depth: depth + 1,
-                isLast: j === constraints.length - 1,
+                isLast: j === constraints.length - 1 && pathConstraints.length === 0,
                 constraint: c,
+                listIndex: j,
+                listLength: constraints.length,
                 icon: '🪢',
+                label: c.name,
+                collapsible: false,
+              });
+            });
+            // ★ 路径约束行：label = 名称，subLabel = 小字「槽名 → 骨1,骨2」
+            pathConstraints.forEach((c, j) => {
+              const slotName = slots.find((x) => x.id === c.targetSlotId)?.name ?? '(无槽)';
+              const boneNames = c.boneIds
+                .map((bid) => bones.find((b) => b.id === bid)?.name ?? '(已删)')
+                .join(',');
+              out.push({
+                key: 'pathconstraint:' + c.id,
+                kind: 'path-constraint',
+                depth: depth + 1,
+                isLast: j === pathConstraints.length - 1,
+                pathConstraint: c,
+                listIndex: j,
+                listLength: pathConstraints.length,
+                subLabel: `${slotName} → ${boneNames}`,
+                icon: '📐',
                 label: c.name,
                 collapsible: false,
               });
@@ -1306,6 +1369,8 @@ export function HierarchyPanel() {
                       onSelectSection={selectSection}
                       selectedConstraintId={selectedConstraintId}
                       onSelectConstraint={selectConstraint}
+                      onRemovePathConstraint={removePathConstraint}
+                      onMovePathConstraint={movePathConstraint}
                       onSelectAnimation={selectAnimationNode}
                       slotBindings={slotBindings}
                       attachmentById={attachmentById}
@@ -1482,19 +1547,46 @@ export function HierarchyPanel() {
           C={C}
         />
       ) : selectedSectionKey === 'constraints' ? (
-        <ConstraintsSectionPropsBlock
-          constraints={constraints}
-          bones={bones}
-          onAdd={(boneId, targetBoneId, childBoneId) => addIkConstraint(boneId, targetBoneId, childBoneId)}
-          onRemove={(id) => removeConstraint(id)}
-          onRename={(id, name) => renameConstraint(id, name)}
-          onRenamePopup={(id) => openConstraintRename(id)}
-          onTarget={(id, targetId) => setConstraintTarget(id, targetId)}
-          onMix={(id, mix) => setConstraintMix(id, mix)}
-          onBend={(id, dir) => setConstraintBendDirection(id, dir)}
-          onMove={(id, toIndex) => moveConstraint(id, toIndex)}
-          C={C}
-        />
+        // ★ 按选中约束的 id 前缀分派：pc_ = 路径约束面板；否则 = IK 面板
+        (selectedConstraintId && selectedConstraintId.startsWith('pc_')) ? (
+          <PathConstraintsSectionPropsBlock
+            pathConstraints={pathConstraints}
+            bones={bones}
+            slots={slots}
+            attachmentPaths={attachmentPaths}
+            onAdd={(targetSlotId, boneIds) => addPathConstraint(targetSlotId, boneIds)}
+            onRemove={(id) => removePathConstraint(id)}
+            onRename={(id, name) => renamePathConstraint(id, name)}
+            onTarget={(id, slotId) => setPathConstraintTarget(id, slotId)}
+            onSetBones={(id, boneIds) => setPathConstraintBones(id, boneIds)}
+            onBoneOrder={(id, fromIndex, toIndex) => setPathConstraintBoneOrder(id, fromIndex, toIndex)}
+            onPositionMode={(id, m) => setPathConstraintPositionMode(id, m)}
+            onPosition={(id, v) => setPathConstraintPosition(id, v)}
+            onSpacingMode={(id, m) => setPathConstraintSpacingMode(id, m)}
+            onSpacing={(id, v) => setPathConstraintSpacing(id, v)}
+            onRotateMode={(id, m) => setPathConstraintRotateMode(id, m)}
+            onRotateMix={(id, v) => setPathConstraintRotateMix(id, v)}
+            onTranslateMix={(id, v) => setPathConstraintTranslateMix(id, v)}
+            onRotationOffset={(id, deg) => setPathConstraintRotationOffset(id, deg)}
+            onMove={(id, toIndex) => movePathConstraint(id, toIndex)}
+            pushHistory={pushHistory}
+            C={C}
+          />
+        ) : (
+          <ConstraintsSectionPropsBlock
+            constraints={constraints}
+            bones={bones}
+            onAdd={(boneId, targetBoneId, childBoneId) => addIkConstraint(boneId, targetBoneId, childBoneId)}
+            onRemove={(id) => removeConstraint(id)}
+            onRename={(id, name) => renameConstraint(id, name)}
+            onRenamePopup={(id) => openConstraintRename(id)}
+            onTarget={(id, targetId) => setConstraintTarget(id, targetId)}
+            onMix={(id, mix) => setConstraintMix(id, mix)}
+            onBend={(id, dir) => setConstraintBendDirection(id, dir)}
+            onMove={(id, toIndex) => moveConstraint(id, toIndex)}
+            C={C}
+          />
+        )
       ) : null}
 
       {/* ===== 大预览浮层：hover 附件图标 2s 后弹出（仿 Spine） =====
@@ -1658,6 +1750,9 @@ interface TreeRowViewProps {
   /** 当前选中的 IK 约束 id（约束行高亮） */
   selectedConstraintId: string | null;
   onSelectConstraint: (id: string) => void;
+  /** 路径约束行：行内删除 / 调整应用顺序 */
+  onRemovePathConstraint?: (id: string) => void;
+  onMovePathConstraint?: (id: string, toIndex: number) => void;
   /** 层级树顶部的「动画」节点被点击 */
   onSelectAnimation: () => void;
   slotBindings: Record<string, SlotBinding>;
@@ -1683,6 +1778,7 @@ function TreeRowView(props: TreeRowViewProps) {
     row, selectedBoneId, onSelect, onAddChild, collapsed, onToggleCollapse, search, C,
     selectedRowKey, onSelectSlot, onSelectAttachment,
     onActivateAttachment, selectedSectionKey, onSelectSection, selectedConstraintId, onSelectConstraint, onSelectAnimation,
+    onRemovePathConstraint, onMovePathConstraint,
     slotBindings, boneNameById, onImport, drag, drop,
     onAssetHoverEnter, onAssetHoverMove, onAssetHoverLeave,
     onRequestRename,
@@ -1698,6 +1794,8 @@ function TreeRowView(props: TreeRowViewProps) {
   const isAnim = row.kind === 'animation';
   /** IK 约束行（🪢，挂在「约束」分区下） */
   const isConstraint = row.kind === 'constraint';
+  /** 路径约束行（📐，挂在「约束」分区下、IK 之后） */
+  const isPathConstraint = row.kind === 'path-constraint';
   /** 分区原始 key（'section:images' → 'images'） */
   const sectionKey = isSection && row.key.startsWith('section:') ? row.key.slice('section:'.length) : null;
   const node = row.node;
@@ -1717,7 +1815,8 @@ function TreeRowView(props: TreeRowViewProps) {
     (isBone && !!node && selectedBoneId === node.id) ||
     ((isSlot || isAsset || isAnim) && row.key === selectedRowKey) ||
     (isSection && sectionKey !== null && selectedSectionKey === sectionKey) ||
-    (isConstraint && !!row.constraint && selectedConstraintId === row.constraint.id);
+    (isConstraint && !!row.constraint && selectedConstraintId === row.constraint.id) ||
+    (isPathConstraint && !!row.pathConstraint && selectedConstraintId === row.pathConstraint.id);
 
   // 绑定信息（按插槽查；附件行显示它所属插槽的绑定）
   const binding = assetSlotId ? slotBindings[assetSlotId] : (slot ? slotBindings[slot.id] : undefined);
@@ -1731,7 +1830,7 @@ function TreeRowView(props: TreeRowViewProps) {
 
   const isCollapsed = collapsed.has(row.key);
   const thumb = isAsset && asset ? attachmentThumb(asset) : null;
-  const clickable = isBone || isAsset || isSection || isSlot || isAnim || isConstraint;
+  const clickable = isBone || isAsset || isSection || isSlot || isAnim || isConstraint || isPathConstraint;
 
   /** 绑定/解绑「该行对应的插槽」 */
   const doBindToggle = () => {
@@ -1794,6 +1893,7 @@ function TreeRowView(props: TreeRowViewProps) {
           onSelectAttachment(assetSlotId, aid, row.key);
         }
         else if (isConstraint && row.constraint) onSelectConstraint(row.constraint.id);
+        else if (isPathConstraint && row.pathConstraint) onSelectConstraint(row.pathConstraint.id);
       }}
       onDoubleClick={(e) => {
         // ★ 双击 = 触发重命名（Spine 行为）
@@ -1857,6 +1957,10 @@ function TreeRowView(props: TreeRowViewProps) {
       {/* 名称（空插槽额外标注，便于区分「插槽还在但没附件」） */}
       <span className="truncate flex-1 text-[14px]">
         {nameEl}
+        {/* 路径约束行：小字「槽名 → 骨1,骨2」 */}
+        {isPathConstraint && row.subLabel && (
+          <span className="ml-1 text-[11px]" style={{ color: C.dim }}>{row.subLabel}</span>
+        )}
         {isSlot && slot && slot.attachmentIds.length === 0 && (
           <span className="ml-1 text-[11px]" style={{ color: C.dim }}>（空）</span>
         )}
@@ -1910,6 +2014,36 @@ function TreeRowView(props: TreeRowViewProps) {
         >
           +
         </button>
+      )}
+
+      {/* 路径约束行右侧：上移 / 下移 / 删除（调整应用顺序；hover 才显示） */}
+      {isPathConstraint && row.pathConstraint && (
+        <div className="flex items-center shrink-0 opacity-0 group-hover:opacity-100">
+          <button
+            className="w-4 h-4 flex items-center justify-center rounded text-[12px]"
+            style={{ background: 'transparent', border: 'none', color: C.dim, cursor: (row.listIndex ?? 0) === 0 ? 'default' : 'pointer' }}
+            disabled={(row.listIndex ?? 0) === 0}
+            title="上移（更先应用）"
+            onClick={(e) => { e.stopPropagation(); onMovePathConstraint?.(row.pathConstraint!.id, (row.listIndex ?? 0) - 1); }}
+          >▲</button>
+          <button
+            className="w-4 h-4 flex items-center justify-center rounded text-[12px]"
+            style={{ background: 'transparent', border: 'none', color: C.dim, cursor: (row.listIndex ?? 0) >= (row.listLength ?? 1) - 1 ? 'default' : 'pointer' }}
+            disabled={(row.listIndex ?? 0) >= (row.listLength ?? 1) - 1}
+            title="下移（更后应用）"
+            onClick={(e) => { e.stopPropagation(); onMovePathConstraint?.(row.pathConstraint!.id, (row.listIndex ?? 0) + 1); }}
+          >▼</button>
+          <button
+            className="w-4 h-4 flex items-center justify-center rounded text-[12px]"
+            style={{ background: 'transparent', border: 'none', color: C.warning, cursor: 'pointer' }}
+            title="删除路径约束"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemovePathConstraint?.(row.pathConstraint!.id);
+              if (selectedConstraintId === row.pathConstraint!.id) usePixiBonesStore.getState().selectSection('constraints');
+            }}
+          >✕</button>
+        </div>
       )}
     </div>
   );
@@ -3156,6 +3290,375 @@ function ConstraintsSectionPropsBlock(props: ConstraintsSectionPropsBlockProps) 
               onChange={(e) => onMix(selected.id, Number(e.target.value))}
             />
             <span className="shrink-0 w-8 text-right" style={{ color: C.dim }}>{Math.round(selected.mix * 100)}%</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =================================================================================
+//  路径约束管理面板（仿 Spine 的 Path Constraint：列表 + 新建 + 属性编辑）
+//  - 与 IK 共用 selectedConstraintId（id 前缀 pc_），树里点 📐 行 → selectConstraint → 这里同步高亮
+// =================================================================================
+interface PathConstraintsSectionPropsBlockProps {
+  pathConstraints: PathConstraintDef[];
+  bones: BoneNode[];
+  slots: PixiBonesSlot[];
+  attachmentPaths: Record<string, PathData>;
+  onAdd: (targetSlotId: string, boneIds: string[]) => void;
+  onRemove: (id: string) => void;
+  onRename: (id: string, name: string) => void;
+  onTarget: (id: string, slotId: string) => void;
+  onSetBones: (id: string, boneIds: string[]) => void;
+  onBoneOrder: (id: string, fromIndex: number, toIndex: number) => void;
+  onPositionMode: (id: string, m: 'fixed' | 'percent') => void;
+  onPosition: (id: string, v: number) => void;
+  onSpacingMode: (id: string, m: PathSpacingMode) => void;
+  onSpacing: (id: string, v: number) => void;
+  onRotateMode: (id: string, m: PathRotateMode) => void;
+  onRotateMix: (id: string, v: number) => void;
+  onTranslateMix: (id: string, v: number) => void;
+  onRotationOffset: (id: string, deg: number) => void;
+  onMove: (id: string, toIndex: number) => void;
+  /** 数字输入 onBlur 前推历史（setPathConstraintPosition 等不推历史，由输入框包一层） */
+  pushHistory: () => void;
+  C: any;
+}
+
+function PathConstraintsSectionPropsBlock(props: PathConstraintsSectionPropsBlockProps) {
+  const {
+    pathConstraints, bones, slots, attachmentPaths,
+    onAdd, onRemove, onRename, onTarget, onSetBones, onBoneOrder,
+    onPositionMode, onPosition, onSpacingMode, onSpacing, onRotateMode,
+    onRotateMix, onTranslateMix, onRotationOffset, onMove, pushHistory, C,
+  } = props;
+  // ★ 选中态收敛到 store：树里的路径约束行点击 → selectConstraint → 这里同步高亮
+  const selectedId = usePixiBonesStore((s) => s.selectedConstraintId);
+  const selectConstraint = usePixiBonesStore((s) => s.selectConstraint);
+  const selected = pathConstraints.find((c) => c.id === selectedId) ?? null;
+
+  // 只有「当前激活附件是路径附件」的插槽才能当目标（约束解算读该插槽激活的 PathData）
+  const pathSlots = slots.filter((s) => {
+    const aid = s.activeAttachmentId;
+    return aid !== null && !!attachmentPaths[aid];
+  });
+  const [newSlot, setNewSlot] = useState(pathSlots[0]?.id ?? '');
+  const [newBoneIds, setNewBoneIds] = useState<string[]>(bones.length > 0 ? [bones[0].id] : []);
+
+  // bones / pathSlots 变化时兜底修正下拉默认值（避免指向已删除的项；React 允许渲染期收敛式调整）
+  if (pathSlots.length > 0 && (!pathSlots.some((s) => s.id === newSlot) || newSlot === '')) setNewSlot(pathSlots[0].id);
+  const boneIds = bones.map((b) => b.id);
+  if (boneIds.length > 0 && newBoneIds.some((id) => !boneIds.includes(id))) {
+    setNewBoneIds(newBoneIds.filter((id) => boneIds.includes(id)));
+  }
+  if (boneIds.length === 0 && newBoneIds.length > 0) setNewBoneIds([]);
+
+  const slotName = (id: string) => slots.find((x) => x.id === id)?.name ?? '(已删)';
+  const boneName = (id: string) => bones.find((b) => b.id === id)?.name ?? '(已删)';
+  const canAdd = newSlot !== '' && newBoneIds.length > 0;
+
+  return (
+    <div style={{ borderTop: '1px solid ' + C.border, background: C.panelDk, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      {/* 标题行 */}
+      <div className="flex items-center px-2 py-1.5 gap-1 shrink-0" style={{ background: C.toolbar, borderBottom: '1px solid ' + C.border }}>
+        <span className="text-[14px] font-semibold" style={{ color: C.selected }}>路径约束</span>
+        <span className="text-[12px]" style={{ color: C.dim }}>{pathConstraints.length} 条</span>
+      </div>
+
+      {/* 约束列表（顺序 = 应用顺序，与 IK 同列表） */}
+      <div className="px-2 py-1 flex flex-col gap-0.5 overflow-y-auto shrink-0" style={{ maxHeight: 160 }}>
+        {pathConstraints.length === 0 && (
+          <div className="text-[13px]" style={{ color: C.dim }}>尚未创建路径约束。用下方「新建」添加。</div>
+        )}
+        {pathConstraints.map((c, i) => (
+          <div
+            key={c.id}
+            onClick={() => selectConstraint(c.id)}
+            className="flex items-center gap-1 rounded px-1.5 py-1 text-[13px] cursor-pointer select-none"
+            style={{
+              background: selectedId === c.id ? C.accentDk : 'transparent',
+              color: selectedId === c.id ? '#fff' : C.text,
+            }}
+          >
+            <span className="flex-1 truncate">
+              {i + 1}. {c.name}
+              <span style={{ color: C.dim }}> · {slotName(c.targetSlotId)} → {c.boneIds.map((bid) => boneName(bid)).join(',')}</span>
+            </span>
+            <button
+              className="w-4 h-4 flex items-center justify-center rounded text-[12px]"
+              style={{ background: 'transparent', border: 'none', color: C.dim, cursor: i === 0 ? 'default' : 'pointer' }}
+              disabled={i === 0}
+              title="上移（更先应用）"
+              onClick={(e) => { e.stopPropagation(); onMove(c.id, i - 1); }}
+            >▲</button>
+            <button
+              className="w-4 h-4 flex items-center justify-center rounded text-[12px]"
+              style={{ background: 'transparent', border: 'none', color: C.dim, cursor: i === pathConstraints.length - 1 ? 'default' : 'pointer' }}
+              disabled={i === pathConstraints.length - 1}
+              title="下移（更后应用）"
+              onClick={(e) => { e.stopPropagation(); onMove(c.id, i + 1); }}
+            >▼</button>
+            <button
+              className="w-4 h-4 flex items-center justify-center rounded text-[12px]"
+              style={{ background: 'transparent', border: 'none', color: C.warning, cursor: 'pointer' }}
+              title="删除约束"
+              onClick={(e) => { e.stopPropagation(); onRemove(c.id); if (selectedId === c.id) usePixiBonesStore.getState().selectSection('constraints'); }}
+            >✕</button>
+          </div>
+        ))}
+      </div>
+
+      {/* 目标插槽未显示路径附件时提示（约束不生效） */}
+      {selected && (() => {
+        const aid = slots.find((x) => x.id === selected.targetSlotId)?.activeAttachmentId ?? null;
+        const hasPath = aid !== null && !!attachmentPaths[aid];
+        return hasPath ? null : (
+          <div className="px-2 py-1 text-[12px]" style={{ background: C.warning + '22', color: C.warning, borderTop: '1px solid ' + C.border }}>
+            ⚠ 目标插槽未显示路径附件，约束暂不生效。请先在画布中激活该插槽的路径附件。
+          </div>
+        );
+      })()}
+
+      {/* 新建约束 */}
+      <div className="px-2 py-1.5 border-t flex flex-col gap-1 text-[13px]" style={{ borderColor: C.border }}>
+        <div className="flex items-center gap-1">
+          <span className="shrink-0" style={{ color: C.dim }}>目标插槽</span>
+          <select
+            className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
+            style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
+            value={newSlot}
+            onChange={(e) => setNewSlot(e.target.value)}
+          >
+            {pathSlots.length === 0 && <option value="">（无可用插槽）</option>}
+            {pathSlots.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <span className="shrink-0" style={{ color: C.dim }}>骨骼（勾选参与）</span>
+          {bones.map((b) => (
+            <label key={b.id} className="flex items-center gap-1 text-[13px] select-none cursor-pointer" style={{ color: C.text }}>
+              <input
+                type="checkbox"
+                checked={newBoneIds.includes(b.id)}
+                onChange={(e) => {
+                  if (e.target.checked) setNewBoneIds([...newBoneIds, b.id]);
+                  else setNewBoneIds(newBoneIds.filter((x) => x !== b.id));
+                }}
+              />
+              <span className="truncate">{b.name}</span>
+            </label>
+          ))}
+        </div>
+        <button
+          className="rounded px-1 py-1 flex items-center justify-center gap-0.5"
+          style={{
+            background: canAdd ? C.accentDk : C.panel,
+            color: canAdd ? '#fff' : C.dim,
+            border: '1px solid ' + C.border,
+            cursor: canAdd ? 'pointer' : 'default',
+          }}
+          disabled={!canAdd}
+          onClick={() => {
+            if (!canAdd) return;
+            onAdd(newSlot, newBoneIds);
+          }}
+        >
+          <span style={{ color: C.accent }}>+</span> 新建路径约束
+        </button>
+      </div>
+
+      {/* 选中约束的属性编辑 */}
+      {selected && (
+        <div className="px-2 py-1.5 border-t flex flex-col gap-1.5 text-[13px]" style={{ borderColor: C.border }}>
+          <div className="flex items-center gap-1">
+            <span className="shrink-0" style={{ color: C.dim }}>名称</span>
+            <input
+              className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
+              style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
+              defaultValue={selected.name}
+              onBlur={(e) => { const v = e.target.value.trim(); if (v && v !== selected.name) onRename(selected.id, v); }}
+              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+            />
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="shrink-0" style={{ color: C.dim }}>目标插槽</span>
+            <select
+              className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
+              style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
+              value={selected.targetSlotId}
+              onChange={(e) => onTarget(selected.id, e.target.value)}
+            >
+              {slots.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+
+          {/* 骨骼列表（顺序 = 沿路径顺序；上移/下移改顺序，✕ 移除，下方下拉添加） */}
+          <div className="flex flex-col gap-0.5">
+            <span className="shrink-0" style={{ color: C.dim }}>骨骼（顺序 = 沿路径）</span>
+            {selected.boneIds.map((bid, i) => (
+              <div key={bid} className="flex items-center gap-1">
+                <span className="flex-1 truncate">{i + 1}. {boneName(bid)}</span>
+                <button
+                  className="w-4 h-4 flex items-center justify-center rounded text-[12px]"
+                  style={{ background: 'transparent', border: 'none', color: C.dim, cursor: i === 0 ? 'default' : 'pointer' }}
+                  disabled={i === 0}
+                  title="上移（更靠路径起点）"
+                  onClick={() => onBoneOrder(selected.id, i, i - 1)}
+                >▲</button>
+                <button
+                  className="w-4 h-4 flex items-center justify-center rounded text-[12px]"
+                  style={{ background: 'transparent', border: 'none', color: C.dim, cursor: i === selected.boneIds.length - 1 ? 'default' : 'pointer' }}
+                  disabled={i === selected.boneIds.length - 1}
+                  title="下移（更靠路径末端）"
+                  onClick={() => onBoneOrder(selected.id, i, i + 1)}
+                >▼</button>
+                <button
+                  className="w-4 h-4 flex items-center justify-center rounded text-[12px]"
+                  style={{ background: 'transparent', border: 'none', color: C.warning, cursor: 'pointer' }}
+                  title="移除骨骼"
+                  onClick={() => onSetBones(selected.id, selected.boneIds.filter((x) => x !== bid))}
+                >✕</button>
+              </div>
+            ))}
+            <select
+              className="w-full rounded px-1 py-0.5 outline-none text-[13px]"
+              style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
+              value=""
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v && !selected.boneIds.includes(v)) onSetBones(selected.id, [...selected.boneIds, v]);
+              }}
+            >
+              <option value="">+ 添加骨骼</option>
+              {bones.filter((b) => !selected.boneIds.includes(b.id)).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-1">
+            <span className="shrink-0" style={{ color: C.dim }}>位置模式</span>
+            <select
+              className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
+              style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
+              value={selected.positionMode}
+              onChange={(e) => onPositionMode(selected.id, e.target.value as 'fixed' | 'percent')}
+            >
+              <option value="percent">百分比</option>
+              <option value="fixed">像素</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="shrink-0" style={{ color: C.dim }}>位置</span>
+            {selected.positionMode === 'percent' ? (
+              // percent：滑块实时改（不推历史）
+              <>
+                <input
+                  type="range"
+                  className="flex-1"
+                  min={0}
+                  max={100}
+                  step={0.1}
+                  value={selected.position}
+                  onChange={(e) => onPosition(selected.id, Number(e.target.value))}
+                />
+                <span className="shrink-0 w-12 text-right" style={{ color: C.dim }}>{selected.position.toFixed(1)}%</span>
+              </>
+            ) : (
+              // fixed：数字输入，onBlur 才推历史并写入
+              <input
+                type="number"
+                className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
+                style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
+                defaultValue={selected.position}
+                onBlur={(e) => {
+                  const v = Number(e.target.value);
+                  if (!isNaN(v) && v !== selected.position) { pushHistory(); onPosition(selected.id, v); }
+                }}
+                onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+              />
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="shrink-0" style={{ color: C.dim }}>间距模式</span>
+            <select
+              className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
+              style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
+              value={selected.spacingMode}
+              onChange={(e) => onSpacingMode(selected.id, e.target.value as PathSpacingMode)}
+            >
+              <option value="length">骨骼长度倍数</option>
+              <option value="fixed">像素</option>
+              <option value="percent">百分比</option>
+              <option value="proportional">按骨骼长度比例</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="shrink-0" style={{ color: C.dim }}>间距</span>
+            <input
+              type="number"
+              className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
+              style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
+              defaultValue={selected.spacing}
+              onBlur={(e) => {
+                const v = Number(e.target.value);
+                if (!isNaN(v) && v !== selected.spacing) { pushHistory(); onSpacing(selected.id, v); }
+              }}
+              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+            />
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="shrink-0" style={{ color: C.dim }}>旋转模式</span>
+            <select
+              className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
+              style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
+              value={selected.rotateMode}
+              onChange={(e) => onRotateMode(selected.id, e.target.value as PathRotateMode)}
+            >
+              <option value="tangent">切线</option>
+              <option value="chain">链条</option>
+              <option value="chainScale">链条缩放</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="shrink-0" style={{ color: C.dim }}>旋转混合</span>
+            <input
+              type="range"
+              className="flex-1"
+              min={0}
+              max={1}
+              step={0.01}
+              value={selected.rotateMix}
+              onChange={(e) => onRotateMix(selected.id, Number(e.target.value))}
+            />
+            <span className="shrink-0 w-8 text-right" style={{ color: C.dim }}>{Math.round(selected.rotateMix * 100)}%</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="shrink-0" style={{ color: C.dim }}>平移混合</span>
+            <input
+              type="range"
+              className="flex-1"
+              min={0}
+              max={1}
+              step={0.01}
+              value={selected.translateMix}
+              onChange={(e) => onTranslateMix(selected.id, Number(e.target.value))}
+            />
+            <span className="shrink-0 w-8 text-right" style={{ color: C.dim }}>{Math.round(selected.translateMix * 100)}%</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="shrink-0" style={{ color: C.dim }}>旋转偏移</span>
+            <input
+              type="number"
+              className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
+              style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
+              defaultValue={selected.rotationOffset}
+              onBlur={(e) => {
+                const v = Number(e.target.value);
+                if (!isNaN(v) && v !== selected.rotationOffset) { pushHistory(); onRotationOffset(selected.id, v); }
+              }}
+              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+            />
+            <span className="shrink-0" style={{ color: C.dim }}>°</span>
           </div>
         </div>
       )}
