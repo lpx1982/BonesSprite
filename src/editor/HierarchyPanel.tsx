@@ -180,8 +180,6 @@ export function HierarchyPanel() {
   const setPathColor = usePixiBonesStore((s) => s.setPathColor);
   const setPathOption = usePixiBonesStore((s) => s.setPathOption);
   const startPathConstraintPick = usePixiBonesStore((s) => s.startPathConstraintPick);
-  const pickPathConstraintPath = usePixiBonesStore((s) => s.pickPathConstraintPath);
-  const pcPickMode = usePixiBonesStore((s) => s.pcPickMode);
   const pushHistory = usePixiBonesStore((s) => s.pushHistory);
   const selectedSectionKey = usePixiBonesStore((s) => s.selectedSectionKey);
   const selectSection = usePixiBonesStore((s) => s.selectSection);
@@ -3527,7 +3525,7 @@ interface PathConstraintsSectionPropsBlockProps {
 function PathConstraintsSectionPropsBlock(props: PathConstraintsSectionPropsBlockProps) {
   const {
     pathConstraints, bones, slots, attachmentPaths,
-    onAdd, onRemove, onRename, onTarget, onSetBones, onBoneOrder,
+    onRemove, onTarget, onSetBones, onBoneOrder,
     onPositionMode, onPosition, onSpacingMode, onSpacing, onRotateMode,
     onRotateMix, onTranslateMix, onRotationOffset, onMove, pushHistory, C,
   } = props;
@@ -3536,38 +3534,59 @@ function PathConstraintsSectionPropsBlock(props: PathConstraintsSectionPropsBloc
   const selectConstraint = usePixiBonesStore((s) => s.selectConstraint);
   const selected = pathConstraints.find((c) => c.id === selectedId) ?? null;
 
-  // 只有「当前激活附件是路径附件」的插槽才能当目标（约束解算读该插槽激活的 PathData）
-  const pathSlots = slots.filter((s) => {
-    const aid = s.activeAttachmentId;
-    return aid !== null && !!attachmentPaths[aid];
-  });
-  const [newSlot, setNewSlot] = useState(pathSlots[0]?.id ?? '');
-  const [newBoneIds, setNewBoneIds] = useState<string[]>(bones.length > 0 ? [bones[0].id] : []);
-
-  // bones / pathSlots 变化时兜底修正下拉默认值（避免指向已删除的项；React 允许渲染期收敛式调整）
-  if (pathSlots.length > 0 && (!pathSlots.some((s) => s.id === newSlot) || newSlot === '')) setNewSlot(pathSlots[0].id);
-  const boneIds = bones.map((b) => b.id);
-  if (boneIds.length > 0 && newBoneIds.some((id) => !boneIds.includes(id))) {
-    setNewBoneIds(newBoneIds.filter((id) => boneIds.includes(id)));
-  }
-  if (boneIds.length === 0 && newBoneIds.length > 0) setNewBoneIds([]);
-
   const slotName = (id: string) => slots.find((x) => x.id === id)?.name ?? '(已删)';
   const boneName = (id: string) => bones.find((b) => b.id === id)?.name ?? '(已删)';
-  const canAdd = newSlot !== '' && newBoneIds.length > 0;
+
+  // ★ Spine 风格面板：折叠区 / 链接滑块 UI 状态
+  const [offsetOpen, setOffsetOpen] = useState(true);
+  const [mixOpen, setMixOpen] = useState(true);
+  const [linkSliders, setLinkSliders] = useState(true);
+
+  // 目标插槽激活的路径附件（约束解算实际读取的路径）
+  const targetSlotObj = slots.find((s) => s.id === selected?.targetSlotId);
+  const targetPathAid = targetSlotObj?.activeAttachmentId ?? null;
+  const targetPathName = targetPathAid && attachmentPaths[targetPathAid] ? targetPathAid : null;
+
+  // Spine 新建流程：选中骨骼 → 新建... → 拾取路径（与「新建→约束→路径约束」同源）
+  const startPathConstraintPick = usePixiBonesStore((s) => s.startPathConstraintPick);
+  const selectAttachment = usePixiBonesStore((s) => s.selectAttachment);
+  const setPathEdit = usePixiBonesStore((s) => s.setPathEdit);
+
+  // 混合滑块联动（Spine「链接滑块」：勾选时旋转/移动滑块同步）
+  const applyRotateMix = (v: number) => {
+    if (!selected) return;
+    onRotateMix(selected.id, v);
+    if (linkSliders) onTranslateMix(selected.id, v);
+  };
+  const applyTranslateMix = (v: number) => {
+    if (!selected) return;
+    onTranslateMix(selected.id, v);
+    if (linkSliders) onRotateMix(selected.id, v);
+  };
 
   return (
     <div style={{ borderTop: '1px solid ' + C.border, background: C.panelDk, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      {/* 标题行 */}
+      {/* 标题行（Spine：路径约束: <name> + 删除） */}
       <div className="flex items-center px-2 py-1.5 gap-1 shrink-0" style={{ background: C.toolbar, borderBottom: '1px solid ' + C.border }}>
-        <span className="text-[14px] font-semibold" style={{ color: C.selected }}>路径约束</span>
-        <span className="text-[12px]" style={{ color: C.dim }}>{pathConstraints.length} 条</span>
+        <span className="text-[14px] font-semibold truncate flex-1" style={{ color: C.selected }}>
+          {selected ? `路径约束: ${selected.name}` : '路径约束'}
+        </span>
+        {selected ? (
+          <button
+            className="w-4 h-4 flex items-center justify-center rounded text-[12px] shrink-0"
+            style={{ background: 'transparent', border: 'none', color: C.warning, cursor: 'pointer' }}
+            title="删除约束"
+            onClick={() => { onRemove(selected.id); usePixiBonesStore.getState().selectSection('constraints'); }}
+          >✕</button>
+        ) : (
+          <span className="text-[12px] shrink-0" style={{ color: C.dim }}>{pathConstraints.length} 条</span>
+        )}
       </div>
 
-      {/* 约束列表（顺序 = 应用顺序，与 IK 同列表） */}
-      <div className="px-2 py-1 flex flex-col gap-0.5 overflow-y-auto shrink-0" style={{ maxHeight: 160 }}>
+      {/* 约束列表（顺序 = 应用顺序） */}
+      <div className="px-2 py-1 flex flex-col gap-0.5 overflow-y-auto shrink-0" style={{ maxHeight: 130 }}>
         {pathConstraints.length === 0 && (
-          <div className="text-[13px]" style={{ color: C.dim }}>尚未创建路径约束。用下方「新建」添加。</div>
+          <div className="text-[13px]" style={{ color: C.dim }}>尚未创建路径约束。点下方「新建...」创建。</div>
         )}
         {pathConstraints.map((c, i) => (
           <div
@@ -3597,90 +3616,58 @@ function PathConstraintsSectionPropsBlock(props: PathConstraintsSectionPropsBloc
               title="下移（更后应用）"
               onClick={(e) => { e.stopPropagation(); onMove(c.id, i + 1); }}
             >▼</button>
-            <button
-              className="w-4 h-4 flex items-center justify-center rounded text-[12px]"
-              style={{ background: 'transparent', border: 'none', color: C.warning, cursor: 'pointer' }}
-              title="删除约束"
-              onClick={(e) => { e.stopPropagation(); onRemove(c.id); if (selectedId === c.id) usePixiBonesStore.getState().selectSection('constraints'); }}
-            >✕</button>
           </div>
         ))}
       </div>
 
+      {/* 底部：新建...（Spine 流程：选中骨骼 → 新建 → 拾取路径） */}
+      <div className="px-2 py-1.5 border-t flex items-center gap-1 shrink-0" style={{ borderColor: C.border }}>
+        <button
+          className="flex-1 rounded px-1 py-1 flex items-center justify-center gap-0.5 text-[13px]"
+          style={{
+            background: C.panel,
+            color: C.text,
+            border: '1px solid ' + C.border,
+            cursor: 'pointer',
+          }}
+          onClick={() => startPathConstraintPick()}
+        >
+          <span style={{ color: C.accent }}>＋</span> 新建...
+        </button>
+      </div>
+
       {/* 目标插槽未显示路径附件时提示（约束不生效） */}
       {selected && (() => {
-        const aid = slots.find((x) => x.id === selected.targetSlotId)?.activeAttachmentId ?? null;
-        const hasPath = aid !== null && !!attachmentPaths[aid];
+        const hasPath = targetPathAid !== null && !!attachmentPaths[targetPathAid];
         return hasPath ? null : (
-          <div className="px-2 py-1 text-[12px]" style={{ background: C.warning + '22', color: C.warning, borderTop: '1px solid ' + C.border }}>
+          <div className="px-2 py-1 text-[12px] shrink-0" style={{ background: C.warning + '22', color: C.warning, borderTop: '1px solid ' + C.border }}>
             ⚠ 目标插槽未显示路径附件，约束暂不生效。请先在画布中激活该插槽的路径附件。
           </div>
         );
       })()}
 
-      {/* 新建约束 */}
-      <div className="px-2 py-1.5 border-t flex flex-col gap-1 text-[13px]" style={{ borderColor: C.border }}>
-        <div className="flex items-center gap-1">
-          <span className="shrink-0" style={{ color: C.dim }}>目标插槽</span>
-          <select
-            className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
-            style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
-            value={newSlot}
-            onChange={(e) => setNewSlot(e.target.value)}
-          >
-            {pathSlots.length === 0 && <option value="">（无可用插槽）</option>}
-            {pathSlots.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-        </div>
-        <div className="flex flex-col gap-0.5">
-          <span className="shrink-0" style={{ color: C.dim }}>骨骼（勾选参与）</span>
-          {bones.map((b) => (
-            <label key={b.id} className="flex items-center gap-1 text-[13px] select-none cursor-pointer" style={{ color: C.text }}>
-              <input
-                type="checkbox"
-                checked={newBoneIds.includes(b.id)}
-                onChange={(e) => {
-                  if (e.target.checked) setNewBoneIds([...newBoneIds, b.id]);
-                  else setNewBoneIds(newBoneIds.filter((x) => x !== b.id));
-                }}
-              />
-              <span className="truncate">{b.name}</span>
-            </label>
-          ))}
-        </div>
-        <button
-          className="rounded px-1 py-1 flex items-center justify-center gap-0.5"
-          style={{
-            background: canAdd ? C.accentDk : C.panel,
-            color: canAdd ? '#fff' : C.dim,
-            border: '1px solid ' + C.border,
-            cursor: canAdd ? 'pointer' : 'default',
-          }}
-          disabled={!canAdd}
-          onClick={() => {
-            if (!canAdd) return;
-            onAdd(newSlot, newBoneIds);
-          }}
-        >
-          <span style={{ color: C.accent }}>+</span> 新建路径约束
-        </button>
-      </div>
-
-      {/* 选中约束的属性编辑 */}
+      {/* 选中约束的属性编辑（Spine 布局） */}
       {selected && (
-        <div className="px-2 py-1.5 border-t flex flex-col gap-1.5 text-[13px]" style={{ borderColor: C.border }}>
+        <div className="px-2 py-1.5 border-t flex flex-col gap-1.5 text-[13px] overflow-y-auto" style={{ borderColor: C.border }}>
+          {/* 路径 */}
           <div className="flex items-center gap-1">
-            <span className="shrink-0" style={{ color: C.dim }}>名称</span>
-            <input
-              className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
-              style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
-              defaultValue={selected.name}
-              onBlur={(e) => { const v = e.target.value.trim(); if (v && v !== selected.name) onRename(selected.id, v); }}
-              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-            />
+            <span className="shrink-0 w-10" style={{ color: C.accent }}>路径</span>
+            <span className="flex-1 min-w-0 truncate" style={{ color: targetPathName ? C.text : C.dim }}>
+              {targetPathName ?? '（无）'}
+            </span>
+            {targetPathAid && targetSlotObj && (
+              <button
+                className="w-4 h-4 flex items-center justify-center rounded text-[12px] shrink-0"
+                style={{ background: 'transparent', border: 'none', color: C.dim, cursor: 'pointer' }}
+                title="选中并编辑该路径"
+                onClick={() => { selectAttachment(targetSlotObj.id, targetPathAid); setPathEdit(targetPathAid); }}
+              >✎</button>
+            )}
           </div>
+
+          {/* 目标（目标插槽） */}
           <div className="flex items-center gap-1">
-            <span className="shrink-0" style={{ color: C.dim }}>目标插槽</span>
+            <span className="shrink-0 w-10" style={{ color: C.accent }}>目标</span>
             <select
               className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
               style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
@@ -3691,9 +3678,189 @@ function PathConstraintsSectionPropsBlock(props: PathConstraintsSectionPropsBloc
             </select>
           </div>
 
-          {/* 骨骼列表（顺序 = 沿路径顺序；上移/下移改顺序，✕ 移除，下方下拉添加） */}
-          <div className="flex flex-col gap-0.5">
-            <span className="shrink-0" style={{ color: C.dim }}>骨骼（顺序 = 沿路径）</span>
+          {/* 间距 */}
+          <div className="flex items-center gap-1">
+            <span className="shrink-0 w-10" style={{ color: C.accent }}>间距</span>
+            <input
+              type="number"
+              className="w-14 shrink-0 rounded px-1 py-0.5 outline-none text-[13px]"
+              style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
+              defaultValue={selected.spacing}
+              onBlur={(e) => {
+                const v = Number(e.target.value);
+                if (!isNaN(v) && v !== selected.spacing) { pushHistory(); onSpacing(selected.id, v); }
+              }}
+              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+            />
+            <input
+              type="range"
+              className="flex-1"
+              min={-200}
+              max={200}
+              step={1}
+              value={selected.spacing}
+              onChange={(e) => onSpacing(selected.id, Number(e.target.value))}
+            />
+            <select
+              className="w-24 shrink-0 rounded px-1 py-0.5 outline-none text-[13px]"
+              style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
+              value={selected.spacingMode}
+              onChange={(e) => onSpacingMode(selected.id, e.target.value as PathSpacingMode)}
+            >
+              <option value="length">长度</option>
+              <option value="fixed">固定</option>
+              <option value="percent">百分比</option>
+              <option value="proportional">按长度比例</option>
+            </select>
+          </div>
+
+          {/* 位置 */}
+          <div className="flex items-center gap-1">
+            <span className="shrink-0 w-10" style={{ color: C.accent }}>位置</span>
+            {selected.positionMode === 'percent' ? (
+              <>
+                <input
+                  type="number"
+                  className="w-14 shrink-0 rounded px-1 py-0.5 outline-none text-[13px]"
+                  style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
+                  defaultValue={selected.position}
+                  onBlur={(e) => {
+                    const v = Number(e.target.value);
+                    if (!isNaN(v) && v !== selected.position) { pushHistory(); onPosition(selected.id, v); }
+                  }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                />
+                <input
+                  type="range"
+                  className="flex-1"
+                  min={0}
+                  max={100}
+                  step={0.1}
+                  value={selected.position}
+                  onChange={(e) => onPosition(selected.id, Number(e.target.value))}
+                />
+              </>
+            ) : (
+              <input
+                type="number"
+                className="w-14 shrink-0 rounded px-1 py-0.5 outline-none text-[13px]"
+                style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
+                defaultValue={selected.position}
+                onBlur={(e) => {
+                  const v = Number(e.target.value);
+                  if (!isNaN(v) && v !== selected.position) { pushHistory(); onPosition(selected.id, v); }
+                }}
+                onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+              />
+            )}
+            <select
+              className="w-24 shrink-0 rounded px-1 py-0.5 outline-none text-[13px]"
+              style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
+              value={selected.positionMode}
+              onChange={(e) => onPositionMode(selected.id, e.target.value as 'fixed' | 'percent')}
+            >
+              <option value="percent">百分比</option>
+              <option value="fixed">像素</option>
+            </select>
+          </div>
+
+          {/* 偏移（折叠） */}
+          <div className="border-t pt-1.5 flex flex-col gap-1" style={{ borderColor: C.border }}>
+            <div className="flex items-center gap-1 cursor-pointer select-none" onClick={() => setOffsetOpen(!offsetOpen)}>
+              <span className="text-[11px]" style={{ color: C.dim }}>{offsetOpen ? '▾' : '▸'}</span>
+              <span style={{ color: C.accent }}>偏移</span>
+            </div>
+            {offsetOpen && (
+              <div className="flex items-center gap-1 pl-3">
+                <span className="shrink-0 w-10" style={{ color: C.accent }}>旋转</span>
+                <input
+                  type="number"
+                  className="w-16 shrink-0 rounded px-1 py-0.5 outline-none text-[13px]"
+                  style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
+                  defaultValue={selected.rotationOffset}
+                  onBlur={(e) => {
+                    const v = Number(e.target.value);
+                    if (!isNaN(v) && v !== selected.rotationOffset) { pushHistory(); onRotationOffset(selected.id, v); }
+                  }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                />
+                <span className="shrink-0" style={{ color: C.dim }}>°</span>
+              </div>
+            )}
+          </div>
+
+          {/* 混合（折叠） */}
+          <div className="border-t pt-1.5 flex flex-col gap-1" style={{ borderColor: C.border }}>
+            <div className="flex items-center gap-1 select-none">
+              <span className="text-[11px] cursor-pointer" style={{ color: C.dim }} onClick={() => setMixOpen(!mixOpen)}>{mixOpen ? '▾' : '▸'}</span>
+              <span style={{ color: C.accent }}>混合</span>
+              <label className="flex items-center gap-0.5 ml-1 text-[12px] cursor-pointer" style={{ color: C.dim }}>
+                <input
+                  type="checkbox"
+                  checked={linkSliders}
+                  onChange={(e) => setLinkSliders(e.target.checked)}
+                />
+                链接滑块
+              </label>
+            </div>
+            {mixOpen && (
+              <>
+                {/* 旋转混合 + 旋转模式 */}
+                <div className="flex items-center gap-1 pl-3">
+                  <span className="shrink-0 w-10" style={{ color: C.accent }}>旋转</span>
+                  <input
+                    type="range"
+                    className="flex-1"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={selected.rotateMix}
+                    onChange={(e) => applyRotateMix(Number(e.target.value))}
+                  />
+                  <span className="shrink-0 w-8 text-right" style={{ color: C.dim }}>{Math.round(selected.rotateMix * 100)}</span>
+                  <select
+                    className="w-24 shrink-0 rounded px-1 py-0.5 outline-none text-[13px]"
+                    style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
+                    value={selected.rotateMode}
+                    onChange={(e) => onRotateMode(selected.id, e.target.value as PathRotateMode)}
+                  >
+                    <option value="tangent">切线</option>
+                    <option value="chain">链条</option>
+                    <option value="chainScale">链条缩放</option>
+                  </select>
+                </div>
+                {/* 移动混合（X/Y 同值联动） */}
+                <div className="flex items-center gap-1 pl-3">
+                  <span className="shrink-0 w-10" style={{ color: C.accent }}>移动</span>
+                  <span className="text-[11px] shrink-0" style={{ color: C.dim }}>X</span>
+                  <input
+                    type="range"
+                    className="flex-1"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={selected.translateMix}
+                    onChange={(e) => applyTranslateMix(Number(e.target.value))}
+                  />
+                  <span className="text-[11px] shrink-0" style={{ color: C.dim }}>Y</span>
+                  <input
+                    type="range"
+                    className="flex-1"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={selected.translateMix}
+                    onChange={(e) => applyTranslateMix(Number(e.target.value))}
+                  />
+                  <span className="shrink-0 w-8 text-right" style={{ color: C.dim }}>{Math.round(selected.translateMix * 100)}</span>
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* 骨骼（顺序 = 沿路径；Spine 的 Bones 区） */}
+          <div className="border-t pt-1.5 flex flex-col gap-0.5" style={{ borderColor: C.border }}>
+            <span className="shrink-0" style={{ color: C.accent }}>骨骼（顺序 = 沿路径）</span>
             {selected.boneIds.map((bid, i) => (
               <div key={bid} className="flex items-center gap-1">
                 <span className="flex-1 truncate">{i + 1}. {boneName(bid)}</span>
@@ -3731,132 +3898,6 @@ function PathConstraintsSectionPropsBlock(props: PathConstraintsSectionPropsBloc
               <option value="">+ 添加骨骼</option>
               {bones.filter((b) => !selected.boneIds.includes(b.id)).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
             </select>
-          </div>
-
-          <div className="flex items-center gap-1">
-            <span className="shrink-0" style={{ color: C.dim }}>位置模式</span>
-            <select
-              className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
-              style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
-              value={selected.positionMode}
-              onChange={(e) => onPositionMode(selected.id, e.target.value as 'fixed' | 'percent')}
-            >
-              <option value="percent">百分比</option>
-              <option value="fixed">像素</option>
-            </select>
-          </div>
-          <div className="flex items-center gap-1">
-            <span className="shrink-0" style={{ color: C.dim }}>位置</span>
-            {selected.positionMode === 'percent' ? (
-              // percent：滑块实时改（不推历史）
-              <>
-                <input
-                  type="range"
-                  className="flex-1"
-                  min={0}
-                  max={100}
-                  step={0.1}
-                  value={selected.position}
-                  onChange={(e) => onPosition(selected.id, Number(e.target.value))}
-                />
-                <span className="shrink-0 w-12 text-right" style={{ color: C.dim }}>{selected.position.toFixed(1)}%</span>
-              </>
-            ) : (
-              // fixed：数字输入，onBlur 才推历史并写入
-              <input
-                type="number"
-                className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
-                style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
-                defaultValue={selected.position}
-                onBlur={(e) => {
-                  const v = Number(e.target.value);
-                  if (!isNaN(v) && v !== selected.position) { pushHistory(); onPosition(selected.id, v); }
-                }}
-                onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-              />
-            )}
-          </div>
-          <div className="flex items-center gap-1">
-            <span className="shrink-0" style={{ color: C.dim }}>间距模式</span>
-            <select
-              className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
-              style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
-              value={selected.spacingMode}
-              onChange={(e) => onSpacingMode(selected.id, e.target.value as PathSpacingMode)}
-            >
-              <option value="length">骨骼长度倍数</option>
-              <option value="fixed">像素</option>
-              <option value="percent">百分比</option>
-              <option value="proportional">按骨骼长度比例</option>
-            </select>
-          </div>
-          <div className="flex items-center gap-1">
-            <span className="shrink-0" style={{ color: C.dim }}>间距</span>
-            <input
-              type="number"
-              className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
-              style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
-              defaultValue={selected.spacing}
-              onBlur={(e) => {
-                const v = Number(e.target.value);
-                if (!isNaN(v) && v !== selected.spacing) { pushHistory(); onSpacing(selected.id, v); }
-              }}
-              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-            />
-          </div>
-          <div className="flex items-center gap-1">
-            <span className="shrink-0" style={{ color: C.dim }}>旋转模式</span>
-            <select
-              className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
-              style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
-              value={selected.rotateMode}
-              onChange={(e) => onRotateMode(selected.id, e.target.value as PathRotateMode)}
-            >
-              <option value="tangent">切线</option>
-              <option value="chain">链条</option>
-              <option value="chainScale">链条缩放</option>
-            </select>
-          </div>
-          <div className="flex items-center gap-1">
-            <span className="shrink-0" style={{ color: C.dim }}>旋转混合</span>
-            <input
-              type="range"
-              className="flex-1"
-              min={0}
-              max={1}
-              step={0.01}
-              value={selected.rotateMix}
-              onChange={(e) => onRotateMix(selected.id, Number(e.target.value))}
-            />
-            <span className="shrink-0 w-8 text-right" style={{ color: C.dim }}>{Math.round(selected.rotateMix * 100)}%</span>
-          </div>
-          <div className="flex items-center gap-1">
-            <span className="shrink-0" style={{ color: C.dim }}>平移混合</span>
-            <input
-              type="range"
-              className="flex-1"
-              min={0}
-              max={1}
-              step={0.01}
-              value={selected.translateMix}
-              onChange={(e) => onTranslateMix(selected.id, Number(e.target.value))}
-            />
-            <span className="shrink-0 w-8 text-right" style={{ color: C.dim }}>{Math.round(selected.translateMix * 100)}%</span>
-          </div>
-          <div className="flex items-center gap-1">
-            <span className="shrink-0" style={{ color: C.dim }}>旋转偏移</span>
-            <input
-              type="number"
-              className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
-              style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
-              defaultValue={selected.rotationOffset}
-              onBlur={(e) => {
-                const v = Number(e.target.value);
-                if (!isNaN(v) && v !== selected.rotationOffset) { pushHistory(); onRotationOffset(selected.id, v); }
-              }}
-              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-            />
-            <span className="shrink-0" style={{ color: C.dim }}>°</span>
           </div>
         </div>
       )}
