@@ -4463,11 +4463,12 @@ export function BoneEditor() {
             const slotId = pctx.slot.id;
             const attachmentId = pctx.attachmentId;
 
-            // 新建顶点模式：单击加结；点回第一个结（12px 内）= 封闭并退出
+            // 新建顶点模式：单击加结；点回第一个结（12px 内）= 封闭并退出；右键 = 结束开放路径（见 onCanvasContextMenu）
             if (stGrid.pathNewVertexMode) {
               ev.stopPropagation();
               const pn = screenToPathLocal(slotId, ev.global.x, ev.global.y);
               if (!pn) return;
+              // 闭合：点回第一个结（≥3 结，12px 内）
               if (path.vertices.length >= 3) {
                 const s0 = pathLocalToScreen(slotId, path.vertices[0].x, path.vertices[0].y);
                 if (Math.hypot(s0.x - ev.global.x, s0.y - ev.global.y) < 12) {
@@ -5038,9 +5039,15 @@ export function BoneEditor() {
       const meshToolOrder: Array<'modify' | 'create' | 'delete'> = ['modify', 'create', 'delete'];
       const onCanvasContextMenu = (e: MouseEvent) => {
         const st = usePixiBonesStore.getState();
-        // 路径编辑优先（右键轮转 create ↔ delete）
+        // 路径编辑优先（新建顶点模式下右键 = 结束开放路径；否则轮转 create ↔ delete）
         if (st.pathEditAttachmentId) {
           e.preventDefault();
+          if (st.pathNewVertexMode) {
+            // ★ Spine 行为：右键结束开放路径（不闭合，直接收尾）；保持编辑态可继续拖结 / 柄
+            st.togglePathNewVertexMode();
+            drawPathGizmos();
+            return;
+          }
           const next = st.pathEditTool === 'create' ? 'delete' : 'create';
           st.setPathTool(next);
           drawPathGizmos();

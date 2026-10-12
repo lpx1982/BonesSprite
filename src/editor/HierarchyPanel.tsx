@@ -2707,7 +2707,7 @@ function PathAttachmentPropsBlock(props: PathAttachmentPropsBlockProps) {
           label={editing ? '退出编辑' : '编辑路径'}
           title={editing
             ? '退出路径编辑'
-            : '进入路径编辑：单击加结、拖结、拖柄、双击删结、右键切换创建/删除工具'}
+            : '进入路径编辑：单击加结、右键结束（开放路径）、点回起点闭合（圆）、拖结、拖柄、双击删结'}
           active={editing}
           pro
         />
