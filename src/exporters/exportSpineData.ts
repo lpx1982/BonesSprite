@@ -187,6 +187,35 @@ export function buildSpineObject(data: ProjectData): Record<string, unknown> {
     });
   }
 
+  // 5.5) transformConstraints ----------------------------------------------
+  // Spine 3.8 形状：target = 源骨骼（提供变换），bones = 受约束骨骼列表。
+  const tcOut: Record<string, unknown>[] = [];
+  for (const c of data.transformConstraints) {
+    const sourceName = boneNameById.get(c.sourceBoneId);
+    const boneName = boneNameById.get(c.boneId);
+    if (!sourceName || !boneName) {
+      warnings.push(`变换约束 "${c.name}" 引用了不存在的骨骼，导出时已跳过`);
+      continue;
+    }
+    tcOut.push({
+      name: c.name,
+      target: sourceName,
+      bones: [boneName],
+      local: c.local,
+      relative: c.additive,
+      rotation: c.offsetRotation,
+      x: c.offsetX,
+      y: c.offsetY,
+      scaleX: c.offsetScaleX,
+      scaleY: c.offsetScaleY,
+      shearY: c.offsetShearY,
+      rotateMix: c.rotateMix,
+      translateMix: c.translateMix,
+      scaleMix: c.scaleMix,
+      shearMix: c.shearMix,
+    });
+  }
+
   // 6) animations --------------------------------------------------------
   const animationsOut: Record<string, unknown> = {};
   for (const anim of data.animations) {
@@ -284,6 +313,7 @@ export function buildSpineObject(data: ProjectData): Record<string, unknown> {
   };
   if (pathsOut.length > 0) root.paths = pathsOut;
   if (pcOut.length > 0) root.pathConstraints = pcOut;
+  if (tcOut.length > 0) root.transformConstraints = tcOut;
   if (Object.keys(animationsOut).length > 0) root.animations = animationsOut;
 
   return root;
@@ -319,6 +349,7 @@ export function exportSpineJsonFile(): void {
     constraints: s.constraints,
     pathConstraints: s.pathConstraints,
     physicsConstraints: s.physicsConstraints,
+    transformConstraints: s.transformConstraints,
   };
   const json = buildSpineJson(data);
   const safeName = (s.projectName || 'skeleton').replace(/[\\/:*?"<>|]/g, '_') || 'skeleton';

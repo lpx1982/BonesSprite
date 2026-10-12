@@ -174,6 +174,9 @@ export function Editor() {
           } else if (s.pcPickMode) {
             e.preventDefault();
             s.cancelPathConstraintPick();
+          } else if (s.tcPickBoneId) {
+            e.preventDefault();
+            s.cancelTransformConstraintPick();
           } else if (s.weightBindMode) {
             // 退出权重绑定模式
             e.preventDefault();
@@ -340,6 +343,8 @@ export function Editor() {
         <IkPickOverlay />
         {/* 路径约束创建流程：顶部横幅 + PICK 光标 + 命名弹窗 */}
         <PathConstraintPickOverlay />
+        {/* 变换约束创建流程：顶部横幅 + PICK 光标 + 命名弹窗 */}
+        <TcPickOverlay />
       </main>
     </div>
   );
@@ -544,6 +549,107 @@ function PathConstraintPickOverlay() {
         </div>
       </div>
       {/* 鼠标旁 PICK 文字 */}
+      {cursor && (
+        <div
+          className="fixed z-[9997] pointer-events-none"
+          style={{
+            left: Math.max(4, cursor.x - 62),
+            top: cursor.y + 8,
+            color: '#fff',
+            fontSize: 11,
+            fontWeight: 700,
+            textShadow: '0 1px 3px rgba(0,0,0,0.9)',
+            background: 'rgba(0,0,0,0.55)',
+            padding: '1px 6px',
+            borderRadius: 3,
+            letterSpacing: 1,
+          }}
+        >
+          PICK
+        </div>
+      )}
+    </>
+  );
+}
+
+// =================================================================================
+//  变换约束创建流程（仿 Spine）
+//    1. 选中骨（= 目标）→ 属性面板「新建」→「约束 → 变换约束」→ 进入拾取模式
+//       （tcPickBoneId = 目标骨 id）
+//    2. 屏幕上方显示横幅「新建变换约束：选择源骨」；鼠标旁显示 PICK
+//    3. 点击画布骨骼 / 层级树骨行 = 拾取源骨（tcPickSourceBoneId 非 null）→ 弹命名对话框
+//    4. 确认 → addTransformConstraint(目标, 源, name) → 清拾取态 → 选中新约束
+//    默认名 = `${源骨名}-to-${目标骨名}`（store 侧兜底）
+// =================================================================================
+function TcPickOverlay() {
+  const tcPickBoneId = usePixiBonesStore((s) => s.tcPickBoneId);
+  const tcPickSourceBoneId = usePixiBonesStore((s) => s.tcPickSourceBoneId);
+  const bones = usePixiBonesStore((s) => s.bones);
+  const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
+
+  // PICK 光标跟随鼠标
+  useEffect(() => {
+    if (!tcPickBoneId) { setCursor(null); return; }
+    const onMove = (e: MouseEvent) => setCursor({ x: e.clientX, y: e.clientY });
+    window.addEventListener('mousemove', onMove);
+    return () => window.removeEventListener('mousemove', onMove);
+  }, [tcPickBoneId]);
+
+  if (tcPickSourceBoneId) {
+    // 已拾取源骨 → 弹命名对话框
+    const targetName = bones.find((b) => b.id === tcPickBoneId)?.name ?? '';
+    const sourceName = bones.find((b) => b.id === tcPickSourceBoneId)?.name ?? '';
+    const defaultName = `${sourceName}-to-${targetName}`;
+    return (
+      <PromptDialog
+        open
+        title="新建变换约束"
+        message={`源骨「${sourceName}」→ 目标骨「${targetName}」。为此约束输入一个新名称:`}
+        initialValue={defaultName}
+        select="all"
+        confirmLabel="确定"
+        cancelLabel="取消"
+        onCancel={() => usePixiBonesStore.getState().cancelTransformConstraintPick()}
+        onConfirm={(value) => {
+          const s = usePixiBonesStore.getState();
+          const name = value.trim() || defaultName;
+          const id = s.addTransformConstraint(s.tcPickBoneId!, s.tcPickSourceBoneId!, name);
+          s.cancelTransformConstraintPick();
+          if (id) s.selectConstraint(id);
+        }}
+      />
+    );
+  }
+
+  if (!tcPickBoneId) return null;
+
+  return (
+    <>
+      {/* 顶部横幅：新建变换约束：选择源骨 */}
+      <div
+        className="fixed z-[9997] pointer-events-none"
+        style={{
+          top: 0, left: 0, right: 0,
+          display: 'flex', justifyContent: 'center',
+          paddingTop: 8,
+        }}
+      >
+        <div
+          style={{
+            background: 'var(--spine-accent-dim)',
+            color: '#fff',
+            fontSize: 13,
+            fontWeight: 600,
+            padding: '4px 14px',
+            borderRadius: 4,
+            border: '1px solid var(--spine-accent)',
+            boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+          }}
+        >
+          新建变换约束：选择源骨
+        </div>
+      </div>
+      {/* 鼠标旁 PICK 文字（对齐 Spine：出现在指针左侧） */}
       {cursor && (
         <div
           className="fixed z-[9997] pointer-events-none"

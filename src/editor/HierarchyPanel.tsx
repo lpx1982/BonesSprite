@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, DOCK_PANEL_DEFAULT_WIDTH, DEFAULT_PATH_COLOR, type BoneNode, type SlotBinding, type IkConstraintDef, type PathConstraintDef, type PathSpacingMode, type PathRotateMode, type PhysicsConstraintDef } from './store';
+import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, DOCK_PANEL_DEFAULT_WIDTH, DEFAULT_PATH_COLOR, type BoneNode, type SlotBinding, type IkConstraintDef, type PathConstraintDef, type PathSpacingMode, type PathRotateMode, type PhysicsConstraintDef, type TransformConstraintDef } from './store';
 import { type PixiBonesLayer, type PixiBonesSlot, type PathData } from '@psd/index';
 import { importAssetFile } from './importAsset';
 import { PromptDialog } from './PromptDialog';
@@ -54,7 +54,7 @@ interface TreeRow {
    * slot  = 插槽行（◉ 插槽名），其下挂它全部附件行
    * asset = 附件行（🖼 图片名）
    */
-  kind: 'project' | 'bone' | 'section' | 'asset' | 'slot' | 'animation' | 'constraint' | 'path-constraint' | 'physics-constraint';
+  kind: 'project' | 'bone' | 'section' | 'asset' | 'slot' | 'animation' | 'constraint' | 'path-constraint' | 'physics-constraint' | 'transform-constraint';
   /** 缩进层级：project=0，根骨/分区=1，更深 = 子骨 / 插槽 / 附件 */
   depth: number;
   /** 是否是同层最后一个（决定连线画「└」还是「├」） */
@@ -70,6 +70,8 @@ interface TreeRow {
   pathConstraint?: PathConstraintDef;
   /** 物理约束行（kind='physics-constraint'）对应的数据 */
   physicsConstraint?: PhysicsConstraintDef;
+  /** 变换约束行（kind='transform-constraint'）对应的数据 */
+  transformConstraint?: TransformConstraintDef;
   /** 约束行在所在列表里的下标 / 长度（▲▼ 按钮禁用判断用） */
   listIndex?: number;
   listLength?: number;
@@ -236,6 +238,18 @@ export function HierarchyPanel() {
   const setPhysicsConstraintBone = usePixiBonesStore((s) => s.setPhysicsConstraintBone);
   const setPhysicsConstraintProp = usePixiBonesStore((s) => s.setPhysicsConstraintProp);
   const movePhysicsConstraint = usePixiBonesStore((s) => s.movePhysicsConstraint);
+  // ===== 变换约束（仿 Spine 3.8 Transform Constraint；与 IK/Path/Physics 共用 selectedConstraintId，前缀 tc_）=====
+  const transformConstraints = usePixiBonesStore((s) => s.transformConstraints);
+  const removeTransformConstraint = usePixiBonesStore((s) => s.removeTransformConstraint);
+  const renameTransformConstraint = usePixiBonesStore((s) => s.renameTransformConstraint);
+  const duplicateTransformConstraint = usePixiBonesStore((s) => s.duplicateTransformConstraint);
+  const setTransformConstraintBone = usePixiBonesStore((s) => s.setTransformConstraintBone);
+  const setTransformConstraintSource = usePixiBonesStore((s) => s.setTransformConstraintSource);
+  const setTransformConstraintProp = usePixiBonesStore((s) => s.setTransformConstraintProp);
+  const setTransformConstraintFlag = usePixiBonesStore((s) => s.setTransformConstraintFlag);
+  const moveTransformConstraint = usePixiBonesStore((s) => s.moveTransformConstraint);
+  const startTransformConstraintPick = usePixiBonesStore((s) => s.startTransformConstraintPick);
+  const tcPickBoneId = usePixiBonesStore((s) => s.tcPickBoneId);
   const importInputRef = useRef<HTMLInputElement>(null);
   // 刷新（清缩略图缓存后强制重渲染）
   const [, setRefreshTick] = useState(0);
@@ -400,6 +414,17 @@ export function HierarchyPanel() {
       message: '为此物理约束输入一个新名称:',
       initialValue: cur.name,
       onConfirm: (v) => { renamePhysicsConstraint(id, v); closeRename(); },
+    });
+  };
+  // 变换约束标题栏「✎」→ 弹窗重命名
+  const openTransformConstraintRename = (id: string) => {
+    const cur = usePixiBonesStore.getState().transformConstraints.find((x) => x.id === id);
+    if (!cur) return;
+    setPendingRename({
+      title: '重命名变换约束',
+      message: '为此变换约束输入一个新名称:',
+      initialValue: cur.name,
+      onConfirm: (v) => { renameTransformConstraint(id, v); closeRename(); },
     });
   };
   // ===== 大预览（hover 附件图标 2s 后弹出该素材的大图） =====
@@ -757,6 +782,7 @@ export function HierarchyPanel() {
                     ...constraints.map((c) => 'constraint:' + c.id),
                     ...pathConstraints.map((c) => 'pathconstraint:' + c.id),
                     ...physicsConstraints.map((c) => 'physicsconstraint:' + c.id),
+                    ...transformConstraints.map((c) => 'transformconstraint:' + c.id),
                   ]
                 : [];
           out.push({
@@ -787,7 +813,7 @@ export function HierarchyPanel() {
                 key: 'constraint:' + c.id,
                 kind: 'constraint',
                 depth: depth + 1,
-                isLast: j === constraints.length - 1 && pathConstraints.length === 0,
+                isLast: j === constraints.length - 1 && pathConstraints.length === 0 && physicsConstraints.length === 0 && transformConstraints.length === 0,
                 constraint: c,
                 listIndex: j,
                 listLength: constraints.length,
@@ -823,12 +849,29 @@ export function HierarchyPanel() {
                 key: 'physicsconstraint:' + c.id,
                 kind: 'physics-constraint',
                 depth: depth + 1,
-                isLast: j === physicsConstraints.length - 1,
+                isLast: j === physicsConstraints.length - 1 && transformConstraints.length === 0,
                 physicsConstraint: c,
                 listIndex: j,
                 listLength: physicsConstraints.length,
                 subLabel: `${boneName}`,
                 icon: '🌊',
+                label: c.name,
+                collapsible: false,
+              });
+            });
+            // ★ 变换约束行：label = 名称，subLabel = 小字「源骨名」（提供变换的骨）
+            transformConstraints.forEach((c, j) => {
+              const sourceName = bones.find((b) => b.id === c.sourceBoneId)?.name ?? '(已删)';
+              out.push({
+                key: 'transformconstraint:' + c.id,
+                kind: 'transform-constraint',
+                depth: depth + 1,
+                isLast: j === transformConstraints.length - 1,
+                transformConstraint: c,
+                listIndex: j,
+                listLength: transformConstraints.length,
+                subLabel: `${sourceName}`,
+                icon: '⚡',
                 label: c.name,
                 collapsible: false,
               });
@@ -907,7 +950,7 @@ export function HierarchyPanel() {
       1,
     );
     return out;
-  }, [projectName, collapsed, childMap, filteredRoots, orderedSlots, attachments, attachmentById, bones, slotBindings, animations, activeAnimationId, attachmentMeshes, constraints, pathConstraints, physicsConstraints]);
+  }, [projectName, collapsed, childMap, filteredRoots, orderedSlots, attachments, attachmentById, bones, slotBindings, animations, activeAnimationId, attachmentMeshes, constraints, pathConstraints, physicsConstraints, transformConstraints]);
 
   // ===== Spine 暗灰配色（直接读 CSS 变量，避免改 Tailwind 主题）=====
   const C = {
@@ -1443,6 +1486,8 @@ export function HierarchyPanel() {
                         // ★ 拾取 IK 目标模式：点骨行 = 选为目标骨
                         const st = usePixiBonesStore.getState();
                         if (st.ikPickBoneId) { st.setIkPickTarget(id); return; }
+                        // ★ 变换约束拾取源骨模式：点骨行 = 拾取为源骨
+                        if (st.tcPickBoneId) { st.pickTransformSourceBone(id); return; }
                         selectBone(id);
                       }}
                       onAddChild={(id) => addBone(id)}
@@ -1462,6 +1507,8 @@ export function HierarchyPanel() {
                       onMovePathConstraint={movePathConstraint}
                       onRemovePhysicsConstraint={removePhysicsConstraint}
                       onMovePhysicsConstraint={movePhysicsConstraint}
+                      onRemoveTransformConstraint={removeTransformConstraint}
+                      onMoveTransformConstraint={moveTransformConstraint}
                       onSelectAnimation={selectAnimationNode}
                       slotBindings={slotBindings}
                       attachmentById={attachmentById}
@@ -1535,6 +1582,10 @@ export function HierarchyPanel() {
               initialValue: `物理约束 ${usePixiBonesStore.getState().physicsConstraints.length + 1}`,
               onConfirm: (v) => { usePixiBonesStore.getState().addPhysicsConstraint(selectedBone.id, v); closeRename(); },
             });
+          }}
+          onCreateTransformConstraint={() => {
+            // 「新建 → 约束 → 变换约束」：当前选中骨 = 目标骨，进入拾取模式选源骨
+            startTransformConstraintPick(selectedBone.id);
           }}
           onDelete={() => {
             if (confirm(`删除 "${selectedBone.name}" 及其子骨？`)) removeBone(selectedBone.id);
@@ -1715,6 +1766,21 @@ export function HierarchyPanel() {
             onBone={(id, boneId) => setPhysicsConstraintBone(id, boneId)}
             onProp={(id, key, v) => setPhysicsConstraintProp(id, key, v)}
             onMove={(id, toIndex) => movePhysicsConstraint(id, toIndex)}
+            C={C}
+          />
+        ) : (selectedConstraintId && selectedConstraintId.startsWith('tc_')) ? (
+          <TransformConstraintsSectionPropsBlock
+            transformConstraints={transformConstraints}
+            bones={bones}
+            onRemove={(id) => removeTransformConstraint(id)}
+            onRename={(id, name) => renameTransformConstraint(id, name)}
+            onRenamePopup={(id) => openTransformConstraintRename(id)}
+            onCopy={(id) => duplicateTransformConstraint(id)}
+            onBone={(id, boneId) => setTransformConstraintBone(id, boneId)}
+            onSource={(id, sourceBoneId) => setTransformConstraintSource(id, sourceBoneId)}
+            onProp={(id, key, v) => setTransformConstraintProp(id, key, v)}
+            onFlag={(id, key, v) => setTransformConstraintFlag(id, key, v)}
+            onMove={(id, toIndex) => moveTransformConstraint(id, toIndex)}
             C={C}
           />
         ) : (
@@ -1902,6 +1968,9 @@ interface TreeRowViewProps {
   /** 物理约束行：行内删除 / 调整应用顺序 */
   onRemovePhysicsConstraint?: (id: string) => void;
   onMovePhysicsConstraint?: (id: string, toIndex: number) => void;
+  /** 变换约束行 hover 按钮回调（调整应用顺序 / 删除） */
+  onRemoveTransformConstraint?: (id: string) => void;
+  onMoveTransformConstraint?: (id: string, toIndex: number) => void;
   /** 层级树顶部的「动画」节点被点击 */
   onSelectAnimation: () => void;
   slotBindings: Record<string, SlotBinding>;
@@ -1928,6 +1997,7 @@ function TreeRowView(props: TreeRowViewProps) {
     selectedRowKey, onSelectSlot, onSelectAttachment,
     onActivateAttachment, selectedSectionKey, onSelectSection, selectedConstraintId, onSelectConstraint, onSelectAnimation,
     onRemovePathConstraint, onMovePathConstraint, onRemovePhysicsConstraint, onMovePhysicsConstraint,
+    onRemoveTransformConstraint, onMoveTransformConstraint,
     slotBindings, boneNameById, onImport, drag, drop,
     onAssetHoverEnter, onAssetHoverMove, onAssetHoverLeave,
     onRequestRename,
@@ -1950,6 +2020,8 @@ function TreeRowView(props: TreeRowViewProps) {
   const isPathConstraint = row.kind === 'path-constraint';
   /** 物理约束行（🌊，挂在「约束」分区下、路径约束之后） */
   const isPhysicsConstraint = row.kind === 'physics-constraint';
+  /** 变换约束行（⚡，挂在「约束」分区下、物理约束之后） */
+  const isTransformConstraint = row.kind === 'transform-constraint';
   /** 分区原始 key（'section:images' → 'images'） */
   const sectionKey = isSection && row.key.startsWith('section:') ? row.key.slice('section:'.length) : null;
   const node = row.node;
@@ -1971,7 +2043,8 @@ function TreeRowView(props: TreeRowViewProps) {
     (isSection && sectionKey !== null && selectedSectionKey === sectionKey) ||
     (isConstraint && !!row.constraint && selectedConstraintId === row.constraint.id) ||
     (isPathConstraint && !!row.pathConstraint && selectedConstraintId === row.pathConstraint.id) ||
-    (isPhysicsConstraint && !!row.physicsConstraint && selectedConstraintId === row.physicsConstraint.id);
+    (isPhysicsConstraint && !!row.physicsConstraint && selectedConstraintId === row.physicsConstraint.id) ||
+    (isTransformConstraint && !!row.transformConstraint && selectedConstraintId === row.transformConstraint.id);
 
   // 绑定信息（按插槽查；附件行显示它所属插槽的绑定）
   const binding = assetSlotId ? slotBindings[assetSlotId] : (slot ? slotBindings[slot.id] : undefined);
@@ -1985,7 +2058,7 @@ function TreeRowView(props: TreeRowViewProps) {
 
   const isCollapsed = collapsed.has(row.key);
   const thumb = isAsset && asset ? attachmentThumb(asset) : null;
-  const clickable = isBone || isAsset || isSection || isSlot || isAnim || isConstraint || isPathConstraint || isPhysicsConstraint;
+  const clickable = isBone || isAsset || isSection || isSlot || isAnim || isConstraint || isPathConstraint || isPhysicsConstraint || isTransformConstraint;
 
   /** 绑定/解绑「该行对应的插槽」 */
   const doBindToggle = () => {
@@ -2063,6 +2136,7 @@ function TreeRowView(props: TreeRowViewProps) {
         else if (isConstraint && row.constraint) onSelectConstraint(row.constraint.id);
         else if (isPathConstraint && row.pathConstraint) onSelectConstraint(row.pathConstraint.id);
         else if (isPhysicsConstraint && row.physicsConstraint) onSelectConstraint(row.physicsConstraint.id);
+        else if (isTransformConstraint && row.transformConstraint) onSelectConstraint(row.transformConstraint.id);
       }}
       onDoubleClick={(e) => {
         // ★ 双击 = 触发重命名（Spine 行为）
@@ -2244,6 +2318,36 @@ function TreeRowView(props: TreeRowViewProps) {
           >✕</button>
         </div>
       )}
+
+      {/* 变换约束行右侧：上移 / 下移 / 删除（调整应用顺序；hover 才显示） */}
+      {isTransformConstraint && row.transformConstraint && (
+        <div className="flex items-center shrink-0 opacity-0 group-hover:opacity-100">
+          <button
+            className="w-4 h-4 flex items-center justify-center rounded text-[12px]"
+            style={{ background: 'transparent', border: 'none', color: C.dim, cursor: (row.listIndex ?? 0) === 0 ? 'default' : 'pointer' }}
+            disabled={(row.listIndex ?? 0) === 0}
+            title="上移（更先应用）"
+            onClick={(e) => { e.stopPropagation(); onMoveTransformConstraint?.(row.transformConstraint!.id, (row.listIndex ?? 0) - 1); }}
+          >▲</button>
+          <button
+            className="w-4 h-4 flex items-center justify-center rounded text-[12px]"
+            style={{ background: 'transparent', border: 'none', color: C.dim, cursor: (row.listIndex ?? 0) >= (row.listLength ?? 1) - 1 ? 'default' : 'pointer' }}
+            disabled={(row.listIndex ?? 0) >= (row.listLength ?? 1) - 1}
+            title="下移（更后应用）"
+            onClick={(e) => { e.stopPropagation(); onMoveTransformConstraint?.(row.transformConstraint!.id, (row.listIndex ?? 0) + 1); }}
+          >▼</button>
+          <button
+            className="w-4 h-4 flex items-center justify-center rounded text-[12px]"
+            style={{ background: 'transparent', border: 'none', color: C.warning, cursor: 'pointer' }}
+            title="删除变换约束"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemoveTransformConstraint?.(row.transformConstraint!.id);
+              if (selectedConstraintId === row.transformConstraint!.id) usePixiBonesStore.getState().selectSection('constraints');
+            }}
+          >✕</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -2418,6 +2522,8 @@ interface BonePropsBlockProps {
   onCreatePathConstraint?: () => void;
   /** 「新建 → 约束 → 物理约束」：对当前选中骨骼直接创建物理约束（单骨，无需拾取） */
   onCreatePhysicsConstraint?: () => void;
+  /** 「新建 → 约束 → 变换约束」：进入拾取模式（当前骨 = 目标，拾取源骨） */
+  onCreateTransformConstraint?: () => void;
   onDelete: () => void;
   /** 重命名骨骼 */
   onRename?: () => void;
@@ -2429,7 +2535,7 @@ interface BonePropsBlockProps {
 }
 
 function BonePropsBlock(props: BonePropsBlockProps) {
-  const { node, parentOptions, onMove, onRotate, onLength, onParent, onAddChild, onCreateIk, onCreatePath, onCreatePathConstraint, onCreatePhysicsConstraint, onDelete, onRename, onCopy, onToggleIsolate, isolated, C } = props;
+  const { node, parentOptions, onMove, onRotate, onLength, onParent, onAddChild, onCreateIk, onCreatePath, onCreatePathConstraint, onCreatePhysicsConstraint, onCreateTransformConstraint, onDelete, onRename, onCopy, onToggleIsolate, isolated, C } = props;
   const rotDeg = (node.rotation * 180) / Math.PI;
   // 输入框统一样式
   const inputStyle: React.CSSProperties = {
@@ -2475,7 +2581,7 @@ function BonePropsBlock(props: BonePropsBlockProps) {
         { icon: '🪝', label: 'IK 约束', action: onCreateIk },
         { icon: '⤳', label: '路径约束', action: onCreatePathConstraint ? () => onCreatePathConstraint() : undefined },
         { icon: '🌊', label: '物理约束', action: onCreatePhysicsConstraint ? () => onCreatePhysicsConstraint() : undefined },
-        { icon: '⇄', label: '变换约束' }, // 未实现
+        { icon: '⚡', label: '变换约束', action: onCreateTransformConstraint ? () => onCreateTransformConstraint() : undefined },
       ],
     },
     { icon: '🎬', label: '事件' }, // 未实现
@@ -4289,6 +4395,358 @@ function PhysicsConstraintsSectionPropsBlock(props: PhysicsConstraintsSectionPro
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// =================================================================================
+//  变换约束属性面板（仿 Spine 4.1 Transform Constraint 截图布局）
+//  UI 结构（对齐参考图）：
+//   标题栏：⚡ 变换约束: <name> + ⚙ / ⧉ / ✎ / ✕
+//   装配：  🎯 源 <骨名> [✎改源] [PRO]
+//           🎯 目标 <骨名> [✎改目标] [✕删除] [PRO]
+//   偏移（折叠）：offsetX / offsetY / offsetRotation(度) / offsetScaleX / offsetScaleY / offsetShearY(度)
+//   混合（折叠）：rotateMix / translateMix / scaleMix / shearMix（0..100%）
+//   属性（折叠，PRO）：6 行钳制 min/max（旋转/平移X/平移Y/缩放X/缩放Y/倾斜Y）+ 选项行 ☐本地 ☐相加 ☐钳制
+//   底部：+ 新建…[PRO] / 皮肤…[PRO 禁用] / ◄► 占位
+// =================================================================================
+interface TransformConstraintsSectionPropsBlockProps {
+  transformConstraints: TransformConstraintDef[];
+  bones: BoneNode[];
+  onRemove: (id: string) => void;
+  onRename: (id: string, name: string) => void;
+  /** 标题栏「✎」→ 弹窗重命名 */
+  onRenamePopup?: (id: string) => void;
+  /** 标题栏「⧉」→ 复制 */
+  onCopy?: (id: string) => void;
+  /** 改目标骨（被约束骨） */
+  onBone: (id: string, boneId: string) => void;
+  /** 改源骨（提供变换骨） */
+  onSource: (id: string, sourceBoneId: string) => void;
+  /** 通用数值属性（Mix / Offset / Properties min/max） */
+  onProp: (id: string, key: keyof Omit<TransformConstraintDef, 'id' | 'name' | 'sourceBoneId' | 'boneId' | 'local' | 'additive' | 'clamped'>, v: number) => void;
+  /** 选项开关（local / additive / clamped） */
+  onFlag: (id: string, key: 'local' | 'additive' | 'clamped', v: boolean) => void;
+  onMove: (id: string, toIndex: number) => void;
+  C: any;
+}
+
+function TransformConstraintsSectionPropsBlock(props: TransformConstraintsSectionPropsBlockProps) {
+  const { transformConstraints, bones, onRemove, onRename, onRenamePopup, onCopy, onBone, onSource, onProp, onFlag, C } = props;
+  const selectedId = usePixiBonesStore((s) => s.selectedConstraintId);
+  const selected = transformConstraints.find((c) => c.id === selectedId) ?? null;
+  const boneName = (id: string) => bones.find((b) => b.id === id)?.name ?? '(已删)';
+  /** 三个折叠区开关 */
+  const [offsetOpen, setOffsetOpen] = useState(true);
+  const [mixOpen, setMixOpen] = useState(true);
+  const [propsOpen, setPropsOpen] = useState(true);
+  /** 源 / 目标行「✎」→ 内联展开骨骼下拉 */
+  const [pickSource, setPickSource] = useState(false);
+  const [pickTarget, setPickTarget] = useState(false);
+
+  const numCls = 'w-14 shrink-0 rounded px-1 py-0.5 outline-none text-[13px]';
+  const numStyle = { background: C.panel, color: C.text, border: '1px solid ' + C.border };
+  const blurOnEnter = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+  };
+  if (!selected) {
+    return (
+      <div style={{ borderTop: '1px solid ' + C.border, background: C.panelDk }}>
+        <PanelTitleBar
+          icon="⚡" kindLabel="变换约束" name="（未选中）" C={C}
+        />
+      </div>
+    );
+  }
+
+  /** 折叠区标题按钮（▼/▶ + 名称 + 右侧 extra） */
+  const foldBtn = (open: boolean, toggle: () => void, label: string, extra?: React.ReactNode) => (
+    <button
+      className="flex items-center gap-1 w-full text-left py-0.5"
+      style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}
+      onClick={toggle}
+    >
+      <span className="text-[10px]" style={{ color: C.dim }}>{open ? '▼' : '▶'}</span>
+      <span className="text-[12px] font-semibold" style={{ color: C.text }}>{label}</span>
+      {extra}
+    </button>
+  );
+
+  /** 数值行：icon + label + 数字输入 + 滑块 + 数值 + [PRO/单位] */
+  const renderNumRow = (
+    key: 'offsetX' | 'offsetY' | 'offsetRotation' | 'offsetScaleX' | 'offsetScaleY' | 'offsetShearY' | 'rotateMix' | 'translateMix' | 'scaleMix' | 'shearMix',
+    icon: string,
+    label: string,
+    min: number,
+    max: number,
+    step: number,
+    opts: { signed?: boolean; pct?: boolean; pro?: boolean; unit?: string } = {},
+  ) => {
+    const v = selected[key];
+    const display = opts.pct ? Math.round(v * 100 * 10) / 10 : Math.round(v * 10) / 10;
+    return (
+      <div key={key} className="flex items-center gap-1">
+        <span className="shrink-0 w-4 text-center text-[12px]" style={{ color: C.dim }}>{icon}</span>
+        <span className="shrink-0 w-10 text-[12px]" style={{ color: C.accent }}>{label}</span>
+        <input
+          type="number"
+          className={numCls}
+          style={numStyle}
+          min={opts.pct ? (opts.signed ? -100 : 0) : min}
+          max={opts.pct ? 100 : max}
+          step={opts.pct ? 0.1 : step}
+          defaultValue={display}
+          onBlur={(e) => {
+            const n = Number(e.target.value);
+            if (isNaN(n)) return;
+            const k = opts.pct
+              ? Math.max(opts.signed ? -1 : 0, Math.min(1, n / 100))
+              : Math.max(min, Math.min(max, n));
+            onProp(selected.id, key, k);
+          }}
+          onKeyDown={blurOnEnter}
+        />
+        <input
+          type="range"
+          className="flex-1"
+          min={opts.pct ? (opts.signed ? -100 : 0) : min}
+          max={opts.pct ? 100 : max}
+          step={opts.pct ? 0.1 : step}
+          value={Math.max(opts.pct ? (opts.signed ? -100 : 0) : min, Math.min(opts.pct ? 100 : max, display))}
+          onChange={(e) => {
+            const n = Number(e.target.value);
+            onProp(selected.id, key, opts.pct ? n / 100 : n);
+          }}
+        />
+        <span className="shrink-0 w-8 text-right text-[11px]" style={{ color: C.dim }}>{display}</span>
+        {opts.unit ? <span className="shrink-0 text-[10px]" style={{ color: C.dim }}>{opts.unit}</span> : null}
+        {opts.pro ? <ProBadge C={C} /> : null}
+      </div>
+    );
+  };
+
+  /** 钳制 min/max 行（Properties 区）：左「最小」右「最大」+ 彩色圆点 + 数值输入 */
+  const renderClampRow = (
+    minKey: 'minRotate' | 'minTranslateX' | 'minTranslateY' | 'minScaleX' | 'minScaleY' | 'minShearY',
+    maxKey: 'maxRotate' | 'maxTranslateX' | 'maxTranslateY' | 'maxScaleX' | 'maxScaleY' | 'maxShearY',
+    icon: string,
+    label: string,
+    dot: string,
+    isDeg: boolean,
+  ) => {
+    const fmt = (x: number) => (Number.isFinite(x) ? String(Math.round(x * 10) / 10) : '∞');
+    const parse = (s: string): number => {
+      const t = s.trim();
+      if (t === '' || t === '∞' || t === '-∞' || t === 'infinity' || t === '-infinity') return Infinity;
+      const n = Number(s);
+      return isNaN(n) ? Infinity : n;
+    };
+    return (
+      <div key={minKey} className="flex items-center gap-1">
+        <span className="shrink-0 w-4 text-center text-[12px]" style={{ color: C.dim }}>{icon}</span>
+        <span className="shrink-0 w-10 text-[12px]" style={{ color: C.accent }}>{label}</span>
+        <span className="text-[10px] shrink-0" style={{ color: C.dim }}>最小</span>
+        <input
+          type="number"
+          className="w-11 shrink-0 rounded px-1 py-0.5 outline-none text-[12px]"
+          style={numStyle}
+          defaultValue={fmt(selected[minKey])}
+          onBlur={(e) => onProp(selected.id, minKey, parse(e.target.value))}
+          onKeyDown={blurOnEnter}
+        />
+        <span className="w-2.5 h-2.5 shrink-0 rounded-full" style={{ background: dot }} />
+        <span className="text-[10px] shrink-0" style={{ color: C.dim }}>最大</span>
+        <input
+          type="number"
+          className="w-11 shrink-0 rounded px-1 py-0.5 outline-none text-[12px]"
+          style={numStyle}
+          defaultValue={fmt(selected[maxKey])}
+          onBlur={(e) => onProp(selected.id, maxKey, parse(e.target.value))}
+          onKeyDown={blurOnEnter}
+        />
+        {isDeg ? <span className="shrink-0 text-[10px]" style={{ color: C.dim }}>°</span> : null}
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ borderTop: '1px solid ' + C.border, background: C.panelDk, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      {/* 标题栏：⚡ 变换约束: <name> + ⚙ / ⧉ / ✎ / ✕ */}
+      <PanelTitleBar
+        icon="⚡"
+        kindLabel="变换约束"
+        name={selected.name}
+        C={C}
+        onDelete={() => {
+          onRemove(selected.id);
+          usePixiBonesStore.getState().selectSection('constraints');
+        }}
+        deleteTitle="删除该变换约束"
+        onRename={onRenamePopup ? () => onRenamePopup!(selected.id) : () => onRename(selected.id, selected.name)}
+        onCopy={onCopy ? () => onCopy!(selected.id) : undefined}
+      />
+
+      <div className="px-2 py-1.5 flex flex-col gap-1.5 text-[13px] overflow-y-auto" style={{ borderTop: '1px solid ' + C.border }}>
+        {/* ── 装配：源 / 目标 两行 ── */}
+        {/* 源：提供变换的骨（Spine JSON target） */}
+        <div className="flex items-center gap-1">
+          <span className="shrink-0 w-4 text-center text-[12px]" style={{ color: C.dim }}>🎯</span>
+          <span className="shrink-0 w-9 text-[12px]" style={{ color: C.accent }}>源</span>
+          {pickSource ? (
+            <select
+              className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
+              style={numStyle}
+              autoFocus
+              value={selected.sourceBoneId}
+              onChange={(e) => { onSource(selected.id, e.target.value); setPickSource(false); }}
+              onBlur={() => setPickSource(false)}
+            >
+              {bones.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          ) : (
+            <span className="flex-1 truncate text-[13px]" style={{ color: C.selected }}>{boneName(selected.sourceBoneId)}</span>
+          )}
+          <button
+            className="w-5 h-4 flex items-center justify-center rounded text-[12px] shrink-0"
+            style={{ background: 'transparent', border: 'none', color: C.dim, cursor: 'pointer' }}
+            title="在画布/树里拾取源骨（或点击 ✎ 下拉更换）"
+            onClick={(e) => { e.stopPropagation(); setPickSource(!pickSource); }}
+          >✎</button>
+          <ProBadge C={C} />
+        </div>
+        {/* 目标：被约束的骨（Spine JSON bones[0]） */}
+        <div className="flex items-center gap-1">
+          <span className="shrink-0 w-4 text-center text-[12px]" style={{ color: C.dim }}>🎯</span>
+          <span className="shrink-0 w-9 text-[12px]" style={{ color: C.accent }}>目标</span>
+          {pickTarget ? (
+            <select
+              className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
+              style={numStyle}
+              autoFocus
+              value={selected.boneId}
+              onChange={(e) => { onBone(selected.id, e.target.value); setPickTarget(false); }}
+              onBlur={() => setPickTarget(false)}
+            >
+              {bones.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          ) : (
+            <span className="flex-1 truncate text-[13px]" style={{ color: C.selected }}>{boneName(selected.boneId)}</span>
+          )}
+          <button
+            className="w-5 h-4 flex items-center justify-center rounded text-[12px] shrink-0"
+            style={{ background: 'transparent', border: 'none', color: C.dim, cursor: 'pointer' }}
+            title="更换目标骨骼"
+            onClick={(e) => { e.stopPropagation(); setPickTarget(!pickTarget); }}
+          >✎</button>
+          <button
+            className="w-5 h-4 flex items-center justify-center rounded text-[12px] shrink-0"
+            style={{ background: 'transparent', border: 'none', color: '#e06c75', cursor: 'pointer' }}
+            title="删除该变换约束"
+            onClick={(e) => { e.stopPropagation(); onRemove(selected.id); usePixiBonesStore.getState().selectSection('constraints'); }}
+          >✕</button>
+          <ProBadge C={C} />
+        </div>
+
+        {/* ── 偏移 Offset（可折叠；PRO + 匹配 占位） ── */}
+        {foldBtn(offsetOpen, () => setOffsetOpen(!offsetOpen), '偏移',
+          <span className="ml-auto flex items-center gap-1 shrink-0">
+            <button
+              className="rounded px-1.5 text-[11px]"
+              style={{ background: C.panel, color: C.dim, border: '1px solid ' + C.border, cursor: 'not-allowed' }}
+              disabled
+              title="匹配源骨骼当前值（PRO，暂未实现）"
+            >匹配</button>
+            <ProBadge C={C} />
+          </span>)}
+        {offsetOpen && (
+          <div className="flex flex-col gap-1.5">
+            {renderNumRow('offsetX', '↔', '平移X', -9999, 9999, 1, { signed: true })}
+            {renderNumRow('offsetY', '↕', '平移Y', -9999, 9999, 1, { signed: true })}
+            {renderNumRow('offsetRotation', '🔄', '旋转', -180, 180, 1, { signed: true, unit: '°' })}
+            {renderNumRow('offsetScaleX', '🟥', '缩放X', 0, 3, 0.01, { unit: 'x' })}
+            {renderNumRow('offsetScaleY', '🟥', '缩放Y', 0, 3, 0.01, { unit: 'x' })}
+            {renderNumRow('offsetShearY', '📐', '倾斜Y', -180, 180, 1, { signed: true, unit: '°' })}
+          </div>
+        )}
+
+        {/* ── 混合 Mix（可折叠；PRO 占位） ── */}
+        {foldBtn(mixOpen, () => setMixOpen(!mixOpen), '混合',
+          <span className="ml-auto flex items-center gap-1 shrink-0">
+            <button
+              className="rounded px-1.5 text-[11px]"
+              style={{ background: C.panel, color: C.dim, border: '1px solid ' + C.border, cursor: 'not-allowed' }}
+              disabled
+              title="匹配源骨骼当前值（PRO，暂未实现）"
+            >匹配</button>
+            <ProBadge C={C} />
+          </span>)}
+        {mixOpen && (
+          <div className="flex flex-col gap-1.5">
+            {renderNumRow('rotateMix', '🔄', '旋转', 0, 1, 0.01, { pct: true })}
+            {renderNumRow('translateMix', '↔', '平移', 0, 1, 0.01, { pct: true })}
+            {renderNumRow('scaleMix', '📐', '缩放', 0, 1, 0.01, { pct: true })}
+            {renderNumRow('shearMix', '➗', '倾斜', 0, 1, 0.01, { pct: true })}
+          </div>
+        )}
+
+        {/* ── 属性 Properties（可折叠；PRO + 匹配 占位） ── */}
+        {foldBtn(propsOpen, () => setPropsOpen(!propsOpen), '属性',
+          <span className="ml-auto flex items-center gap-1 shrink-0">
+            <button
+              className="rounded px-1.5 text-[11px]"
+              style={{ background: C.panel, color: C.dim, border: '1px solid ' + C.border, cursor: 'not-allowed' }}
+              disabled
+              title="匹配源骨骼当前值（PRO，暂未实现）"
+            >匹配</button>
+            <ProBadge C={C} />
+          </span>)}
+        {propsOpen && (
+          <div className="flex flex-col gap-1.5">
+            {renderClampRow('minRotate', 'maxRotate', '🔄', '旋转', '#4FB8F8', true)}
+            {renderClampRow('minTranslateX', 'maxTranslateX', '↔', '平移X', '#4FB8F8', false)}
+            {renderClampRow('minTranslateY', 'maxTranslateY', '↕', '平移Y', '#4FB8F8', false)}
+            {renderClampRow('minScaleX', 'maxScaleX', '🟥', '缩放X', '#E61E1E', false)}
+            {renderClampRow('minScaleY', 'maxScaleY', '🟥', '缩放Y', '#E61E1E', false)}
+            {renderClampRow('minShearY', 'maxShearY', '📐', '倾斜Y', '#F0A020', true)}
+            {/* 选项行：☐本地 ☐相加 ☐钳制 */}
+            <div className="flex items-center gap-3 pt-0.5">
+              <label className="flex items-center gap-1 text-[12px]" style={{ color: C.text, cursor: 'pointer' }}>
+                <input type="checkbox" checked={selected.local} onChange={(e) => onFlag(selected.id, 'local', e.target.checked)} />
+                本地
+              </label>
+              <label className="flex items-center gap-1 text-[12px]" style={{ color: C.text, cursor: 'pointer' }}>
+                <input type="checkbox" checked={selected.additive} onChange={(e) => onFlag(selected.id, 'additive', e.target.checked)} />
+                相加
+              </label>
+              <label className="flex items-center gap-1 text-[12px]" style={{ color: C.text, cursor: 'pointer' }}>
+                <input type="checkbox" checked={selected.clamped} onChange={(e) => onFlag(selected.id, 'clamped', e.target.checked)} />
+                钳制
+              </label>
+            </div>
+          </div>
+        )}
+
+        {/* ── 底部动作栏：+ 新建…[PRO] / 皮肤…[PRO 禁用] / ◄► 占位 ── */}
+        <div className="flex items-center gap-1.5 pt-1.5 border-t" style={{ borderColor: C.border }}>
+          <button
+            className="flex-1 rounded px-2 py-1 text-[12px] shrink-0"
+            style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border, cursor: 'pointer' }}
+            onClick={() => usePixiBonesStore.getState().addTransformConstraint(selected.boneId, selected.sourceBoneId)}
+            title="以当前 源→目标 新建一条变换约束"
+          >+ 新建<ProBadge C={C} /></button>
+          <button
+            className="rounded px-2 py-1 text-[12px] shrink-0 opacity-60"
+            style={{ background: C.panel, color: C.dim, border: '1px solid ' + C.border, cursor: 'not-allowed' }}
+            disabled
+            title="皮肤（PRO 功能，暂不支持）"
+          >皮肤…<ProBadge C={C} /></button>
+          <button
+            className="w-7 h-6 shrink-0 flex items-center justify-center rounded text-[14px]"
+            style={{ background: 'transparent', border: '1px solid ' + C.border, color: C.dim, cursor: 'pointer' }}
+            title="变换设置（暂为占位）"
+          >◄►</button>
+        </div>
+      </div>
     </div>
   );
 }

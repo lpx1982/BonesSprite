@@ -281,6 +281,45 @@ export interface PhysicsConstraintDef {
   mix: number;
 }
 
+/**
+ * 变换约束定义（仿 Spine 3.8 TransformConstraint）。
+ * 把「源骨骼」的世界变换按混合权重复制给「目标骨骼」并叠加偏移。
+ * 语义对齐 Spine：source（源）= 提供变换的骨；bone（目标）= 被约束的骨
+ * （Spine JSON 里 target = 源，bones[0] = 目标）。
+ * 钳制 min/max（Spine 4.1 clamped）暂存参数，解算未生效（占位）。
+ */
+export interface TransformConstraintDef {
+  id: string;                 // 前缀 tc_
+  name: string;
+  /** 源骨骼（提供变换；Spine JSON target） */
+  sourceBoneId: string;
+  /** 目标骨骼（被约束；Spine JSON bones[0]） */
+  boneId: string;
+  /** 混合 Mix：0..1 */
+  rotateMix: number;
+  translateMix: number;
+  scaleMix: number;
+  shearMix: number;
+  /** 偏移 Offset：offsetX/Y 像素；offsetRotation/offsetShearY 度；offsetScaleX/Y 乘数 */
+  offsetX: number;
+  offsetY: number;
+  offsetRotation: number;
+  offsetScaleX: number;
+  offsetScaleY: number;
+  offsetShearY: number;
+  /** 属性 Properties：钳制 min/max（Spine 4.1 clamped，暂存不生效） */
+  minRotate: number; maxRotate: number;
+  minTranslateX: number; maxTranslateX: number;
+  minTranslateY: number; maxTranslateY: number;
+  minScaleX: number; maxScaleX: number;
+  minScaleY: number; maxScaleY: number;
+  minShearY: number; maxShearY: number;
+  /** 选项：本地 / 相加（Spine 3.8 relative）/ 钳制 */
+  local: boolean;
+  additive: boolean;
+  clamped: boolean;
+}
+
 /** 撤销 / 重做快照的内容（骨树 + 插槽变换 + 网格顶点 + 选中骨 + 动画 + 约束）。 */
 export type HistorySnapshot = {
   bones: BoneNode[];
@@ -298,6 +337,8 @@ export type HistorySnapshot = {
   pathConstraints: PathConstraintDef[];
   /** 物理约束也纳入快照（增删/改参数都能 Cmd+Z 撤销） */
   physicsConstraints: PhysicsConstraintDef[];
+  /** 变换约束也纳入快照（增删/改参数都能 Cmd+Z 撤销） */
+  transformConstraints: TransformConstraintDef[];
   // ===== 素材 / 插槽相关（让插槽/附件的删除、重命名、复制也能 Cmd+Z / Cmd+Shift+Z）=====
   slots: PixiBonesSlot[];
   /** 素材库：canvas 保留同一引用（canvas 内容创建后不变），数组结构可还原 */
@@ -335,6 +376,7 @@ function makeSnapshot(s: PixiBonesState): HistorySnapshot {
     constraints: JSON.parse(JSON.stringify(s.constraints)),
     pathConstraints: JSON.parse(JSON.stringify(s.pathConstraints)),
     physicsConstraints: JSON.parse(JSON.stringify(s.physicsConstraints)),
+    transformConstraints: JSON.parse(JSON.stringify(s.transformConstraints)),
     slots: JSON.parse(JSON.stringify(s.slots)),
     images: s.images.map(cloneLayerTree),
     slotVisibility: JSON.parse(JSON.stringify(s.slotVisibility)),
@@ -361,6 +403,7 @@ function snapshotToState(snap: HistorySnapshot) {
     constraints: snap.constraints,
     pathConstraints: snap.pathConstraints,
     physicsConstraints: snap.physicsConstraints,
+    transformConstraints: snap.transformConstraints,
     slots: snap.slots,
     images: snap.images,
     slotVisibility: snap.slotVisibility,
@@ -406,6 +449,8 @@ export interface ProjectData {
   pathConstraints: PathConstraintDef[];
   /** 物理约束列表（仿 Spine 4.1；旧存档缺省为 []） */
   physicsConstraints: PhysicsConstraintDef[];
+  /** 变换约束列表（仿 Spine 3.8；旧存档缺省为 []） */
+  transformConstraints: TransformConstraintDef[];
   editorTab?: EditorTab;
   viewport?: { panX: number; panY: number; zoom: number };
 }
@@ -898,6 +943,40 @@ export interface PixiBonesState {
   physicsDeterministic: boolean;
   setPhysicsDeterministic: (v: boolean) => void;
 
+  // ---- 变换约束（仿 Spine 3.8 Transform Constraint；源骨骼提供变换，目标骨骼被约束）----
+  /** 变换约束列表。 */
+  transformConstraints: TransformConstraintDef[];
+  /** 新建一条变换约束：boneId = 目标（被约束骨），sourceBoneId = 源（提供变换骨）。name 可自定义（默认 `源名-to-目标名`）。返回新 id。 */
+  addTransformConstraint: (boneId: string, sourceBoneId: string, name?: string) => string;
+  /** 删除变换约束（id 不存在则忽略） */
+  removeTransformConstraint: (id: string) => void;
+  /** 重命名变换约束 */
+  renameTransformConstraint: (id: string, name: string) => void;
+  /** 复制变换约束：深拷贝一份（新 id，name 加「 副本」），插入到原约束后并选中副本 */
+  duplicateTransformConstraint: (id: string) => void;
+  /** 改目标骨骼（被约束骨） */
+  setTransformConstraintBone: (id: string, boneId: string) => void;
+  /** 改源骨骼（提供变换骨） */
+  setTransformConstraintSource: (id: string, sourceBoneId: string) => void;
+  /** 通用数值属性设置（Mix 区 rotate/translate/scale/shear + Offset 区 x/y/rotation/scaleX/scaleY/shearY + Properties 区 min/max）。推历史。 */
+  setTransformConstraintProp: (id: string, key: keyof Omit<TransformConstraintDef, 'id' | 'name' | 'sourceBoneId' | 'boneId' | 'local' | 'additive' | 'clamped'>, v: number) => void;
+  /** 选项开关设置（local / additive / clamped） */
+  setTransformConstraintFlag: (id: string, key: 'local' | 'additive' | 'clamped', v: boolean) => void;
+  /** 调整变换约束的应用顺序：把 id 对应约束移到新索引（0 = 最先应用；Spine 固定全部 IK → 全部 Transform → 全部 Path → 全部 Physics） */
+  moveTransformConstraint: (id: string, toIndex: number) => void;
+
+  // ---- 变换约束创建拾取流程（仿 Spine：选骨 → 新建 → 变换约束 → 拾取源骨 → 弹窗命名）----
+  /** 正在等待拾取源骨（非 null = 「新建变换约束：选择源骨」拾取模式；boneId = 已定的目标骨）。 */
+  tcPickBoneId: string | null;
+  /** 已拾取的目标骨 id（触发命名弹窗；确认后创建约束并清空）。 */
+  tcPickSourceBoneId: string | null;
+  /** 开始拾取源骨（boneId = 目标骨 id） */
+  startTransformConstraintPick: (boneId: string) => void;
+  /** 用户点选了某根骨作为源骨（触发命名弹窗） */
+  pickTransformSourceBone: (sourceBoneId: string) => void;
+  /** 取消拾取（Esc / 横幅 ✕） */
+  cancelTransformConstraintPick: () => void;
+
   // ---- IK 约束创建流程（仿 Spine：选骨 → 新建 → IK → 拾取目标 → 弹窗命名）----
   /** 正在等待拾取 IK 目标骨（非 null = 「新建 ik 约束：选择目标」拾取模式）。 */
   ikPickBoneId: string | null;
@@ -1385,6 +1464,13 @@ let _physicsConstraintIdCounter = 0;
 function genPhysicsConstraintId(): string {
   _physicsConstraintIdCounter++;
   return `phy_${_physicsConstraintIdCounter}`;
+}
+
+/** 变换约束 id 自增（前缀 tc_，独立计数）。 */
+let _transformConstraintIdCounter = 0;
+function genTransformConstraintId(): string {
+  _transformConstraintIdCounter++;
+  return `tc_${_transformConstraintIdCounter}`;
 }
 
 /** 路径附件 id 自增（独立 id 空间，不在 images / 图层里）。 */
@@ -2878,6 +2964,139 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   setPhysicsSimulate: (v) => set({ physicsSimulate: v }),
   setPhysicsDeterministic: (v) => set({ physicsDeterministic: v }),
 
+  // ---- 变换约束（仿 Spine 3.8 Transform Constraint）----
+  transformConstraints: [],
+  tcPickBoneId: null,
+  tcPickSourceBoneId: null,
+  addTransformConstraint: (boneId, sourceBoneId, name) => {
+    const s = get();
+    if (!s.bones.some((b) => b.id === boneId) || !s.bones.some((b) => b.id === sourceBoneId)) return '';
+    const id = genTransformConstraintId();
+    const targetName = s.bones.find((b) => b.id === boneId)?.name ?? '';
+    const sourceName = s.bones.find((b) => b.id === sourceBoneId)?.name ?? '';
+    const cName = name && name.trim() ? name.trim() : `${sourceName}-to-${targetName}`;
+    s.pushHistory();
+    const def: TransformConstraintDef = {
+      id,
+      name: cName,
+      sourceBoneId,
+      boneId,
+      // Mix：默认全部 1（Spine 默认 rotateMix/translateMix/scaleMix/shearMix 均为 1）
+      rotateMix: 1,
+      translateMix: 1,
+      scaleMix: 1,
+      shearMix: 1,
+      // Offset：全部 0 / 1
+      offsetX: 0,
+      offsetY: 0,
+      offsetRotation: 0,
+      offsetScaleX: 1,
+      offsetScaleY: 1,
+      offsetShearY: 0,
+      // Properties：钳制 min/max（Spine 4.1 clamped，暂存不生效）
+      minRotate: -180, maxRotate: 180,
+      minTranslateX: -Infinity, maxTranslateX: Infinity,
+      minTranslateY: -Infinity, maxTranslateY: Infinity,
+      minScaleX: -Infinity, maxScaleX: Infinity,
+      minScaleY: -Infinity, maxScaleY: Infinity,
+      minShearY: -Infinity, maxShearY: Infinity,
+      // 选项
+      local: false,
+      additive: false,
+      clamped: false,
+    };
+    set((st) => ({
+      transformConstraints: [...st.transformConstraints, def],
+      // 与 IK / 路径 / 物理约束共用 selectedConstraintId（id 前缀 tc_ 区分）
+      selectedConstraintId: id,
+      // 新建后立即切到「约束」分区并清掉其它选中态，让属性面板能显示出来
+      selectedSectionKey: 'constraints',
+      selectedBoneId: null,
+      selectedBoneIds: [],
+      selectedSlotId: null,
+      selectedSlotIds: [],
+      selectedAttachmentId: null,
+      selectedAttachmentIds: [],
+      selectedRowKey: null,
+      tcPickBoneId: null,
+      tcPickSourceBoneId: null,
+    }));
+    return id;
+  },
+  removeTransformConstraint: (id) => {
+    const s = get();
+    if (!s.transformConstraints.some((c) => c.id === id)) return;
+    s.pushHistory();
+    set((st) => ({
+      transformConstraints: st.transformConstraints.filter((c) => c.id !== id),
+      selectedConstraintId: st.selectedConstraintId === id ? null : st.selectedConstraintId,
+    }));
+  },
+  renameTransformConstraint: (id, name) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    get().pushHistory();
+    set((st) => ({
+      transformConstraints: st.transformConstraints.map((c) => (c.id === id ? { ...c, name: trimmed } : c)),
+    }));
+  },
+  duplicateTransformConstraint: (id) => {
+    const s = get();
+    const src = s.transformConstraints.find((c) => c.id === id);
+    if (!src) return;
+    const newId = genTransformConstraintId();
+    s.pushHistory();
+    set((st) => {
+      const idx = st.transformConstraints.findIndex((c) => c.id === id);
+      const copy: TransformConstraintDef = { ...src, id: newId, name: src.name + ' 副本' };
+      const list = st.transformConstraints.slice();
+      list.splice(idx < 0 ? list.length : idx + 1, 0, copy);
+      return { transformConstraints: list, selectedConstraintId: newId };
+    });
+  },
+  setTransformConstraintBone: (id, boneId) => {
+    const s = get();
+    if (!s.bones.some((b) => b.id === boneId)) return;
+    s.pushHistory();
+    set((st) => ({
+      transformConstraints: st.transformConstraints.map((x) => (x.id === id ? { ...x, boneId } : x)),
+    }));
+  },
+  setTransformConstraintSource: (id, sourceBoneId) => {
+    const s = get();
+    if (!s.bones.some((b) => b.id === sourceBoneId)) return;
+    s.pushHistory();
+    set((st) => ({
+      transformConstraints: st.transformConstraints.map((x) => (x.id === id ? { ...x, sourceBoneId } : x)),
+    }));
+  },
+  setTransformConstraintProp: (id, key, v) => {
+    get().pushHistory();
+    set((st) => ({
+      transformConstraints: st.transformConstraints.map((x) => (x.id === id ? { ...x, [key]: v } : x)),
+    }));
+  },
+  setTransformConstraintFlag: (id, key, v) => {
+    get().pushHistory();
+    set((st) => ({
+      transformConstraints: st.transformConstraints.map((x) => (x.id === id ? { ...x, [key]: v } : x)),
+    }));
+  },
+  moveTransformConstraint: (id, toIndex) => {
+    const s = get();
+    const from = s.transformConstraints.findIndex((c) => c.id === id);
+    if (from < 0) return;
+    const list = s.transformConstraints.slice();
+    const [item] = list.splice(from, 1);
+    const idx = Math.max(0, Math.min(list.length, toIndex));
+    list.splice(idx, 0, item);
+    s.pushHistory();
+    set({ transformConstraints: list });
+  },
+  startTransformConstraintPick: (boneId) => set({ tcPickBoneId: boneId, tcPickSourceBoneId: null }),
+  pickTransformSourceBone: (sourceBoneId) => set({ tcPickSourceBoneId: sourceBoneId }),
+  cancelTransformConstraintPick: () => set({ tcPickBoneId: null, tcPickSourceBoneId: null }),
+
   showLeftPanel: false,
   showRightPanel: false,  // 默认隐藏层级树，用户从 View 菜单手动开启
   showRulers: true,
@@ -3097,6 +3316,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       constraints: [],
       pathConstraints: [],
       physicsConstraints: [],
+      transformConstraints: [],
       selectedConstraintId: null,
       // —— 各种选中态清零 ——
       selectedSlotId: null,
@@ -3117,6 +3337,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       pcPickPathSlotId: null,
       pcPickBoneIds: [],
       pcPickRetargetId: null,
+      tcPickBoneId: null,
+      tcPickSourceBoneId: null,
       weightBindMode: false,
       weightMeshId: null,
       traceDialogOpen: false,
@@ -3162,6 +3384,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     pcPickPathSlotId: null,
     pcPickBoneIds: [],
     pcPickRetargetId: null,
+    tcPickBoneId: null,
+    tcPickSourceBoneId: null,
     pathEditAttachmentId: null,
     meshEditSlotId: null,
   }),
@@ -3195,6 +3419,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       constraints: d.constraints ?? [],
       // 路径约束（旧存档缺省为空）
       pathConstraints: d.pathConstraints ?? [],
+      // 变换约束（旧存档缺省为空）
+      transformConstraints: d.transformConstraints ?? [],
       constraintRuntimeMix: {},
   pathConstraintRuntime: {},
       currentTime: 0,
@@ -3218,6 +3444,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       pcPickPathSlotId: null,
       pcPickBoneIds: [],
       pcPickRetargetId: null,
+      tcPickBoneId: null,
+      tcPickSourceBoneId: null,
       weightBindMode: false,
       weightMeshId: null,
       traceDialogOpen: false,
@@ -3252,6 +3480,15 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       _pathConstraintIdCounter,
       Math.max(0, ...(d.pathConstraints ?? []).map((c) => {
         if (!c.id.startsWith('pc_')) return 0;
+        const n = parseInt(c.id.slice(3), 10);
+        return Number.isFinite(n) ? n : 0;
+      })),
+    );
+    // 变换约束 id 计数器对齐（tc_ 前缀）
+    _transformConstraintIdCounter = Math.max(
+      _transformConstraintIdCounter,
+      Math.max(0, ...(d.transformConstraints ?? []).map((c) => {
+        if (!c.id.startsWith('tc_')) return 0;
         const n = parseInt(c.id.slice(3), 10);
         return Number.isFinite(n) ? n : 0;
       })),
@@ -3986,10 +4223,11 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   }),
   selectConstraint: (id) => {
     const s = get();
-    // IK / 路径约束 / 物理约束共用 selectedConstraintId（id 前缀区分：ik_ / pc_ / phy_）
+    // IK / 路径约束 / 物理约束 / 变换约束共用 selectedConstraintId（id 前缀区分：ik_ / pc_ / phy_ / tc_）
     if (!s.constraints.some((c) => c.id === id)
       && !s.pathConstraints.some((c) => c.id === id)
-      && !s.physicsConstraints.some((c) => c.id === id)) return;
+      && !s.physicsConstraints.some((c) => c.id === id)
+      && !s.transformConstraints.some((c) => c.id === id)) return;
     set({
       selectedConstraintId: id,
       selectedSectionKey: 'constraints',
@@ -4156,9 +4394,10 @@ setActiveTool: (t) => set((s) => {
         slotStyle: omit(state.slotStyle),
         slotTransforms: omit(state.slotTransforms),
         slotOrder: state.slotOrder.filter((sid) => !removedSlots.has(sid)),
-        // ★ 删除引用被删骨骼的约束（路径约束 / 物理约束）
+        // ★ 删除引用被删骨骼的约束（路径约束 / 物理约束 / 变换约束）
         pathConstraints: state.pathConstraints.filter((c) => !c.boneIds.some((bid) => toRemove.has(bid))),
         physicsConstraints: state.physicsConstraints.filter((c) => !toRemove.has(c.boneId)),
+        transformConstraints: state.transformConstraints.filter((c) => !toRemove.has(c.boneId) && !toRemove.has(c.sourceBoneId)),
       };
     });
   },

@@ -26,7 +26,7 @@
  *   - 所有 slot 初始绑定到 root
  */
 import type { PixiBonesLayer, PixiBonesSlot, PathData, PathVertex } from '@psd/types';
-import type { BoneNode, SlotBinding, EditorAnimation, AnimProperty, AnimTrack, AnimKeyframe, ProjectData, PathConstraintDef, PathConstraintAnimProp, PathSpacingMode, PathRotateMode } from '../editor/store';
+import type { BoneNode, SlotBinding, EditorAnimation, AnimProperty, AnimTrack, AnimKeyframe, ProjectData, PathConstraintDef, PathConstraintAnimProp, PathSpacingMode, PathRotateMode, TransformConstraintDef } from '../editor/store';
 import { PC_PROP_ANIM, DEFAULT_PATH_COLOR } from '../editor/store';
 import { parseImageFile } from '@psd/parseImage';
 
@@ -71,6 +71,27 @@ export interface SpinePathConstraint {
   [k: string]: unknown;
 }
 
+/** Spine 3.8 变换约束形状：target = 源骨骼（提供变换），bones = 受约束骨骼列表。 */
+export interface SpineTransformConstraint {
+  name: string;
+  target: string;
+  bones?: string[];
+  local?: boolean;
+  relative?: boolean;
+  /** offsetRotation（度） / offsetX / offsetY（像素） / offsetScaleX / offsetScaleY / offsetShearY（度） */
+  rotation?: number;
+  x?: number;
+  y?: number;
+  scaleX?: number;
+  scaleY?: number;
+  shearY?: number;
+  rotateMix?: number;
+  translateMix?: number;
+  scaleMix?: number;
+  shearMix?: number;
+  [k: string]: unknown;
+}
+
 /** psd2spine 风格的顶层 JSON 形状（只声明用到的字段，其余宽容忽略）。 */
 export interface SpineJson {
   skeleton?: { images?: string; [k: string]: unknown };
@@ -79,6 +100,7 @@ export interface SpineJson {
   skins?: Record<string, Record<string, Record<string, SpineAttachment>>>;
   paths?: SpinePath[];
   pathConstraints?: SpinePathConstraint[];
+  transformConstraints?: SpineTransformConstraint[];
   animations?: Record<string, SpineAnimationTrack>;
 }
 
@@ -455,6 +477,57 @@ export async function buildProjectFromSpineJson(
     }
   }
 
+  // 2.6) 变换约束定义 -------------------------------------------------------
+  //   json.transformConstraints → TransformConstraintDef
+  //   Spine 语义：target = 源骨骼（提供变换），bones[0] = 目标骨骼（被约束）。
+  //   必须在动画解析之前构建（动画轨道按约束名找 id）。
+  const transformConstraintsOut: TransformConstraintDef[] = [];
+  {
+    let tcCounter = 0;
+    for (const tc of json.transformConstraints ?? []) {
+      const sourceBoneId = idByName.get(tc.target);
+      if (!sourceBoneId) {
+        warnings.push(`变换约束 "${tc.name}" 的目标 "${tc.target}" 不是已导入的骨骼，已忽略`);
+        continue;
+      }
+      const boneIds = (tc.bones ?? [])
+        .map((bn) => idByName.get(bn))
+        .filter((x): x is string => !!x);
+      if (boneIds.length === 0) {
+        warnings.push(`变换约束 "${tc.name}" 没有可用的受约束骨骼，已忽略`);
+        continue;
+      }
+      const boneId = boneIds[0];
+      // 钳制 min/max 无对应字段（Spine 3.8 没有 clamped），全部给默认值
+      transformConstraintsOut.push({
+        id: `tc_imported_${++tcCounter}`,
+        name: tc.name,
+        sourceBoneId,
+        boneId,
+        rotateMix: tc.rotateMix ?? 1,
+        translateMix: tc.translateMix ?? 1,
+        scaleMix: tc.scaleMix ?? 1,
+        shearMix: tc.shearMix ?? 1,
+        offsetX: tc.x ?? 0,
+        offsetY: tc.y ?? 0,
+        offsetRotation: tc.rotation ?? 0,
+        offsetScaleX: tc.scaleX ?? 1,
+        offsetScaleY: tc.scaleY ?? 1,
+        offsetShearY: tc.shearY ?? 0,
+        minRotate: -180, maxRotate: 180,
+        minTranslateX: -Infinity, maxTranslateX: Infinity,
+        minTranslateY: -Infinity, maxTranslateY: Infinity,
+        minScaleX: -Infinity, maxScaleX: Infinity,
+        minScaleY: -Infinity, maxScaleY: Infinity,
+        minShearY: -Infinity, maxShearY: Infinity,
+        local: !!tc.local,
+        // Spine 3.8 relative（相对自身变换）≈ 我们 additive 模式
+        additive: !!tc.relative,
+        clamped: false,
+      });
+    }
+  }
+
   // 3) 动画 ----------------------------------------------------------------
   // Spine 动画轨道 property 字符串 → 我们的 AnimProperty
   const SPINE_PROP_MAP: Record<string, AnimProperty> = {
@@ -609,6 +682,7 @@ export async function buildProjectFromSpineJson(
     constraints: [],
     pathConstraints: pathConstraintsOut,
     physicsConstraints: [],
+    transformConstraints: transformConstraintsOut,
     editorTab: animationsOut.length > 0 ? 'animate' : 'setup',
     viewport: { panX: 0, panY: 0, zoom: 1 },
   };

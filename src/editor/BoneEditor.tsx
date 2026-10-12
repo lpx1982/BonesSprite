@@ -12,12 +12,13 @@ import {
   FederatedPointerEvent,
   FederatedWheelEvent,
 } from 'pixi.js';
-import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, type BoneNode, type SlotBinding, type IkConstraintDef, type PathConstraintDef, type PhysicsConstraintDef } from './store';
+import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, type BoneNode, type SlotBinding, type IkConstraintDef, type PathConstraintDef, type PhysicsConstraintDef, type TransformConstraintDef } from './store';
 import { Bone as EngineBone } from '@engine/Bone';
 import { Skeleton } from '@engine/Skeleton';
 import { applyIkConstraints, type IkSolveContext } from '@engine/IkConstraint';
 import { applyPathConstraints, pathPointAt, pathLengthOf, pathNearestT, type PathSolveContext } from '@engine/PathConstraint';
 import { applyPhysicsConstraints, createPhysicsRuntime, resetPhysicsState, type PhysicsSolveContext, type PhysicsRuntimeState } from '@engine/PhysicsConstraint';
+import { applyTransformConstraints, type TransformSolveContext } from '@engine/TransformConstraint';
 import { parsePsd, type PixiBonesLayer, type PixiBonesPsd, type PixiBonesSlot } from '@psd/index';
 import type { MeshData, PathData, PathVertex } from '@psd/types';
 import { importAssetFile } from './importAsset';
@@ -117,6 +118,42 @@ function applyPathConstraintsToSkeleton(
     });
   }
   if (contexts.length > 0) applyPathConstraints(skeleton, contexts);
+}
+
+/**
+ * 把 store 里的变换约束组装成引擎解算上下文，并按顺序应用到引擎骨架。
+ * 只影响引擎骨骼（world 矩阵），不写回 store。
+ * 必须在 applyIkConstraintsToSkeleton 之后、applyPathConstraintsToSkeleton 之前调用
+ * （Spine 固定顺序：全部 IK → 全部 Transform → 全部 Path → 全部 Physics）。
+ */
+function applyTransformConstraintsToSkeleton(
+  skeleton: Skeleton,
+  transformConstraints: TransformConstraintDef[],
+  boneById: Map<string, EngineBone>,
+): void {
+  const contexts: TransformSolveContext[] = [];
+  for (const c of transformConstraints) {
+    const source = boneById.get(c.sourceBoneId);
+    const target = boneById.get(c.boneId);
+    if (!source || !target) continue;
+    contexts.push({
+      source,
+      target,
+      rotateMix: c.rotateMix,
+      translateMix: c.translateMix,
+      scaleMix: c.scaleMix,
+      shearMix: c.shearMix,
+      offsetX: c.offsetX,
+      offsetY: c.offsetY,
+      offsetRotation: c.offsetRotation,
+      offsetScaleX: c.offsetScaleX,
+      offsetScaleY: c.offsetScaleY,
+      offsetShearY: c.offsetShearY,
+      additive: c.additive,
+      local: c.local,
+    });
+  }
+  if (contexts.length > 0) applyTransformConstraints(skeleton, contexts);
 }
 
 /** 物理约束运行时状态（跨帧保留 offset / velocity）。键 = 约束 id。 */
@@ -2669,6 +2706,9 @@ export function BoneEditor() {
         //   之后所有 getWorldPosition / getWorldTip 拿到的都是 IK 后的结果）。
         //   注意：只影响引擎骨架，不写回 store（store 保存的是未约束的设置姿态）。
         applyIkConstraintsToSkeleton(skel, usePixiBonesStore.getState().constraints, boneById);
+        // ★ 变换约束：IK 之后、Path 之前应用（Spine 固定顺序：全部 IK → 全部 Transform → 全部 Path → 全部 Physics）。
+        //   把「源骨骼」的世界变换按混合权重复制给「目标骨骼」并叠加偏移，只影响引擎骨架。
+        applyTransformConstraintsToSkeleton(skel, usePixiBonesStore.getState().transformConstraints, boneById);
         // ★ 路径约束：IK 之后应用（Spine 固定顺序：全部 IK → 全部 Path）。
         //   骨骼会沿目标插槽的路径附件平移 + 旋转；图层的 wrap 矩阵由
         //   computeSlotWorldMatrix 在 applyBindings 里同源算出，落点与画线一致。
@@ -3076,6 +3116,12 @@ export function BoneEditor() {
                 const bRef = skeletonRef ? findBoneByRefWorld(skeletonRef, node.id) : null;
                 const wp = bRef && skeletonRef ? skeletonRef.getWorldPosition(bRef) : { x: node.x, y: node.y };
                 stIk.createIkTargetBone(wp.x, wp.y);
+                return;
+              }
+              // ★ 变换约束创建：拾取源骨阶段点骨骼 = 拾取（触发命名弹窗）
+              const stTc = usePixiBonesStore.getState();
+              if (stTc.tcPickBoneId) {
+                stTc.pickTransformSourceBone(node.id);
                 return;
               }
               // ★ 路径约束创建：拾取受约束骨骼阶段点骨骼 = 拾取（Shift 累加；单击完成）
