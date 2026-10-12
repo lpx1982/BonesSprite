@@ -625,8 +625,8 @@ export interface PixiBonesState {
    *  自动进入编辑 + 新建顶点模式。命名 `路径 ${n}`（n = 当前路径数 + 1）。推历史。 */
   createPathAttachment: (slotId: string) => string;
   /** 骨骼属性面板「新建 → 路径」：创建一个绑定到该骨骼的新插槽 + 空路径附件，
-   *  自动进入编辑 + 新建顶点模式（单击加结）。命名 `路径 ${n}`（n = 当前路径数 + 1）。推历史。 */
-  createPathSlotForBone: (boneId: string) => string;
+   *  自动进入编辑 + 新建顶点模式（单击加结）。name 缺省时命名 `路径 ${n}`（n = 当前路径数 + 1）。推历史。 */
+  createPathSlotForBone: (boneId: string, name?: string) => string;
   /** 删除路径附件：删数据 + 从所有插槽摘除引用；若正在编辑该路径则退出编辑。推历史。 */
   removePathAttachment: (attachmentId: string) => void;
   /** 结构变化（增删结 / 封闭 / 反转 / 冻结 / 属性）。推历史。 */
@@ -2074,17 +2074,18 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     }));
     return id;
   },
-  createPathSlotForBone: (boneId) => {
+  createPathSlotForBone: (boneId, name) => {
     const s = get();
     if (!s.bones.some((b) => b.id === boneId)) return '';
     const slotId = genSlotId();
     const pathId = genPathId();
     const n = Object.keys(s.attachmentPaths).length + 1;
-    const name = `路径 ${n}`;
+    // 命名：优先用调用方传入的名称（新建对话框），否则默认「路径 n」
+    const slotName = name && name.trim() ? name.trim() : `路径 ${n}`;
     s.pushHistory();
     set((st) => ({
       // 新插槽（绑定到当前骨骼，ref = 单位矩阵：绑定瞬间 delta = I，插槽随骨走）
-      slots: [...st.slots, { id: slotId, name, attachmentIds: [pathId], activeAttachmentId: pathId }],
+      slots: [...st.slots, { id: slotId, name: slotName, attachmentIds: [pathId], activeAttachmentId: pathId }],
       slotOrder: [...st.slotOrder, slotId],
       slotBindings: { ...st.slotBindings, [slotId]: { boneId, ref: [1, 0, 0, 1, 0, 0] } },
       slotVisibility: { ...st.slotVisibility, [slotId]: true },

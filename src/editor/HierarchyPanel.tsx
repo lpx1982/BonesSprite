@@ -170,6 +170,7 @@ export function HierarchyPanel() {
   const pathEditAttachmentId = usePixiBonesStore((s) => s.pathEditAttachmentId);
   const setPathEdit = usePixiBonesStore((s) => s.setPathEdit);
   const createPathAttachment = usePixiBonesStore((s) => s.createPathAttachment);
+  const createPathSlotForBone = usePixiBonesStore((s) => s.createPathSlotForBone);
   const removePathAttachment = usePixiBonesStore((s) => s.removePathAttachment);
   const freezePath = usePixiBonesStore((s) => s.freezePath);
   const resetPath = usePixiBonesStore((s) => s.resetPath);
@@ -1439,6 +1440,15 @@ export function HierarchyPanel() {
             const ids = st.selectedBoneIds.length >= 2 ? st.selectedBoneIds : [selectedBone.id];
             st.startIkPick(ids[0], ids[1] ?? null);
           }}
+          onCreatePath={() => {
+            // 「新建 → 路径」：先弹统一命名对话框（PromptDialog），确认后创建绑定到当前骨骼的新路径
+            setPendingRename({
+              title: '新建路径',
+              message: '为新路径输入一个名称:',
+              initialValue: `路径 ${Object.keys(attachmentPaths).length + 1}`,
+              onConfirm: (v) => { createPathSlotForBone(selectedBone.id, v); closeRename(); },
+            });
+          }}
           onDelete={() => {
             if (confirm(`删除 "${selectedBone.name}" 及其子骨？`)) removeBone(selectedBone.id);
           }}
@@ -2246,6 +2256,8 @@ interface BonePropsBlockProps {
   onAddChild: () => void;
   /** 「新建」菜单：创建 IK 约束（目标骨由父级决定） */
   onCreateIk?: () => void;
+  /** 「新建 → 路径」：先弹命名对话框，确认后创建绑定到当前骨骼的新路径 */
+  onCreatePath?: () => void;
   onDelete: () => void;
   /** 重命名骨骼 */
   onRename?: () => void;
@@ -2257,10 +2269,8 @@ interface BonePropsBlockProps {
 }
 
 function BonePropsBlock(props: BonePropsBlockProps) {
-  const { node, parentOptions, onMove, onRotate, onLength, onParent, onAddChild, onCreateIk, onDelete, onRename, onCopy, onToggleIsolate, isolated, C } = props;
+  const { node, parentOptions, onMove, onRotate, onLength, onParent, onAddChild, onCreateIk, onCreatePath, onDelete, onRename, onCopy, onToggleIsolate, isolated, C } = props;
   const rotDeg = (node.rotation * 180) / Math.PI;
-  // 新建 → 路径：创建绑定到当前骨骼的新插槽 + 空路径附件（对齐 Spine 入口）
-  const createPathSlotForBone = usePixiBonesStore((s) => s.createPathSlotForBone);
   // 输入框统一样式
   const inputStyle: React.CSSProperties = {
     background: C.panelDk,
@@ -2297,8 +2307,8 @@ function BonePropsBlock(props: BonePropsBlockProps) {
     { icon: '◉', label: '插槽' }, // 未实现
     { icon: '🧴', label: '皮肤' }, // 未实现
     { icon: '▦', label: '网格' }, // 未实现
-    // 「新建 → 路径」：创建绑定到当前骨骼的新插槽 + 空路径附件（对齐 Spine 入口）
-    { icon: '✒️', label: '路径', action: () => { createPathSlotForBone(node.id); } },
+    // 「新建 → 路径」：先弹命名对话框（统一 PromptDialog UI），确认后创建绑定到当前骨骼的新路径
+    { icon: '✒️', label: '路径', action: onCreatePath ? () => onCreatePath() : undefined },
     {
       icon: '🪢', label: '约束',
       children: [
