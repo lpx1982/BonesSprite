@@ -3,6 +3,7 @@ import { usePixiBonesStore } from './store';
 import { useT, type Locale } from './i18n';
 import { saveProjectToFile, loadProjectFromFile, PROJECT_FILE_EXT } from './projectIO';
 import { importDataFromFiles } from '../exporters/importDataFlow';
+import { exportSpineJsonFile } from '../exporters/exportSpineData';
 import { PromptDialog } from './PromptDialog';
 import logoImg from '/logo.png';
 import folderIcon from './icons/folder.png';
@@ -76,7 +77,7 @@ const MENU_ITEMS: MenuItem[] = [
   { icon: '📥', labelKey: 'menu.import_project' },
   { icon: '📊', labelKey: 'menu.import_data', action: () => { void importDataFromFiles(); } },
   { icon: '🖼', labelKey: 'menu.import_psd' },
-  { icon: '📤', labelKey: 'menu.export',          shortcutKey: 'shortcut.cmd_e' },
+  { icon: '📤', labelKey: 'menu.export',          shortcutKey: 'shortcut.cmd_e', action: () => exportSpineJsonFile() },
   { divider: true } as MenuItem,
   { icon: '🧩', labelKey: 'menu.texture_packer',  shortcutKey: 'shortcut.cmd_p' },
   { icon: '🔓', labelKey: 'menu.texture_unpacker' },

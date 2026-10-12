@@ -1,12 +1,6 @@
 /**
- * Spine v3.8 兼容 JSON 导出器 —— Day 6 实现。
- * Day 1 仅占位导出 `version` 字段。
+ * Spine v3.8 兼容 JSON 导出器（psd2spine 风格）。
+ * 具体导出逻辑见 exportSpineData.ts：ProjectData → Spine JSON 字符串 / 文件下载。
  */
-export const EXPORTER_VERSION = '0.1.0-day1-placeholder';
-
-export function exportPlaceholder(): { version: string; note: string } {
-  return {
-    version: EXPORTER_VERSION,
-    note: 'Spine v3.8 JSON exporter will be implemented in Day 6.',
-  };
-}
+export { buildSpineJson, buildSpineObject, exportSpineJsonFile } from './exportSpineData';
+export const EXPORTER_VERSION = '0.1.0-day6';
