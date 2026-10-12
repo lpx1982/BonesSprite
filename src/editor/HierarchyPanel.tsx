@@ -907,7 +907,7 @@ export function HierarchyPanel() {
       1,
     );
     return out;
-  }, [projectName, collapsed, childMap, filteredRoots, orderedSlots, attachments, attachmentById, bones, slotBindings, animations, activeAnimationId, attachmentMeshes]);
+  }, [projectName, collapsed, childMap, filteredRoots, orderedSlots, attachments, attachmentById, bones, slotBindings, animations, activeAnimationId, attachmentMeshes, constraints, pathConstraints, physicsConstraints]);
 
   // ===== Spine 暗灰配色（直接读 CSS 变量，避免改 Tailwind 主题）=====
   const C = {
