@@ -12,10 +12,11 @@ import {
   FederatedPointerEvent,
   FederatedWheelEvent,
 } from 'pixi.js';
-import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, type BoneNode, type SlotBinding, type IkConstraintDef } from './store';
+import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, type BoneNode, type SlotBinding, type IkConstraintDef, type PathConstraintDef } from './store';
 import { Bone as EngineBone } from '@engine/Bone';
 import { Skeleton } from '@engine/Skeleton';
 import { applyIkConstraints, type IkSolveContext } from '@engine/IkConstraint';
+import { applyPathConstraints, type PathSolveContext } from '@engine/PathConstraint';
 import { parsePsd, type PixiBonesLayer, type PixiBonesPsd, type PixiBonesSlot } from '@psd/index';
 import type { MeshData, PathData, PathVertex } from '@psd/types';
 import { importAssetFile } from './importAsset';
@@ -59,6 +60,58 @@ function applyIkConstraintsToSkeleton(
     });
   }
   if (contexts.length > 0) applyIkConstraints(skeleton, contexts);
+}
+
+/**
+ * 把 store 里的路径约束组装成引擎解算上下文，并按顺序应用到引擎骨架。
+ * 只影响引擎骨骼（world 矩阵），不写回 store。
+ * 必须在 applyIkConstraintsToSkeleton 之后调用（Spine 固定顺序：全部 IK → 全部 Path）。
+ * slotWorld 用 computeSlotWorldMatrix 组装 —— 与渲染时 applyBindings 的 wrap 矩阵同源，
+ * 保证骨骼解算落点与路径画线位置完全一致。
+ */
+function applyPathConstraintsToSkeleton(
+  skeleton: Skeleton,
+  pathConstraints: PathConstraintDef[],
+  boneById: Map<string, EngineBone>,
+  slots: PixiBonesSlot[],
+  slotTransforms: Record<string, { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }>,
+  slotBindings: Record<string, SlotBinding>,
+  images: PixiBonesLayer[],
+  psd: PixiBonesPsd | null,
+): void {
+  const st = usePixiBonesStore.getState();
+  const byId = new Map(attachmentLayers(psd, images).map((l) => [l.id, l]));
+  const contexts: PathSolveContext[] = [];
+  for (const c of pathConstraints) {
+    // 受约束骨骼：数组顺序 = 沿路径顺序（过滤掉已删除的骨骼）
+    const bones = c.boneIds
+      .map((bid) => boneById.get(bid))
+      .filter((b): b is EngineBone => !!b);
+    if (bones.length === 0) continue;
+    // 目标插槽：解算时读它激活的 PathData
+    const slot = slots.find((s) => s.id === c.targetSlotId);
+    if (!slot) continue;
+    const aid = slot.activeAttachmentId;
+    const path = aid ? st.attachmentPaths[aid] : null;
+    if (!path) continue;
+    const layer = aid ? (byId.get(aid) ?? null) : null;
+    const binding = slotBindings[slot.id];
+    const slotWorld = computeSlotWorldMatrix(slot, binding, boneById, slotTransforms, path ?? layer, st.attachmentMeshes);
+    contexts.push({
+      bones,
+      slotWorld,
+      path,
+      positionMode: c.positionMode,
+      position: c.position,
+      spacingMode: c.spacingMode,
+      spacing: c.spacing,
+      rotateMode: c.rotateMode,
+      rotateMix: c.rotateMix,
+      translateMix: c.translateMix,
+      rotationOffset: c.rotationOffset,
+    });
+  }
+  if (contexts.length > 0) applyPathConstraints(skeleton, contexts);
 }
 
 /**
@@ -650,74 +703,9 @@ export function BoneEditor() {
           if (!layer && !path) continue;
           const view = wrap.children[0] as AttachView | undefined;
           {
-            const binding = bindings[slot.id];
-            const bone = binding ? boneById.get(binding.boneId) : null;
-            const lt = slotTransforms[slot.id];
-            // 1) 计算骨骼驱动矩阵（列主序 6 元组）
-            let m = [1, 0, 0, 1, 0, 0]; // 单位
-            // ★ 已绑骨骼（mesh 形态）→ 跳过骨骼驱动（由 applySkinning 接管）
-            const meshSkinned = aid ? (meshesNow[aid]?.bones && meshesNow[aid]!.bones!.length > 0) : false;
-            if (binding && bone && !meshSkinned) {
-              const inv = invAffine(binding.ref);
-              if (inv) {
-                const e = bone.worldMatrix.elements;
-                const cur = [e[0], e[1], e[3], e[4], e[6], e[7]];
-                m = mulAffine(cur, inv);
-              }
-            }
-            // 2) 叠加插槽的局部变换（平移 = C − L×(w/2, h/2)，枢轴 = 激活附件中心）
-            const txL = lt?.tx ?? 0;
-            const tyL = lt?.ty ?? 0;
-            const rot = lt?.rotation ?? 0;
-            const sx = lt?.scaleX ?? 1;
-            const sy = lt?.scaleY ?? 1;
-            const skx = lt?.skewX ?? 0;
-            const sky = lt?.skewY ?? 0;
-            const tanKx = Math.tan(skx);
-            const tanKy = Math.tan(sky);
-            // aM = shear(skx, sky) ∘ scale(sx, sy)
-            const aMx = sx;
-            const aMy = 0;
-            const aCx = tanKx * sx;
-            const aCy = sy;
-            const aBx = tanKy * sy;
-            const aBy = 0;
-            // 再叠加旋转 R ∘ M（对 M 的两列分别左乘 R）
-            const cosR = Math.cos(rot);
-            const sinR = Math.sin(rot);
-            const Xx = aMx, Xy = aMy;
-            const Yx = aCx + aBx, Yy = aCy + aBy;
-            const m_a = cosR * Xx - sinR * Xy;
-            const m_b = sinR * Xx + cosR * Xy;
-            const m_c = cosR * Yx - sinR * Yy;
-            const m_d = sinR * Yx + cosR * Yy;
-            // ★ 枢轴居中化：枢轴 C = 激活附件中心
-            //   图片附件 = 图片中心（layer 尺寸，锚点 = layer.left/top）；
-            //   路径附件 = 路径包围盒中心（顶点直接是 wrap 局部坐标，无锚点偏移）
-            let pcx: number;
-            let pcy: number;
-            let Cx: number;
-            let Cy: number;
-            if (path) {
-              const bb = pathBounds(path);
-              pcx = bb ? bb.cx : 0;
-              pcy = bb ? bb.cy : 0;
-              Cx = pcx + txL;
-              Cy = pcy + tyL;
-            } else {
-              const l = layer as PixiBonesLayer;   // 已由「!layer && !path」排除
-              const halfW = l.width / 2;
-              const halfH = l.height / 2;
-              pcx = halfW;
-              pcy = halfH;
-              Cx = l.left + txL + halfW;
-              Cy = l.top + tyL + halfH;
-            }
-            const lx = Cx - (m_a * pcx + m_c * pcy);
-            const ly = Cy - (m_b * pcx + m_d * pcy);
-            const slotLocal = [m_a, m_b, m_c, m_d, lx, ly];
-            // 骨骼矩阵 m（左乘）：wrap = m × slotLocal
-            const out = mulAffine(m, slotLocal);
+            // ★ wrap 矩阵统一走 computeSlotWorldMatrix（路径约束解算也用同一函数，
+            //   保证骨骼落点与画线位置同源）。
+            const out = computeSlotWorldMatrix(slot, bindings[slot.id], boneById, slotTransforms, path ?? layer, meshesNow);
             wrap.setFromMatrix(new Matrix(out[0], out[1], out[2], out[3], out[4], out[5]));
             wrapMatrixBySlot.set(slot.id, out);
             if (view) view.position.set(0, 0);
@@ -1565,22 +1553,6 @@ export function BoneEditor() {
           }
         }
         g.stroke({ width: 2, color: 0xFFFFFF, alpha: 0.6 });
-      };
-
-      /** 路径包围盒（顶点 min/max + 中心）。空路径返回 null。 */
-      const pathBounds = (
-        path: PathData,
-      ): { minX: number; minY: number; maxX: number; maxY: number; cx: number; cy: number } | null => {
-        const v = path.vertices;
-        if (v.length === 0) return null;
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        for (const p of v) {
-          if (p.x < minX) minX = p.x;
-          if (p.y < minY) minY = p.y;
-          if (p.x > maxX) maxX = p.x;
-          if (p.y > maxY) maxY = p.y;
-        }
-        return { minX, minY, maxX, maxY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
       };
 
       /** 为一个插槽创建路径 view：wrap + 曲线 Gfx（曲线画在 wrap 局部坐标，跟随 slot 变换 / 骨骼绑定）。 */
@@ -2500,6 +2472,13 @@ export function BoneEditor() {
         //   之后所有 getWorldPosition / getWorldTip 拿到的都是 IK 后的结果）。
         //   注意：只影响引擎骨架，不写回 store（store 保存的是未约束的设置姿态）。
         applyIkConstraintsToSkeleton(skel, usePixiBonesStore.getState().constraints, boneById);
+        // ★ 路径约束：IK 之后应用（Spine 固定顺序：全部 IK → 全部 Path）。
+        //   骨骼会沿目标插槽的路径附件平移 + 旋转；图层的 wrap 矩阵由
+        //   computeSlotWorldMatrix 在 applyBindings 里同源算出，落点与画线一致。
+        {
+          const stP = usePixiBonesStore.getState();
+          applyPathConstraintsToSkeleton(skel, stP.pathConstraints, boneById, stP.slots, stP.slotTransforms, stP.slotBindings, stP.images, stP.psd);
+        }
         skeletonRef = skel;
       };
 
@@ -5053,7 +5032,7 @@ export function BoneEditor() {
             }
           });
         }
-        if (state.bones !== prev.bones || state.constraints !== prev.constraints) {
+        if (state.bones !== prev.bones || state.constraints !== prev.constraints || state.pathConstraints !== prev.pathConstraints) {
           buildSkeleton(state.bones);
           // ★ 骨骼平移 / 旋转 / 缩放（或约束变化）→ 重算所有已绑定网格的顶点蒙皮
           //   注意：applySkinning 需要 wrapMatrixBySlot 已有该插槽记录，
@@ -5232,6 +5211,7 @@ export function BoneEditor() {
           && state.editorTab === prev.editorTab
           && state.viewport === prev.viewport
           && state.constraints === prev.constraints
+          && state.pathConstraints === prev.pathConstraints
         ) {
           prev = state;
           return;  // 只有时间轴在动，PIXI 画布不用重画
@@ -5239,7 +5219,7 @@ export function BoneEditor() {
         // 快速路径 2：只有 bones（含约束）变化 → 骨骼相关的重算已在上方 bones 分支完成
         //   （buildSkeleton + applyBindings + applySkinning + drawMeshHandles），这里只补骨骼线段
         //   与 hover 提示，跳过 visibility / style / grid / highlight 等无关重画。
-        const bonesChanged = state.bones !== prev.bones || state.constraints !== prev.constraints;
+        const bonesChanged = state.bones !== prev.bones || state.constraints !== prev.constraints || state.pathConstraints !== prev.pathConstraints;
         if (
           bonesChanged
           && state.psd === prev.psd
@@ -6326,6 +6306,112 @@ const BONE_WIDTH_LOCK_LENGTH = 300;
 /** 由骨骼世界长度算出「宽度系数」：0..1，1 = 已达锁定宽度。 */
 function boneWidthScale(worldLength: number): number {
   return Math.min(Math.abs(worldLength), BONE_WIDTH_LOCK_LENGTH) / BONE_WIDTH_LOCK_LENGTH;
+}
+
+/** 路径包围盒（顶点 min/max + 中心）。空路径返回 null。 */
+function pathBounds(
+  path: PathData,
+): { minX: number; minY: number; maxX: number; maxY: number; cx: number; cy: number } | null {
+  const v = path.vertices;
+  if (v.length === 0) return null;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of v) {
+    if (p.x < minX) minX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y > maxY) maxY = p.y;
+  }
+  return { minX, minY, maxX, maxY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
+}
+
+/**
+ * 计算「插槽世界矩阵」（6 元组 [a,b,c,d,tx,ty]：附件局部 → 引擎世界）。
+ * ★ 渲染（applyBindings）与路径约束解算必须共用这一个函数，
+ *   防止两处矩阵数学分叉（否则骨骼解算落点与路径画线位置对不上）。
+ * 与 applyBindings 的旧内联逻辑完全等价：
+ *   - 已绑骨骼且非网格蒙皮 → 骨骼驱动矩阵 = boneWorld × ref⁻¹
+ *   - 网格蒙皮（attachmentMeshes 有 bones）→ 跳过骨骼驱动（单位矩阵）
+ *   - 叠加插槽局部变换（平移/旋转/缩放/倾斜），枢轴 = 激活附件中心
+ *     （图片附件 = 图片中心；路径附件 = 路径包围盒中心）
+ */
+function computeSlotWorldMatrix(
+  slot: PixiBonesSlot,
+  binding: SlotBinding | undefined,
+  boneById: Map<string, EngineBone>,
+  slotTransforms: Record<string, { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }>,
+  pathOrLayer: PathData | PixiBonesLayer | null,
+  meshesNow?: Record<string, MeshData>,
+): number[] {
+  const aid = slot.activeAttachmentId;
+  const path = pathOrLayer !== null && 'vertices' in pathOrLayer ? (pathOrLayer as PathData) : null;
+  const layer = path ? null : (pathOrLayer as PixiBonesLayer | null);
+  const bone = binding ? boneById.get(binding.boneId) : null;
+  const lt = slotTransforms[slot.id];
+  // 1) 骨骼驱动矩阵（列主序 6 元组）
+  let m = [1, 0, 0, 1, 0, 0]; // 单位
+  // ★ 已绑骨骼（mesh 形态）→ 跳过骨骼驱动（顶点由 applySkinning 按权重算）
+  const meshSkinned = aid ? (meshesNow?.[aid]?.bones?.length ?? 0) > 0 : false;
+  if (binding && bone && !meshSkinned) {
+    const inv = invAffine(binding.ref);
+    if (inv) {
+      const e = bone.worldMatrix.elements;
+      const cur = [e[0], e[1], e[3], e[4], e[6], e[7]];
+      m = mulAffine(cur, inv);
+    }
+  }
+  // 2) 叠加插槽的局部变换（平移 = C − L×(w/2, h/2)，枢轴 = 激活附件中心）
+  const txL = lt?.tx ?? 0;
+  const tyL = lt?.ty ?? 0;
+  const rot = lt?.rotation ?? 0;
+  const sx = lt?.scaleX ?? 1;
+  const sy = lt?.scaleY ?? 1;
+  const skx = lt?.skewX ?? 0;
+  const sky = lt?.skewY ?? 0;
+  const tanKx = Math.tan(skx);
+  const tanKy = Math.tan(sky);
+  // aM = shear(skx, sky) ∘ scale(sx, sy)
+  const aMx = sx;
+  const aMy = 0;
+  const aCx = tanKx * sx;
+  const aCy = sy;
+  const aBx = tanKy * sy;
+  const aBy = 0;
+  // 再叠加旋转 R ∘ M（对 M 的两列分别左乘 R）
+  const cosR = Math.cos(rot);
+  const sinR = Math.sin(rot);
+  const Xx = aMx, Xy = aMy;
+  const Yx = aCx + aBx, Yy = aCy + aBy;
+  const m_a = cosR * Xx - sinR * Xy;
+  const m_b = sinR * Xx + cosR * Xy;
+  const m_c = cosR * Yx - sinR * Yy;
+  const m_d = sinR * Yx + cosR * Yy;
+  // ★ 枢轴居中化：枢轴 C = 激活附件中心
+  //   图片附件 = 图片中心（layer 尺寸，锚点 = layer.left/top）；
+  //   路径附件 = 路径包围盒中心（顶点直接是 wrap 局部坐标，无锚点偏移）
+  let pcx: number;
+  let pcy: number;
+  let Cx: number;
+  let Cy: number;
+  if (path) {
+    const bb = pathBounds(path);
+    pcx = bb ? bb.cx : 0;
+    pcy = bb ? bb.cy : 0;
+    Cx = pcx + txL;
+    Cy = pcy + tyL;
+  } else {
+    const l = layer as PixiBonesLayer;   // pathOrLayer 为 null 时上层已排除
+    const halfW = l.width / 2;
+    const halfH = l.height / 2;
+    pcx = halfW;
+    pcy = halfH;
+    Cx = l.left + txL + halfW;
+    Cy = l.top + tyL + halfH;
+  }
+  const lx = Cx - (m_a * pcx + m_c * pcy);
+  const ly = Cy - (m_b * pcx + m_d * pcy);
+  const slotLocal = [m_a, m_b, m_c, m_d, lx, ly];
+  // 骨骼矩阵 m（左乘）：wrap = m × slotLocal
+  return mulAffine(m, slotLocal);
 }
 
 // ===== 2D 仿射矩阵工具（[a, b, c, d, tx, ty]，与 PIXI Matrix 同序）=====

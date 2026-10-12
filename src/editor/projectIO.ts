@@ -9,7 +9,7 @@
  * dataURL 按图层 id 缓存（图层的 canvas 导入后不再变化），避免每次自动保存都重编码。
  */
 import { useEffect, useRef } from 'react';
-import { usePixiBonesStore, type ProjectData, type BoneNode, type SlotBinding, type EditorAnimation, type BonePose, type IkConstraintDef } from './store';
+import { usePixiBonesStore, type ProjectData, type BoneNode, type SlotBinding, type EditorAnimation, type BonePose, type IkConstraintDef, type PathConstraintDef } from './store';
 import type { PixiBonesLayer, PixiBonesPsd, PixiBonesSlot, MeshData, PathData } from '@psd/types';
 import { idbPut, idbGet } from './idb';
 
@@ -67,6 +67,8 @@ interface SerializedProject {
   setupPose: Record<string, BonePose>;
   // IK 约束（顺序 = 应用顺序；旧存档缺省为空）
   constraints: IkConstraintDef[];
+  // 路径约束（顺序 = 应用顺序；旧存档缺省为空）
+  pathConstraints: PathConstraintDef[];
 }
 
 // =================================================================================
@@ -193,6 +195,7 @@ function buildSnapshot(): SerializedProject {
     activeAnimationId: s.activeAnimationId,
     setupPose: s.setupPose,
     constraints: s.constraints,
+    pathConstraints: s.pathConstraints,
   };
 }
 
@@ -310,6 +313,7 @@ async function snapshotToProjectData(snap: SerializedProject): Promise<ProjectDa
     activeAnimationId: snap.activeAnimationId ?? null,
     setupPose: snap.setupPose ?? {},
     constraints: snap.constraints ?? [],
+    pathConstraints: snap.pathConstraints ?? [],
   };
 }
 

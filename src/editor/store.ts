@@ -164,6 +164,46 @@ export interface IkConstraintDef {
   mix: number;
 }
 
+/**
+ * 路径约束的 spacing 模式（Spine 3.8 SpacingMode）：
+ *  - 'length'：每根骨的推进距离 = spacing + 上一根骨长度（首根只加 spacing）
+ *  - 'fixed'：每根骨推进 spacing 像素
+ *  - 'percent'：spacing / 100 × 路径总弧长
+ *  - 'proportional'：spacing × (上一根骨长度 + 本骨长度) / 2
+ */
+export type PathSpacingMode = 'length' | 'fixed' | 'percent' | 'proportional';
+/** 路径约束的 rotate 模式（Spine 3.8 RotateMode）：
+ *  - 'tangent'：每根骨指向它所在弧长处的路径切线
+ *  - 'chain'：首根指向切线，其余骨继承前一根解算后的世界旋转
+ *  - 'chainScale'：同 chain，并额外按推进弧长 / 骨长度缩放 scaleX */
+export type PathRotateMode = 'tangent' | 'chain' | 'chainScale';
+
+/**
+ * 路径约束定义（仿 Spine 3.8 PathConstraint）。
+ * 让一串骨骼沿一条路径（目标插槽激活的 PathAttachment）平移 + 旋转。
+ * boneIds 数组顺序 = 骨骼沿路径的排列顺序（bones[0] 停在 position 处，后续骨依次推进）。
+ */
+export interface PathConstraintDef {
+  id: string;                // 前缀 pc_
+  name: string;
+  /** 解算时读该插槽激活的 PathData */
+  targetSlotId: string;
+  /** 受约束骨骼，数组顺序 = 沿路径顺序 */
+  boneIds: string[];
+  /** ★ Spine 语义：fixed = 像素 / percent = 0..100 百分比 */
+  positionMode: 'fixed' | 'percent';
+  position: number;
+  spacingMode: PathSpacingMode;
+  spacing: number;
+  rotateMode: PathRotateMode;
+  /** 旋转混合 0..1（1 = 完全指向路径） */
+  rotateMix: number;
+  /** 平移混合 0..1（1 = 完全落在路径上） */
+  translateMix: number;
+  /** 切线角的额外偏移（度） */
+  rotationOffset: number;
+}
+
 /** 撤销 / 重做快照的内容（骨树 + 插槽变换 + 网格顶点 + 选中骨 + 动画 + 约束）。 */
 export type HistorySnapshot = {
   bones: BoneNode[];
@@ -177,6 +217,8 @@ export type HistorySnapshot = {
   animations: EditorAnimation[];
   /** IK 约束也纳入快照（增删/改 mix/调顺序都能 Cmd+Z 撤销） */
   constraints: IkConstraintDef[];
+  /** 路径约束也纳入快照（增删/改参数/调顺序都能 Cmd+Z 撤销） */
+  pathConstraints: PathConstraintDef[];
   // ===== 素材 / 插槽相关（让插槽/附件的删除、重命名、复制也能 Cmd+Z / Cmd+Shift+Z）=====
   slots: PixiBonesSlot[];
   /** 素材库：canvas 保留同一引用（canvas 内容创建后不变），数组结构可还原 */
@@ -212,6 +254,7 @@ function makeSnapshot(s: PixiBonesState): HistorySnapshot {
     selectedBoneId: s.selectedBoneId,
     animations: JSON.parse(JSON.stringify(s.animations)),
     constraints: JSON.parse(JSON.stringify(s.constraints)),
+    pathConstraints: JSON.parse(JSON.stringify(s.pathConstraints)),
     slots: JSON.parse(JSON.stringify(s.slots)),
     images: s.images.map(cloneLayerTree),
     slotVisibility: JSON.parse(JSON.stringify(s.slotVisibility)),
@@ -236,6 +279,7 @@ function snapshotToState(snap: HistorySnapshot) {
     selectedBoneId: snap.selectedBoneId,
     animations: snap.animations,
     constraints: snap.constraints,
+    pathConstraints: snap.pathConstraints,
     slots: snap.slots,
     images: snap.images,
     slotVisibility: snap.slotVisibility,
@@ -277,6 +321,8 @@ export interface ProjectData {
   setupPose: Record<string, BonePose>;
   /** IK 约束列表（顺序即应用顺序；旧存档缺省为 []） */
   constraints: IkConstraintDef[];
+  /** 路径约束列表（独立于 IK：Spine 里应用顺序固定为全部 IK → 全部 Path；旧存档缺省为 []） */
+  pathConstraints: PathConstraintDef[];
   editorTab?: EditorTab;
   viewport?: { panX: number; panY: number; zoom: number };
 }
@@ -683,6 +729,38 @@ export interface PixiBonesState {
   setConstraintBendDirection: (id: string, dir: 1 | -1) => void;
   /** 调整顺序：把 id 对应约束移到新索引（数组索引，0 = 最先应用） */
   moveConstraint: (id: string, toIndex: number) => void;
+
+  // ---- 路径约束（仿 Spine 3.8 Path Constraint；独立列表，Spine 应用顺序固定为全部 IK → 全部 Path）----
+  /** 路径约束列表。boneIds 数组顺序 = 骨骼沿路径的排列顺序。 */
+  pathConstraints: PathConstraintDef[];
+  /** 新建一条路径约束：targetSlotId = 目标插槽（解算时读其激活的路径附件），boneIds = 受约束骨骼。返回新 id（失败返回 ''）。 */
+  addPathConstraint: (targetSlotId: string, boneIds: string[]) => string;
+  /** 删除路径约束（id 不存在则忽略） */
+  removePathConstraint: (id: string) => void;
+  /** 重命名路径约束 */
+  renamePathConstraint: (id: string, name: string) => void;
+  /** 改目标插槽 */
+  setPathConstraintTarget: (id: string, slotId: string) => void;
+  /** 整数组替换受约束骨骼 */
+  setPathConstraintBones: (id: string, boneIds: string[]) => void;
+  /** 改 position 模式（'fixed' = 像素 / 'percent' = 0..100 百分比） */
+  setPathConstraintPositionMode: (id: string, m: 'fixed' | 'percent') => void;
+  /** 改 spacing 模式 */
+  setPathConstraintSpacingMode: (id: string, m: PathSpacingMode) => void;
+  /** 改 rotate 模式 */
+  setPathConstraintRotateMode: (id: string, m: PathRotateMode) => void;
+  /** 拖动 position（高频，不推历史；推历史由调用方在首次位移时做一次） */
+  setPathConstraintPosition: (id: string, pos: number) => void;
+  /** 改 spacing（推历史） */
+  setPathConstraintSpacing: (id: string, v: number) => void;
+  /** 改 rotateMix 0..1（推历史） */
+  setPathConstraintRotateMix: (id: string, v: number) => void;
+  /** 改 translateMix 0..1（推历史） */
+  setPathConstraintTranslateMix: (id: string, v: number) => void;
+  /** 改 rotationOffset（度，推历史） */
+  setPathConstraintRotationOffset: (id: string, deg: number) => void;
+  /** 重排受约束骨骼顺序（上移/下移按钮用）：把 fromIndex 处的骨骼移到 toIndex */
+  setPathConstraintBoneOrder: (id: string, fromIndex: number, toIndex: number) => void;
 
   // ---- IK 约束创建流程（仿 Spine：选骨 → 新建 → IK → 拾取目标 → 弹窗命名）----
   /** 正在等待拾取 IK 目标骨（非 null = 「新建 ik 约束：选择目标」拾取模式）。 */
@@ -1116,6 +1194,13 @@ let _constraintIdCounter = 0;
 function genConstraintId(): string {
   _constraintIdCounter++;
   return `ik_${_constraintIdCounter}`;
+}
+
+/** 路径约束 id 自增（一次会话内稳定；前缀 pc_，与 ik_ 各自独立计数）。 */
+let _pathConstraintIdCounter = 0;
+function genPathConstraintId(): string {
+  _pathConstraintIdCounter++;
+  return `pc_${_pathConstraintIdCounter}`;
 }
 
 /** 路径附件 id 自增（独立 id 空间，不在 images / 图层里）。 */
@@ -2203,6 +2288,137 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     set({ constraints: list });
   },
 
+  // ---- 路径约束（仿 Spine 3.8 Path Constraint；独立列表，应用顺序固定为全部 IK → 全部 Path）----
+  pathConstraints: [],
+  addPathConstraint: (targetSlotId, boneIds) => {
+    const s = get();
+    if (!s.slots.some((sl) => sl.id === targetSlotId)) return '';
+    const validBones = boneIds.filter((bid) => s.bones.some((b) => b.id === bid));
+    if (validBones.length === 0) return '';
+    const id = genPathConstraintId();
+    // 命名规则：`路径约束 ${n}`（n = 当前路径约束数 + 1）
+    s.pushHistory();
+    const def: PathConstraintDef = {
+      id,
+      name: `路径约束 ${s.pathConstraints.length + 1}`,
+      targetSlotId,
+      boneIds: validBones,
+      positionMode: 'percent',
+      position: 0,
+      spacingMode: 'fixed',
+      spacing: 0,
+      rotateMode: 'tangent',
+      rotateMix: 1,
+      translateMix: 1,
+      rotationOffset: 0,
+    };
+    set((st) => ({
+      pathConstraints: [...st.pathConstraints, def],
+      // 选中新约束（与 IK 共用 selectedConstraintId，id 前缀区分，无冲突）
+      selectedConstraintId: id,
+    }));
+    return id;
+  },
+  removePathConstraint: (id) => {
+    const s = get();
+    if (!s.pathConstraints.some((c) => c.id === id)) return;
+    s.pushHistory();
+    set((st) => ({ pathConstraints: st.pathConstraints.filter((c) => c.id !== id) }));
+  },
+  renamePathConstraint: (id, name) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    get().pushHistory();
+    set((st) => ({
+      pathConstraints: st.pathConstraints.map((c) => (c.id === id ? { ...c, name: trimmed } : c)),
+    }));
+  },
+  setPathConstraintTarget: (id, slotId) => {
+    const s = get();
+    const c = s.pathConstraints.find((x) => x.id === id);
+    if (!c || c.targetSlotId === slotId) return;
+    if (!s.slots.some((sl) => sl.id === slotId)) return;
+    s.pushHistory();
+    set((st) => ({
+      pathConstraints: st.pathConstraints.map((x) => (x.id === id ? { ...x, targetSlotId: slotId } : x)),
+    }));
+  },
+  setPathConstraintBones: (id, boneIds) => {
+    const s = get();
+    const c = s.pathConstraints.find((x) => x.id === id);
+    if (!c) return;
+    const validBones = boneIds.filter((bid) => s.bones.some((b) => b.id === bid));
+    if (validBones.length === 0) return;
+    s.pushHistory();
+    set((st) => ({
+      pathConstraints: st.pathConstraints.map((x) => (x.id === id ? { ...x, boneIds: validBones } : x)),
+    }));
+  },
+  setPathConstraintPositionMode: (id, m) => {
+    get().pushHistory();
+    set((st) => ({
+      pathConstraints: st.pathConstraints.map((x) => (x.id === id ? { ...x, positionMode: m } : x)),
+    }));
+  },
+  setPathConstraintSpacingMode: (id, m) => {
+    get().pushHistory();
+    set((st) => ({
+      pathConstraints: st.pathConstraints.map((x) => (x.id === id ? { ...x, spacingMode: m } : x)),
+    }));
+  },
+  setPathConstraintRotateMode: (id, m) => {
+    get().pushHistory();
+    set((st) => ({
+      pathConstraints: st.pathConstraints.map((x) => (x.id === id ? { ...x, rotateMode: m } : x)),
+    }));
+  },
+  // ★ 拖动类高频 action：不推历史（推历史由调用方在首次位移时做一次，参照路径拖结模式）
+  setPathConstraintPosition: (id, pos) => {
+    set((st) => ({
+      pathConstraints: st.pathConstraints.map((x) => (x.id === id ? { ...x, position: pos } : x)),
+    }));
+  },
+  setPathConstraintSpacing: (id, v) => {
+    get().pushHistory();
+    set((st) => ({
+      pathConstraints: st.pathConstraints.map((x) => (x.id === id ? { ...x, spacing: v } : x)),
+    }));
+  },
+  setPathConstraintRotateMix: (id, v) => {
+    const m = Math.max(0, Math.min(1, v));
+    get().pushHistory();
+    set((st) => ({
+      pathConstraints: st.pathConstraints.map((x) => (x.id === id ? { ...x, rotateMix: m } : x)),
+    }));
+  },
+  setPathConstraintTranslateMix: (id, v) => {
+    const m = Math.max(0, Math.min(1, v));
+    get().pushHistory();
+    set((st) => ({
+      pathConstraints: st.pathConstraints.map((x) => (x.id === id ? { ...x, translateMix: m } : x)),
+    }));
+  },
+  setPathConstraintRotationOffset: (id, deg) => {
+    get().pushHistory();
+    set((st) => ({
+      pathConstraints: st.pathConstraints.map((x) => (x.id === id ? { ...x, rotationOffset: deg } : x)),
+    }));
+  },
+  setPathConstraintBoneOrder: (id, fromIndex, toIndex) => {
+    const s = get();
+    const c = s.pathConstraints.find((x) => x.id === id);
+    if (!c) return;
+    const list = c.boneIds.slice();
+    if (fromIndex < 0 || fromIndex >= list.length) return;
+    const [item] = list.splice(fromIndex, 1);
+    const idx = Math.max(0, Math.min(list.length, toIndex));
+    list.splice(idx, 0, item);
+    s.pushHistory();
+    set((st) => ({
+      pathConstraints: st.pathConstraints.map((x) => (x.id === id ? { ...x, boneIds: list } : x)),
+    }));
+  },
+
   showLeftPanel: false,
   showRightPanel: false,  // 默认隐藏层级树，用户从 View 菜单手动开启
   showRulers: true,
@@ -2419,6 +2635,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       playing: false,
       // —— IK 约束 ——
       constraints: [],
+      pathConstraints: [],
       selectedConstraintId: null,
       // —— 各种选中态清零 ——
       selectedSlotId: null,
@@ -2460,6 +2677,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       [get().animations[0]?.id].filter((x): x is string => !!x),
     );
     _constraintIdCounter = 0;
+    _pathConstraintIdCounter = 0;
     get().pushRecentProject(id, trimmed);
   },
   closeProject:     () => set({ currentProjectId: null, selectedBoneId: null, selectedBoneIds: [] }),
@@ -2491,6 +2709,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       setupPose: d.setupPose ?? {},
       // IK 约束（旧存档缺省为空）
       constraints: d.constraints ?? [],
+      // 路径约束（旧存档缺省为空）
+      pathConstraints: d.pathConstraints ?? [],
       constraintRuntimeMix: {},
       currentTime: 0,
       playing: false,
@@ -2534,6 +2754,15 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       _constraintIdCounter,
       Math.max(0, ...(d.constraints ?? []).map((c) => {
         if (!c.id.startsWith('ik_')) return 0;
+        const n = parseInt(c.id.slice(3), 10);
+        return Number.isFinite(n) ? n : 0;
+      })),
+    );
+    // 路径约束 id 计数器对齐（pc_ 前缀）
+    _pathConstraintIdCounter = Math.max(
+      _pathConstraintIdCounter,
+      Math.max(0, ...(d.pathConstraints ?? []).map((c) => {
+        if (!c.id.startsWith('pc_')) return 0;
         const n = parseInt(c.id.slice(3), 10);
         return Number.isFinite(n) ? n : 0;
       })),

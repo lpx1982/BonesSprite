@@ -385,6 +385,7 @@ export async function buildProjectFromSpineJson(
     activeAnimationId: animationsOut[0]?.id ?? null,
     setupPose: {},
     constraints: [],
+    pathConstraints: [],
     editorTab: animationsOut.length > 0 ? 'animate' : 'setup',
     viewport: { panX: 0, panY: 0, zoom: 1 },
   };
