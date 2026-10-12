@@ -3633,6 +3633,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     selectedBoneIds: [],
     selectedSectionKey: null,
     attachingSlotId: null,
+    // ★ 切到插槽 → 隐藏路径约束 gizmo
+    selectedConstraintId: null,
     // ★ 权重视图：把「当前网格」切到这个插槽的激活附件（选骨骼时不会被清）
     ...(attId ? { weightMeshId: attId } : {}),
     // ★ 仿 Spine：姿势模式下在层级树选中插槽/图片 → 自动切到「旋转」工具。
@@ -3664,6 +3666,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       selectedBoneIds: [],
       selectedSectionKey: null,
       attachingSlotId: null,
+      // ★ 切到附件 → 隐藏路径约束 gizmo
+      selectedConstraintId: null,
       // ★ 权重视图：当前网格 = 刚选中的附件
       weightMeshId: main ?? s.weightMeshId,
       // 与 selectSlot 一致：pose 模式下切到旋转工具
@@ -3687,6 +3691,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       selectedBoneIds: [],
       selectedSectionKey: null,
       attachingSlotId: null,
+      // ★ 切到附件 → 隐藏路径约束 gizmo
+      selectedConstraintId: null,
       weightMeshId: main ?? s.weightMeshId,
     };
   }),
@@ -3705,6 +3711,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       selectedBoneIds: [],
       selectedSectionKey: null,
       attachingSlotId: null,
+      // ★ 切到插槽 → 隐藏路径约束 gizmo
+      selectedConstraintId: null,
       ...(onlyAtt ? { weightMeshId: onlyAtt } : {}),
     };
   }),
@@ -3732,6 +3740,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       selectedRowKey: layers[0] ? 'slot:' + layers[0] : null,
       selectedSectionKey: null,
       attachingSlotId: null,
+      // ★ 框选清掉路径约束 gizmo（与 selectBone/Slot 一致）
+      selectedConstraintId: null,
     };
   }),
   selectSection: (key) => set({
@@ -3770,6 +3780,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     selectedSlotIds: [],
     selectedAttachmentId: null, selectedAttachmentIds: [],
     selectedSectionKey: null,
+    // ★ 切到动画节点 → 隐藏路径约束 gizmo
+    selectedConstraintId: null,
     attachingSlotId: null,
   }),
   setViewMode: (m) => set({ viewMode: m }),
@@ -4078,6 +4090,8 @@ setActiveTool: (t) => set((s) => {
     selectedAttachmentId: null, selectedAttachmentIds: [],
     selectedRowKey: null,
     selectedSectionKey: null,
+    // ★ 切到骨骼 → 隐藏路径约束 gizmo（与骨骼/图片/插槽互斥）
+    selectedConstraintId: null,
   }),
   // 多选：additive=true 增量追加，false 替换
   selectBones: (ids, additive = false) => set((s) => {
@@ -4091,6 +4105,8 @@ setActiveTool: (t) => set((s) => {
         selectedAttachmentId: null, selectedAttachmentIds: [],
         selectedRowKey: null,
         selectedSectionKey: null,
+        // ★ 切到骨骼 → 隐藏路径约束 gizmo
+        selectedConstraintId: null,
       };
     }
     return {
@@ -4101,6 +4117,8 @@ setActiveTool: (t) => set((s) => {
       selectedAttachmentId: null, selectedAttachmentIds: [],
       selectedRowKey: null,
       selectedSectionKey: null,
+      // ★ 切到骨骼 → 隐藏路径约束 gizmo
+      selectedConstraintId: null,
     };
   }),
 
