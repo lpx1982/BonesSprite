@@ -5575,7 +5575,7 @@ export function BoneEditor() {
             }
           });
         }
-        if (state.bones !== prev.bones || state.constraints !== prev.constraints || state.pathConstraints !== prev.pathConstraints || state.physicsConstraints !== prev.physicsConstraints) {
+        if (state.bones !== prev.bones || state.constraints !== prev.constraints || state.pathConstraints !== prev.pathConstraints || state.physicsConstraints !== prev.physicsConstraints || state.transformConstraints !== prev.transformConstraints) {
           buildSkeleton(state.bones);
           // ★ 骨骼平移 / 旋转 / 缩放（或约束变化）→ 重算所有已绑定网格的顶点蒙皮
           //   注意：applySkinning 需要 wrapMatrixBySlot 已有该插槽记录，
@@ -5763,7 +5763,7 @@ export function BoneEditor() {
         // 快速路径 2：只有 bones（含约束）变化 → 骨骼相关的重算已在上方 bones 分支完成
         //   （buildSkeleton + applyBindings + applySkinning + drawMeshHandles），这里只补骨骼线段
         //   与 hover 提示，跳过 visibility / style / grid / highlight 等无关重画。
-        const bonesChanged = state.bones !== prev.bones || state.constraints !== prev.constraints || state.pathConstraints !== prev.pathConstraints;
+        const bonesChanged = state.bones !== prev.bones || state.constraints !== prev.constraints || state.pathConstraints !== prev.pathConstraints || state.transformConstraints !== prev.transformConstraints;
         if (
           bonesChanged
           && state.psd === prev.psd
