@@ -465,6 +465,7 @@ function PathConstraintPickOverlay() {
   const pcPickMode = usePixiBonesStore((s) => s.pcPickMode);
   const pcPickPathSlotId = usePixiBonesStore((s) => s.pcPickPathSlotId);
   const pcPickBoneIds = usePixiBonesStore((s) => s.pcPickBoneIds);
+  const pcPickRetargetId = usePixiBonesStore((s) => s.pcPickRetargetId);
   const slots = usePixiBonesStore((s) => s.slots);
   const bones = usePixiBonesStore((s) => s.bones);
   const pathConstraints = usePixiBonesStore((s) => s.pathConstraints);
@@ -513,7 +514,9 @@ function PathConstraintPickOverlay() {
 
   if (!pcPickMode) return null;
 
-  const bannerText = pcPickMode === 'path' ? '新建路径约束：选择目标路径' : '新建路径约束：选择受约束骨骼（Shift 多选）';
+  const bannerText = pcPickMode === 'path'
+    ? (pcPickRetargetId ? '重新选择路径：点击画布路径或层级树中的插槽' : '新建路径约束：选择目标路径')
+    : '新建路径约束：选择受约束骨骼（Shift 多选）';
   return (
     <>
       {/* 顶部横幅 */}

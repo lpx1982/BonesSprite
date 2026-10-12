@@ -1970,7 +1970,14 @@ function TreeRowView(props: TreeRowViewProps) {
         if (isBone && node) onSelect(node.id);
         else if (isAnim) onSelectAnimation();
         else if (isSection && sectionKey !== null) onSelectSection(sectionKey);
-        else if (isSlot && slot) onSelectSlot(slot.id, row.key);
+        else if (isSlot && slot) {
+          // ★ 路径约束创建/重选：拾取目标路径阶段点「插槽」行 = 拾取为约束目标（pickPathConstraintPath 内部会校验插槽是否激活路径）
+          if (pcPickMode === 'path' && slot.id && pickPathConstraintPath) {
+            pickPathConstraintPath(slot.id);
+            return;
+          }
+          onSelectSlot(slot.id, row.key);
+        }
         else if (isAsset && (asset || row.isPath)) {
           // 附件行（图片 / 路径）：有引用它的插槽则顺便切为「当前显示」，然后选中该附件
           // ★ Shift = 加选/反选（路径多选；图片附件仍单选）
@@ -3542,8 +3549,8 @@ interface PathConstraintsSectionPropsBlockProps {
 
 function PathConstraintsSectionPropsBlock(props: PathConstraintsSectionPropsBlockProps) {
   const {
-    pathConstraints, bones, slots, attachmentPaths,
-    onRemove, onRename, onRenamePopup, onCopy, onTarget,
+    pathConstraints, slots, attachmentPaths,
+    onRemove, onRename, onRenamePopup, onCopy,
     onPositionMode, onPosition, onSpacingMode, onSpacing, onRotateMode,
     onRotateMix, onTranslateMix, onRotationOffset, pushHistory, C,
   } = props;
@@ -3551,7 +3558,7 @@ function PathConstraintsSectionPropsBlock(props: PathConstraintsSectionPropsBloc
   const selectedId = usePixiBonesStore((s) => s.selectedConstraintId);
   const selected = pathConstraints.find((c) => c.id === selectedId) ?? null;
 
-  const boneName = (id: string) => bones.find((b) => b.id === id)?.name ?? '(已删)';
+  const slotName = (id: string) => slots.find((x) => x.id === id)?.name ?? '(已删)';
 
   // ★ Spine 风格面板：折叠区 / 链接滑块 UI 状态
   const [offsetOpen, setOffsetOpen] = useState(true);
@@ -3563,8 +3570,7 @@ function PathConstraintsSectionPropsBlock(props: PathConstraintsSectionPropsBloc
   const targetPathAid = targetSlotObj?.activeAttachmentId ?? null;
   const targetPathName = targetPathAid && attachmentPaths[targetPathAid] ? targetPathAid : null;
 
-  const selectAttachment = usePixiBonesStore((s) => s.selectAttachment);
-  const setPathEdit = usePixiBonesStore((s) => s.setPathEdit);
+  const startPathConstraintRetarget = usePixiBonesStore((s) => s.startPathConstraintRetarget);
 
   // 混合滑块联动（Spine「链接滑块」：勾选时旋转/移动滑块同步）
   const applyRotateMix = (v: number) => {
@@ -3608,40 +3614,55 @@ function PathConstraintsSectionPropsBlock(props: PathConstraintsSectionPropsBloc
       {/* 选中约束的属性编辑（Spine 布局） */}
       {selected && (
         <div className="px-2 py-1.5 border-t flex flex-col gap-1.5 text-[13px] overflow-y-auto" style={{ borderColor: C.border }}>
-          {/* 路径 + 骨骼（Spine：路径行显示路径，骨骼随行显示） */}
+          {/* 路径：插槽名 + 附件名 + 编辑（重选路径 = 画布拾取 / 层级树点插槽） */}
           <div className="flex items-center gap-1">
             <span className="shrink-0 w-10" style={{ color: C.accent }}>路径</span>
-            <span className="flex-1 min-w-0 truncate" style={{ color: targetPathName ? C.text : C.dim }}>
-              {targetPathName ?? '（无）'}
-            </span>
-            {targetPathAid && targetSlotObj && (
-              <button
-                className="w-4 h-4 flex items-center justify-center rounded text-[12px] shrink-0"
-                style={{ background: 'transparent', border: 'none', color: C.dim, cursor: 'pointer' }}
-                title="选中并编辑该路径"
-                onClick={() => { selectAttachment(targetSlotObj.id, targetPathAid); setPathEdit(targetPathAid); }}
-              >✎</button>
-            )}
-          </div>
-          {/* 骨骼（受约束骨骼，顺序 = 沿路径） */}
-          <div className="flex items-center gap-1">
-            <span className="shrink-0 w-10" style={{ color: C.accent }}>骨骼</span>
             <span className="flex-1 min-w-0 truncate" style={{ color: C.text }}>
-              {selected.boneIds.map((bid) => boneName(bid)).join(' → ')}
+              {targetSlotObj ? (
+                <>
+                  <span style={{ color: C.text }}>{slotName(selected.targetSlotId)}</span>
+                  <span style={{ color: C.dim }}> / {targetPathName ?? '（无附件）'}</span>
+                </>
+              ) : (
+                <span style={{ color: C.dim }}>（未绑定插槽）</span>
+              )}
             </span>
+            <button
+              className="w-4 h-4 flex items-center justify-center rounded text-[12px] shrink-0"
+              style={{ background: 'transparent', border: 'none', color: C.dim, cursor: 'pointer' }}
+              title="重新选择路径（画布拾取或在层级树点击插槽）"
+              onClick={() => startPathConstraintRetarget(selected.id)}
+            >✎</button>
           </div>
 
-          {/* 目标（目标插槽） */}
+          {/* 目标：插槽名 + 附件名 + 编辑 + 删除（删除约束，骨骼退回原位） */}
           <div className="flex items-center gap-1">
             <span className="shrink-0 w-10" style={{ color: C.accent }}>目标</span>
-            <select
-              className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
-              style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
-              value={selected.targetSlotId}
-              onChange={(e) => onTarget(selected.id, e.target.value)}
-            >
-              {slots.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
+            <span className="flex-1 min-w-0 truncate" style={{ color: C.text }}>
+              {targetSlotObj ? (
+                <>
+                  <span style={{ color: C.text }}>{slotName(selected.targetSlotId)}</span>
+                  <span style={{ color: C.dim }}> / {targetPathName ?? '（无附件）'}</span>
+                </>
+              ) : (
+                <span style={{ color: C.dim }}>（未绑定插槽）</span>
+              )}
+            </span>
+            <button
+              className="w-4 h-4 flex items-center justify-center rounded text-[12px] shrink-0"
+              style={{ background: 'transparent', border: 'none', color: C.dim, cursor: 'pointer' }}
+              title="重新选择目标插槽（画布拾取或在层级树点击插槽）"
+              onClick={() => startPathConstraintRetarget(selected.id)}
+            >✎</button>
+            <button
+              className="w-4 h-4 flex items-center justify-center rounded text-[12px] shrink-0"
+              style={{ background: 'transparent', border: 'none', color: C.warning, cursor: 'pointer' }}
+              title="删除该约束（骨骼退回原位）"
+              onClick={() => {
+                onRemove(selected.id);
+                usePixiBonesStore.getState().selectSection('constraints');
+              }}
+            >✕</button>
           </div>
 
           {/* 间距 */}

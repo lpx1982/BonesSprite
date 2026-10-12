@@ -849,9 +849,13 @@ export interface PixiBonesState {
   pcPickPathSlotId: string | null;
   /** 已拾取的受约束骨骼 id（Shift 加选多骨；非 Shift 点击 = 单骨并完成）。 */
   pcPickBoneIds: string[];
+  /** 非空 = 正在「重选」已有路径约束的目标插槽（而非新建）；值 = 目标约束 id */
+  pcPickRetargetId: string | null;
   /** 从「新建 → 约束 → 路径约束」进入拾取模式（先选目标路径）。 */
   startPathConstraintPick: () => void;
-  /** 拾取目标路径（slotId = 引用该路径的插槽）→ 进入选骨骼阶段。 */
+  /** 重选路径：为已有约束进入拾取模式（选目标插槽/路径，层级树点击插槽或画布拾取路径）。 */
+  startPathConstraintRetarget: (constraintId: string) => void;
+  /** 拾取目标路径（slotId = 引用该路径的插槽）→ 新建流程进入选骨骼阶段；重选流程直接改目标。 */
   pickPathConstraintPath: (slotId: string) => void;
   /** 拾取受约束骨骼：shiftKey=true 累加；false = 加入并完成（触发命名弹窗）。 */
   pickPathConstraintBone: (boneId: string, shiftKey?: boolean) => void;
@@ -2269,6 +2273,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   pcPickMode: null,
   pcPickPathSlotId: null,
   pcPickBoneIds: [],
+  pcPickRetargetId: null,
   startPathConstraintPick: () => {
     const s = get();
     // ★ 对齐 Spine：先选骨骼（单选/多选）→ 点「路径约束」→ 进入拾取目标路径
@@ -2284,6 +2289,17 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       pcPickMode: 'path',
       pcPickPathSlotId: null,
       pcPickBoneIds: boneIds,
+      pcPickRetargetId: null,
+    });
+  },
+  startPathConstraintRetarget: (constraintId) => {
+    const s = get();
+    if (!s.pathConstraints.some((c) => c.id === constraintId)) return;
+    set({
+      pcPickMode: 'path',
+      pcPickPathSlotId: null,
+      pcPickBoneIds: [],
+      pcPickRetargetId: constraintId,
     });
   },
   pickPathConstraintPath: (slotId) => {
@@ -2292,6 +2308,13 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     const slot = s.slots.find((sl) => sl.id === slotId);
     const aid = slot?.activeAttachmentId ?? null;
     if (!aid || !s.attachmentPaths[aid]) return;
+    // ★ 重选模式：拾取到路径 → 直接改目标插槽并结束
+    if (s.pcPickRetargetId) {
+      const id = s.pcPickRetargetId;
+      set({ pcPickMode: null, pcPickPathSlotId: null, pcPickBoneIds: [], pcPickRetargetId: null });
+      s.setPathConstraintTarget(id, slotId);
+      return;
+    }
     // ★ 骨骼已在入口阶段确定 → 拾取到路径即完成（触发命名弹窗）
     set({ pcPickMode: 'done', pcPickPathSlotId: slotId });
   },
@@ -2314,6 +2337,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     pcPickMode: null,
     pcPickPathSlotId: null,
     pcPickBoneIds: [],
+    pcPickRetargetId: null,
   }),
 
   bones: [],
@@ -2909,6 +2933,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       pcPickMode: null,
       pcPickPathSlotId: null,
       pcPickBoneIds: [],
+      pcPickRetargetId: null,
       weightBindMode: false,
       weightMeshId: null,
       traceDialogOpen: false,
@@ -2953,6 +2978,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     pcPickMode: null,
     pcPickPathSlotId: null,
     pcPickBoneIds: [],
+    pcPickRetargetId: null,
     pathEditAttachmentId: null,
     meshEditSlotId: null,
   }),
@@ -3008,6 +3034,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       pcPickMode: null,
       pcPickPathSlotId: null,
       pcPickBoneIds: [],
+      pcPickRetargetId: null,
       weightBindMode: false,
       weightMeshId: null,
       traceDialogOpen: false,
