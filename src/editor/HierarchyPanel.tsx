@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, DOCK_PANEL_DEFAULT_WIDTH, DEFAULT_PATH_COLOR, type BoneNode, type SlotBinding, type IkConstraintDef, type PathConstraintDef, type PathSpacingMode, type PathRotateMode } from './store';
+import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, DOCK_PANEL_DEFAULT_WIDTH, DEFAULT_PATH_COLOR, type BoneNode, type SlotBinding, type IkConstraintDef, type PathConstraintDef, type PathSpacingMode, type PathRotateMode, type PhysicsConstraintDef } from './store';
 import { type PixiBonesLayer, type PixiBonesSlot, type PathData } from '@psd/index';
 import { importAssetFile } from './importAsset';
 import { PromptDialog } from './PromptDialog';
@@ -226,6 +226,14 @@ export function HierarchyPanel() {
   const setPathConstraintRotationOffset = usePixiBonesStore((s) => s.setPathConstraintRotationOffset);
   const setPathConstraintBoneOrder = usePixiBonesStore((s) => s.setPathConstraintBoneOrder);
   const movePathConstraint = usePixiBonesStore((s) => s.movePathConstraint);
+  // ===== 物理约束（仿 Spine 4.1 Physics Constraint；与 IK/Path 共用 selectedConstraintId，前缀 phy_）=====
+  const physicsConstraints = usePixiBonesStore((s) => s.physicsConstraints);
+  const removePhysicsConstraint = usePixiBonesStore((s) => s.removePhysicsConstraint);
+  const renamePhysicsConstraint = usePixiBonesStore((s) => s.renamePhysicsConstraint);
+  const duplicatePhysicsConstraint = usePixiBonesStore((s) => s.duplicatePhysicsConstraint);
+  const setPhysicsConstraintBone = usePixiBonesStore((s) => s.setPhysicsConstraintBone);
+  const setPhysicsConstraintProp = usePixiBonesStore((s) => s.setPhysicsConstraintProp);
+  const movePhysicsConstraint = usePixiBonesStore((s) => s.movePhysicsConstraint);
   const importInputRef = useRef<HTMLInputElement>(null);
   // 刷新（清缩略图缓存后强制重渲染）
   const [, setRefreshTick] = useState(0);
@@ -379,6 +387,17 @@ export function HierarchyPanel() {
       message: '为此路径约束输入一个新名称:',
       initialValue: cur.name,
       onConfirm: (v) => { renamePathConstraint(id, v); closeRename(); },
+    });
+  };
+  // 物理约束标题栏「✎」→ 弹窗重命名
+  const openPhysicsConstraintRename = (id: string) => {
+    const cur = usePixiBonesStore.getState().physicsConstraints.find((x) => x.id === id);
+    if (!cur) return;
+    setPendingRename({
+      title: '重命名物理约束',
+      message: '为此物理约束输入一个新名称:',
+      initialValue: cur.name,
+      onConfirm: (v) => { renamePhysicsConstraint(id, v); closeRename(); },
     });
   };
   // ===== 大预览（hover 附件图标 2s 后弹出该素材的大图） =====
@@ -1486,6 +1505,15 @@ export function HierarchyPanel() {
             // 「新建 → 约束 → 路径约束」：进入拾取模式（先选目标路径，再选受约束骨骼）
             startPathConstraintPick();
           }}
+          onCreatePhysicsConstraint={() => {
+            // 「新建 → 约束 → 物理约束」：单骨，直接对当前选中骨创建（无需拾取）
+            setPendingRename({
+              title: '新建物理约束',
+              message: '为此物理约束输入一个名称:',
+              initialValue: `物理约束 ${usePixiBonesStore.getState().physicsConstraints.length + 1}`,
+              onConfirm: (v) => { usePixiBonesStore.getState().addPhysicsConstraint(selectedBone.id, v); closeRename(); },
+            });
+          }}
           onDelete={() => {
             if (confirm(`删除 "${selectedBone.name}" 及其子骨？`)) removeBone(selectedBone.id);
           }}
@@ -1669,6 +1697,19 @@ export function HierarchyPanel() {
             C={C}
           />
         )
+      ) : (selectedConstraintId && selectedConstraintId.startsWith('phy_')) ? (
+        <PhysicsConstraintsSectionPropsBlock
+          physicsConstraints={physicsConstraints}
+          bones={bones}
+          onRemove={(id) => removePhysicsConstraint(id)}
+          onRename={(id, name) => renamePhysicsConstraint(id, name)}
+          onRenamePopup={(id) => openPhysicsConstraintRename(id)}
+          onCopy={(id) => duplicatePhysicsConstraint(id)}
+          onBone={(id, boneId) => setPhysicsConstraintBone(id, boneId)}
+          onProp={(id, key, v) => setPhysicsConstraintProp(id, key, v)}
+          onMove={(id, toIndex) => movePhysicsConstraint(id, toIndex)}
+          C={C}
+        />
       ) : null}
 
       {/* ===== 大预览浮层：hover 附件图标 2s 后弹出（仿 Spine） =====
@@ -2316,6 +2357,8 @@ interface BonePropsBlockProps {
   onCreatePath?: () => void;
   /** 「新建 → 约束 → 路径约束」：进入拾取模式（先选目标路径，再选受约束骨骼） */
   onCreatePathConstraint?: () => void;
+  /** 「新建 → 约束 → 物理约束」：对当前选中骨骼直接创建物理约束（单骨，无需拾取） */
+  onCreatePhysicsConstraint?: () => void;
   onDelete: () => void;
   /** 重命名骨骼 */
   onRename?: () => void;
@@ -2327,7 +2370,7 @@ interface BonePropsBlockProps {
 }
 
 function BonePropsBlock(props: BonePropsBlockProps) {
-  const { node, parentOptions, onMove, onRotate, onLength, onParent, onAddChild, onCreateIk, onCreatePath, onCreatePathConstraint, onDelete, onRename, onCopy, onToggleIsolate, isolated, C } = props;
+  const { node, parentOptions, onMove, onRotate, onLength, onParent, onAddChild, onCreateIk, onCreatePath, onCreatePathConstraint, onCreatePhysicsConstraint, onDelete, onRename, onCopy, onToggleIsolate, isolated, C } = props;
   const rotDeg = (node.rotation * 180) / Math.PI;
   // 输入框统一样式
   const inputStyle: React.CSSProperties = {
@@ -2372,6 +2415,7 @@ function BonePropsBlock(props: BonePropsBlockProps) {
       children: [
         { icon: '🪝', label: 'IK 约束', action: onCreateIk },
         { icon: '⤳', label: '路径约束', action: onCreatePathConstraint ? () => onCreatePathConstraint() : undefined },
+        { icon: '🌊', label: '物理约束', action: onCreatePhysicsConstraint ? () => onCreatePhysicsConstraint() : undefined },
         { icon: '⇄', label: '变换约束' }, // 未实现
       ],
     },
@@ -3843,6 +3887,183 @@ function PathConstraintsSectionPropsBlock(props: PathConstraintsSectionPropsBloc
                 </div>
               </>
             )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =================================================================================
+//  物理约束属性面板（仿 Spine 4.1 Physics Constraint：标题栏 + Setup/Properties 两组滑块）
+//  - 与 IK / 路径约束共用 selectedConstraintId（id 前缀 phy_ 区分）
+// =================================================================================
+interface PhysicsConstraintsSectionPropsBlockProps {
+  physicsConstraints: PhysicsConstraintDef[];
+  bones: BoneNode[];
+  onRemove: (id: string) => void;
+  onRename: (id: string, name: string) => void;
+  /** 标题栏「✎」→ 弹窗重命名 */
+  onRenamePopup?: (id: string) => void;
+  /** 标题栏「⧉」→ 复制 */
+  onCopy?: (id: string) => void;
+  onBone: (id: string, boneId: string) => void;
+  onProp: (id: string, key: keyof Omit<PhysicsConstraintDef, 'id' | 'name' | 'boneId'>, v: number) => void;
+  onMove: (id: string, toIndex: number) => void;
+  C: any;
+}
+
+function PhysicsConstraintsSectionPropsBlock(props: PhysicsConstraintsSectionPropsBlockProps) {
+  const { physicsConstraints, bones, onRemove, onRename, onRenamePopup, onCopy, onBone, onProp, C } = props;
+  const selectedId = usePixiBonesStore((s) => s.selectedConstraintId);
+  const selected = physicsConstraints.find((c) => c.id === selectedId) ?? null;
+  const boneName = (id: string) => bones.find((b) => b.id === id)?.name ?? '(已删)';
+
+  // 通用滑块行：图标 + 标签 + 数字输入 + 滑块（0..1）
+  const renderPercent = (id: string, key: 'x' | 'y' | 'rotate' | 'shearX' | 'scaleX') => {
+    if (!selected) return null;
+    const v = selected[key];
+    return (
+      <div key={key} className="flex items-center gap-1">
+        <span className="shrink-0 w-10" style={{ color: C.accent }}>{
+          key === 'x' ? 'X' : key === 'y' ? 'Y' : key === 'rotate' ? '旋转' : key === 'shearX' ? '剪切' : '缩放'
+        }</span>
+        <input
+          type="number"
+          className="w-14 shrink-0 rounded px-1 py-0.5 outline-none text-[13px]"
+          style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
+          defaultValue={v}
+          onBlur={(e) => {
+            const n = Number(e.target.value);
+            if (!isNaN(n) && n !== v) onProp(id, key, Math.max(0, Math.min(1, n)));
+          }}
+          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+        />
+        <input
+          type="range"
+          className="flex-1"
+          min={0}
+          max={1}
+          step={0.01}
+          value={v}
+          onChange={(e) => onProp(id, key, Number(e.target.value))}
+        />
+        <span className="shrink-0 w-8 text-right" style={{ color: C.dim }}>{Math.round(v * 100)}</span>
+      </div>
+    );
+  };
+  // 通用数值滑块行（无 0..1 限制）
+  const renderFree = (id: string, key: 'inertia' | 'strength' | 'damping' | 'massInverse' | 'wind' | 'gravity' | 'mix', max: number, label: string) => {
+    if (!selected) return null;
+    const v = selected[key];
+    return (
+      <div key={key} className="flex items-center gap-1">
+        <span className="shrink-0 w-10" style={{ color: C.accent }}>{label}</span>
+        <input
+          type="number"
+          step={0.01}
+          className="w-16 shrink-0 rounded px-1 py-0.5 outline-none text-[13px]"
+          style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
+          defaultValue={v}
+          onBlur={(e) => {
+            const n = Number(e.target.value);
+            if (!isNaN(n) && n !== v) onProp(id, key, n);
+          }}
+          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+        />
+        <input
+          type="range"
+          className="flex-1"
+          min={0}
+          max={max}
+          step={0.01}
+          value={Math.min(v, max)}
+          onChange={(e) => onProp(id, key, Number(e.target.value))}
+        />
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ borderTop: '1px solid ' + C.border, background: C.panelDk, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      {/* 标题栏：🌊 物理约束: <name> + 复制 / 重命名 / 删除（参考其它属性面板） */}
+      <PanelTitleBar
+        icon="🌊"
+        kindLabel="物理约束"
+        name={selected?.name ?? '（未选中）'}
+        C={C}
+        onDelete={selected ? () => {
+          onRemove(selected.id);
+          usePixiBonesStore.getState().selectSection('constraints');
+        } : undefined}
+        deleteTitle="删除该物理约束"
+        onRename={selected ? (onRenamePopup ? () => onRenamePopup!(selected.id) : () => onRename(selected.id, selected.name)) : undefined}
+        onCopy={selected ? (onCopy ? () => onCopy!(selected.id) : undefined) : undefined}
+      />
+
+      {selected && (
+        <div className="px-2 py-1.5 flex flex-col gap-1.5 text-[13px] overflow-y-auto" style={{ borderTop: '1px solid ' + C.border }}>
+          {/* 骨骼：单选下拉 */}
+          <div className="flex items-center gap-1">
+            <span className="shrink-0 w-10" style={{ color: C.accent }}>骨骼</span>
+            <select
+              className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
+              style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
+              value={selected.boneId}
+              onChange={(e) => onBone(selected.id, e.target.value)}
+            >
+              {bones.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+            <span className="shrink-0" style={{ color: C.dim }}>{boneName(selected.boneId)}</span>
+          </div>
+
+          {/* Setup：X / Y / 旋转 / 剪切 / 缩放 影响程度 */}
+          <div className="flex flex-col gap-1 pt-1 border-t" style={{ borderColor: C.border }}>
+            <div className="text-[12px]" style={{ color: C.dim }}>Setup · 属性受影响程度（0..1）</div>
+            {renderPercent(selected.id, 'x')}
+            {renderPercent(selected.id, 'y')}
+            {renderPercent(selected.id, 'rotate')}
+            {renderPercent(selected.id, 'shearX')}
+            {renderPercent(selected.id, 'scaleX')}
+            {/* Limit / FPS */}
+            <div className="flex items-center gap-1">
+              <span className="shrink-0 w-10" style={{ color: C.accent }}>限速</span>
+              <input
+                type="number"
+                className="w-16 shrink-0 rounded px-1 py-0.5 outline-none text-[13px]"
+                style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
+                defaultValue={selected.limit}
+                onBlur={(e) => {
+                  const n = Number(e.target.value);
+                  if (!isNaN(n) && n !== selected.limit) onProp(selected.id, 'limit', Math.max(0, n));
+                }}
+                onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+              />
+              <span className="text-[11px] shrink-0" style={{ color: C.dim }}>FPS</span>
+              <input
+                type="number"
+                className="w-16 shrink-0 rounded px-1 py-0.5 outline-none text-[13px]"
+                style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
+                defaultValue={selected.fps}
+                onBlur={(e) => {
+                  const n = Number(e.target.value);
+                  if (!isNaN(n) && n !== selected.fps) onProp(selected.id, 'fps', Math.max(1, Math.min(240, n)));
+                }}
+                onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+              />
+            </div>
+          </div>
+
+          {/* Properties：模拟参数 */}
+          <div className="flex flex-col gap-1 pt-1 border-t" style={{ borderColor: C.border }}>
+            <div className="text-[12px]" style={{ color: C.dim }}>Properties · 模拟行为</div>
+            {renderFree(selected.id, 'inertia', 1, '惯性')}
+            {renderFree(selected.id, 'strength', 1, '强度')}
+            {renderFree(selected.id, 'damping', 1, '阻尼')}
+            {renderFree(selected.id, 'massInverse', 1, '质量倒数')}
+            {renderFree(selected.id, 'wind', 100, '风')}
+            {renderFree(selected.id, 'gravity', 100, '重力')}
+            {renderFree(selected.id, 'mix', 1, '混合')}
           </div>
         </div>
       )}
