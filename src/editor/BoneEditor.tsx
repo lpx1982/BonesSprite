@@ -1572,9 +1572,12 @@ export function BoneEditor() {
             g.lineTo(b.x, b.y);
           }
         }
-        // ★ 选中高亮：当前选中的路径附件 → 黄色加粗描边；否则用路径颜色
+        // ★ 选中高亮：当前选中的路径附件（支持多选）→ 黄色加粗描边；否则用路径颜色
+        const stDraw = usePixiBonesStore.getState();
         const selected = !!attachmentId
-          && attachmentId === usePixiBonesStore.getState().selectedAttachmentId;
+          && stDraw.selectedAttachmentIds.includes(attachmentId);
+        // ★ 命中区：先画一条透明粗描边（不占视觉），把点击容差扩大到 ~6px
+        g.stroke({ width: 12, color: 0xFFFFFF, alpha: 0 });
         if (selected) {
           g.stroke({ width: 3.5, color: 0xFFD34D, alpha: 1 });
         } else {
@@ -4220,11 +4223,11 @@ export function BoneEditor() {
               // ★ 变换工具下的选择分类锁定：当前已选「骨骼类」→ 点图层被忽略（保持骨骼选中）
               const stLock2 = usePixiBonesStore.getState();
               if (!(stLock2.activeTool !== null && stLock2.selectedBoneIds.length > 0)) {
-                // ★ 点击路径曲线 → 选中该**路径附件**（显示路径属性面板）；否则选中插槽
+                // ★ 点击路径曲线 → 选中该**路径附件**（Shift = 加选/反选；显示路径属性面板）
                 const sl2 = stLock2.slots.find((x) => x.id === hitSlotId) ?? null;
                 const aid2 = sl2?.activeAttachmentId ?? null;
                 if (aid2 && stLock2.attachmentPaths[aid2]) {
-                  store.selectAttachment(hitSlotId, aid2, 'slotatt:' + hitSlotId + ':' + aid2);
+                  store.selectAttachment(hitSlotId, aid2, 'slotatt:' + hitSlotId + ':' + aid2, additive);
                 } else if (additive) {
                   store.selectSlots([...prevSlotIds, hitSlotId], false);
                 } else {
@@ -4288,6 +4291,30 @@ export function BoneEditor() {
               ? (additive ? Array.from(new Set([...prevSlotIds, ...hitSlots])) : hitSlots)
               : [];
             store.selectBox(mergedBones, mergedLayers);
+            // ★ 3) 框内路径附件：任一路径结（顶点）落在框内即命中；姿势模式不参与
+            const hitPaths: string[] = [];
+            if (layerSelectable) {
+              for (const [aid, path] of Object.entries(store.attachmentPaths)) {
+                const slot = store.slots.find((x) => x.activeAttachmentId === aid);
+                if (!slot) continue;
+                if (store.slotVisibility[slot.id] === false) continue;
+                for (const vv of path.vertices) {
+                  const sp = pathLocalToScreen(slot.id, vv.x, vv.y);
+                  if (sp && sp.x >= xMin && sp.x <= xMax && sp.y >= yMin && sp.y <= yMax) {
+                    hitPaths.push(aid);
+                    break;
+                  }
+                }
+              }
+            }
+            if (hitPaths.length > 0) {
+              // 主选中 = 框内最后一条；增量（Shift）时与「已有附件选择」合并
+              const prevPathSel = store.selectedAttachmentIds;
+              const mergedPaths = additive
+                ? Array.from(new Set([...prevPathSel, ...hitPaths]))
+                : hitPaths;
+              store.setSelectedAttachments(mergedPaths, mergedPaths[mergedPaths.length - 1] ?? null);
+            }
           }
           // 清理框选矩形
           a.stage.removeChild(rect);
@@ -5186,8 +5213,9 @@ export function BoneEditor() {
           drawPathGizmos();
           drawPathConstraintGizmo();
         }
-        // 选中路径附件变化 → 重画所有路径曲线（选中高亮 / 恢复原色）
-        if (state.selectedAttachmentId !== prev.selectedAttachmentId) {
+        // 选中路径附件变化（单选 / Shift 加选 / 框选）→ 重画所有路径曲线（高亮 / 恢复原色）
+        if (state.selectedAttachmentId !== prev.selectedAttachmentId
+          || state.selectedAttachmentIds !== prev.selectedAttachmentIds) {
           for (const k of Object.keys(state.attachmentPaths)) {
             redrawPathCurves(k);
           }

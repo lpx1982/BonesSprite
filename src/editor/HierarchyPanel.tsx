@@ -1783,8 +1783,9 @@ interface TreeRowViewProps {
   selectedRowKey: string | null;
   /** 选中一个插槽（key = slotId） */
   onSelectSlot: (slotId: string, rowKey?: string) => void;
-  /** 选中一个素材附件（点附件行）。slotId = 上下文插槽（「图片」里可能没被引用 → null） */
-  onSelectAttachment: (slotId: string | null, attachmentId: string, rowKey: string) => void;
+  /** 选中一个素材附件（点附件行）。slotId = 上下文插槽（「图片」里可能没被引用 → null）；
+   *  additive=true = Shift 加选/反选（多选路径附件） */
+  onSelectAttachment: (slotId: string | null, attachmentId: string, rowKey: string, additive?: boolean) => void;
   /** 切换插槽当前显示的附件 */
   onActivateAttachment: (slotId: string, attachmentId: string) => void;
   /** 分区节点（约束 / 图片 / …）相关 */
@@ -1923,17 +1924,18 @@ function TreeRowView(props: TreeRowViewProps) {
         if (!isSelected) e.currentTarget.style.background = 'transparent';
         if (previewLayer && onAssetHoverLeave) onAssetHoverLeave();
       }}
-      onClick={() => {
+      onClick={(e) => {
         if (isBone && node) onSelect(node.id);
         else if (isAnim) onSelectAnimation();
         else if (isSection && sectionKey !== null) onSelectSection(sectionKey);
         else if (isSlot && slot) onSelectSlot(slot.id, row.key);
         else if (isAsset && (asset || row.isPath)) {
           // 附件行（图片 / 路径）：有引用它的插槽则顺便切为「当前显示」，然后选中该附件
+          // ★ Shift = 加选/反选（路径多选；图片附件仍单选）
           const aid = asset ? asset.id : (row.pathAttachmentId ?? '');
           if (!aid) return;
           if (assetSlotId) onActivateAttachment(assetSlotId, aid);
-          onSelectAttachment(assetSlotId, aid, row.key);
+          onSelectAttachment(assetSlotId, aid, row.key, row.isPath ? e.shiftKey : undefined);
         }
         else if (isConstraint && row.constraint) onSelectConstraint(row.constraint.id);
         else if (isPathConstraint && row.pathConstraint) onSelectConstraint(row.pathConstraint.id);
