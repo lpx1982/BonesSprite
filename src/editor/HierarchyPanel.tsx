@@ -3955,12 +3955,23 @@ function PathConstraintsSectionPropsBlock(props: PathConstraintsSectionPropsBloc
 
 // =================================================================================
 //  物理约束属性面板（对齐 Spine 4.1 Physics Constraint 属性面板布局）
-//   - 标题栏：🌊 物理约束: <name> + ⚙ / ⧉ / ✎ / ✕
-//   - 装配（可折叠）：目标 / 移动(X,Y) / 旋转 / 缩放X / 倾斜X / 限制 / 帧/秒
-//   - Properties：惯性 / 力度 / 阻尼 / 质量 / 风 / 重力 / 混合（右侧 🔗 链式标记）
+//   - 标题栏：⚛ 物理约束: <name> + ⚙ / ⧉ / ✎ / ✕
+//   - 装配（可折叠）：📌目标 / ↔️移动(X,Y) / 🔄旋转 / 📐缩放X / ✛倾斜X / 🚫限制 / ⏱帧/秒
+//   - Properties：⚖惯性 / 🎚力度 / 〰阻尼 / 🏋质量 / 💨风 / ⬇重力 / 🔵混合（PRO + 右侧 🔗）
 //   - 底部动作栏：模拟 / 确定性 / + 新建 / 皮肤…（PRO 禁用）+ 重置 / 全部重置
 //   - 数值按 Spine 习惯以「百分比」显示（内部 0..1，×100 显示、÷100 写回）
 // =================================================================================
+
+/** Spine 风格 PRO 徽标（红底白字小标签）。 */
+function ProBadge({ C }: { C: any }) {
+  return (
+    <span
+      className="shrink-0 px-1 text-[8px] font-bold leading-[11px] rounded-sm"
+      style={{ background: 'rgba(220,60,60,0.25)', color: '#ff8080', border: '1px solid rgba(220,60,60,0.55)' }}
+    >PRO</span>
+  );
+}
+
 interface PhysicsConstraintsSectionPropsBlockProps {
   physicsConstraints: PhysicsConstraintDef[];
   bones: BoneNode[];
@@ -3995,30 +4006,32 @@ function PhysicsConstraintsSectionPropsBlock(props: PhysicsConstraintsSectionPro
   const blurOnEnter = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
   };
-  /** 0..1 属性行（百分比显示 ×100）：label + 数值输入 + 滑块 + 百分数值 + 🔗 */
+  /** 0..1 属性行（百分比显示 ×100）：icon + label + 数值输入 + 滑块 + 百分数值 + [PRO] [🔗] */
   const renderPct = (
     key: 'x' | 'y' | 'rotate' | 'shearX' | 'scaleX' | 'inertia' | 'strength' | 'damping' | 'massInverse' | 'wind' | 'gravity' | 'mix',
+    icon: string,
     label: string,
-    signed = false,
+    opts: { signed?: boolean; pro?: boolean; chain?: boolean } = {},
   ) => {
     if (!selected) return null;
     const v = selected[key];
     const pct = Math.round(v * 100 * 10) / 10;
     return (
       <div key={key} className="flex items-center gap-1">
+        <span className="shrink-0 w-4 text-center text-[12px]" style={{ color: C.dim }}>{icon}</span>
         <span className="shrink-0 w-9 text-[12px]" style={{ color: C.accent }}>{label}</span>
         <input
           type="number"
           className={numCls}
           style={numStyle}
-          min={signed ? -100 : 0}
+          min={opts.signed ? -100 : 0}
           max={100}
           step={0.1}
           defaultValue={pct}
           onBlur={(e) => {
             const n = Number(e.target.value);
             if (!isNaN(n)) {
-              const k = signed ? Math.max(-1, Math.min(1, n / 100)) : Math.max(0, Math.min(1, n / 100));
+              const k = opts.signed ? Math.max(-1, Math.min(1, n / 100)) : Math.max(0, Math.min(1, n / 100));
               onProp(selected.id, key, k);
             }
           }}
@@ -4027,23 +4040,24 @@ function PhysicsConstraintsSectionPropsBlock(props: PhysicsConstraintsSectionPro
         <input
           type="range"
           className="flex-1"
-          min={signed ? -100 : 0}
+          min={opts.signed ? -100 : 0}
           max={100}
           step={0.1}
-          value={Math.max(signed ? -100 : 0, Math.min(100, pct))}
+          value={Math.max(opts.signed ? -100 : 0, Math.min(100, pct))}
           onChange={(e) => onProp(selected.id, key, Number(e.target.value) / 100)}
         />
         <span className="shrink-0 w-8 text-right text-[11px]" style={{ color: C.dim }}>{pct}</span>
-        <span className="shrink-0 text-[10px]" style={{ color: C.dim }} title="链式（作用于子骨骼）">🔗</span>
+        {opts.pro ? <ProBadge C={C} /> : null}
+        {opts.chain ? <span className="shrink-0 text-[10px]" style={{ color: C.dim }} title="链式（作用于子骨骼）">🔗</span> : null}
       </div>
     );
   };
 
   return (
     <div style={{ borderTop: '1px solid ' + C.border, background: C.panelDk, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      {/* 标题栏：🌊 物理约束: <name> + ⚙ / ⧉ / ✎ / ✕ */}
+      {/* 标题栏：⚛ 物理约束: <name> + ⚙ / ⧉ / ✎ / ✕ */}
       <PanelTitleBar
-        icon="🌊"
+        icon="⚛"
         kindLabel="物理约束"
         name={selected?.name ?? '（未选中）'}
         C={C}
@@ -4094,10 +4108,12 @@ function PhysicsConstraintsSectionPropsBlock(props: PhysicsConstraintsSectionPro
                   title="更换目标骨骼"
                   onClick={(e) => { e.stopPropagation(); setPickBone(!pickBone); }}
                 >✎</button>
+                <ProBadge C={C} />
               </div>
 
               {/* 移动：X / Y 双轴（各自 0..100 百分比） */}
               <div className="flex items-center gap-1">
+                <span className="shrink-0 w-4 text-center text-[12px]" style={{ color: C.dim }}>↔</span>
                 <span className="shrink-0 w-9 text-[12px]" style={{ color: C.accent }}>移动</span>
                 <span className="text-[10px] shrink-0" style={{ color: C.dim }}>X</span>
                 <input
@@ -4141,12 +4157,13 @@ function PhysicsConstraintsSectionPropsBlock(props: PhysicsConstraintsSectionPro
                 />
               </div>
 
-              {renderPct('rotate', '旋转')}
-              {renderPct('scaleX', '缩放X')}
-              {renderPct('shearX', '倾斜X')}
+              {renderPct('rotate', '🔄', '旋转')}
+              {renderPct('scaleX', '📐', '缩放X')}
+              {renderPct('shearX', '✛', '倾斜X')}
 
               {/* 限制：单帧偏移上限（世界像素） */}
               <div className="flex items-center gap-1">
+                <span className="shrink-0 w-4 text-center text-[12px]" style={{ color: C.dim }}>🚫</span>
                 <span className="shrink-0 w-9 text-[12px]" style={{ color: C.accent }}>限制</span>
                 <input
                   type="number"
@@ -4172,6 +4189,7 @@ function PhysicsConstraintsSectionPropsBlock(props: PhysicsConstraintsSectionPro
 
               {/* 帧/秒：物理更新率 */}
               <div className="flex items-center gap-1">
+                <span className="shrink-0 w-4 text-center text-[12px]" style={{ color: C.dim }}>⏱</span>
                 <span className="shrink-0 w-9 text-[12px]" style={{ color: C.accent }}>帧/秒</span>
                 <input
                   type="number"
@@ -4193,19 +4211,20 @@ function PhysicsConstraintsSectionPropsBlock(props: PhysicsConstraintsSectionPro
                   onChange={(e) => onProp(selected.id, 'fps', Number(e.target.value))}
                 />
                 <span className="shrink-0 w-8 text-right text-[11px]" style={{ color: C.dim }}>{selected.fps}</span>
+                <ProBadge C={C} />
               </div>
             </div>
           )}
 
           {/* ── Properties：模拟参数（无标题，仿 Spine）── */}
           <div className="flex flex-col gap-1.5 pt-1.5 border-t" style={{ borderColor: C.border }}>
-            {renderPct('inertia', '惯性')}
-            {renderPct('strength', '力度')}
-            {renderPct('damping', '阻尼')}
-            {renderPct('massInverse', '质量')}
-            {renderPct('wind', '风', true)}
-            {renderPct('gravity', '重力', true)}
-            {renderPct('mix', '混合')}
+            {renderPct('inertia', '⚖', '惯性', { pro: true, chain: true })}
+            {renderPct('strength', '🎚', '力度', { pro: true, chain: true })}
+            {renderPct('damping', '〰', '阻尼', { pro: true, chain: true })}
+            {renderPct('massInverse', '🏋', '质量', { pro: true, chain: true })}
+            {renderPct('wind', '💨', '风', { signed: true, pro: true, chain: true })}
+            {renderPct('gravity', '⬇', '重力', { signed: true, pro: true, chain: true })}
+            {renderPct('mix', '🔵', '混合', { pro: true, chain: true })}
           </div>
 
           {/* ── 底部动作栏：模拟 / 确定性 / + 新建 / 皮肤… ── */}
