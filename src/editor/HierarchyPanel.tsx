@@ -239,6 +239,26 @@ export function HierarchyPanel() {
   } | null>(null);
   const closeRename = () => setPendingRename(null);
 
+  // ★ 监听「编辑路径」浮动面板的「新建」按钮 → 弹统一的命名对话框，新建一条路径
+  //   （浮动面板在 CanvasOverlay，这里通过自定义事件联动）
+  useEffect(() => {
+    const onNewPath = () => {
+      const st = usePixiBonesStore.getState();
+      // 目标骨骼：当前选中的骨，否则根骨
+      const boneId = st.selectedBoneId
+        ?? (st.bones.find((b) => b.parentId === null)?.id ?? null);
+      if (!boneId) return;
+      setPendingRename({
+        title: '新建路径',
+        message: '为新路径输入一个名称:',
+        initialValue: `路径 ${Object.keys(st.attachmentPaths).length + 1}`,
+        onConfirm: (v) => { createPathSlotForBone(boneId, v); closeRename(); },
+      });
+    };
+    window.addEventListener('spine:new-path', onNewPath);
+    return () => window.removeEventListener('spine:new-path', onNewPath);
+  }, [createPathSlotForBone, setPendingRename]);
+
   /**
    * 构造每一行的双击重命名回调。
    * - 未支持的 kind（section / project / …）→ 返回 undefined → TreeRow 不响应双击。

@@ -250,6 +250,8 @@ export function CanvasOverlay() {
 
       {/* 网格编辑浮动面板（勾选「网格」+ 点「编辑网格」后出现） */}
       <MeshEditPanel />
+      {/* 路径编辑浮动面板（选中路径附件 + 点「编辑路径」后出现；新建路径后自动进入） */}
+      <PathEditPanel />
       {/* 重置网格弹窗：网格已绑定骨骼时点「重置」出现（从网格编辑工具栏或层级面板触发） */}
       <ResetMeshDialog />
     </div>
@@ -841,6 +843,160 @@ function MeshEditPanel() {
       {/* 描绘参数对话框（仿 Spine 的 Trace Settings） */}
       <TraceDialog />
     </div>
+  );
+}
+
+// =================================================================================
+//  路径编辑浮动面板（仿 Spine 的「编辑网格」面板，UI 与网格编辑一致）
+//    工具：创建（点结 / 拖柄 / 新建顶点）、删除（点结删除）
+//    底部显示顶点数。新建 = 新建一条路径（弹命名对话框）
+//    显示条件：正在编辑某条路径（pathEditAttachmentId 非空）
+// =================================================================================
+function PathEditPanel() {
+  const editPathId = usePixiBonesStore((s) => s.pathEditAttachmentId);
+  const setPathEdit = usePixiBonesStore((s) => s.setPathEdit);
+  const pathTool = usePixiBonesStore((s) => s.pathEditTool);
+  const setPathTool = usePixiBonesStore((s) => s.setPathTool);
+  const newVertexMode = usePixiBonesStore((s) => s.pathNewVertexMode);
+  const toggleNewVertexMode = usePixiBonesStore((s) => s.togglePathNewVertexMode);
+  const paths = usePixiBonesStore((s) => s.attachmentPaths);
+
+  if (!editPathId) return null;
+  const path = paths[editPathId] ?? null;
+  if (!path) return null;
+  const vertexCount = path.vertices.length;
+
+  /** 面板里的小按钮（仿网格编辑：中灰底、激活蓝底、图标 + 文字） */
+  const pathBtnStyle = (active: boolean, disabled = false) => ({
+    display: 'flex' as const,
+    alignItems: 'center' as const,
+    gap: 3,
+    padding: '3px 7px',
+    borderRadius: 3,
+    border: '1px solid ' + (active ? '#2E7FC0' : '#555555'),
+    background: active ? '#2E8BD8' : '#4A4A4A',
+    color: active ? '#FFFFFF' : (disabled ? 'var(--spine-text-dim)' : '#DDDDDD'),
+    fontSize: 11,
+    lineHeight: '14px',
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    opacity: disabled ? 0.5 : 1,
+    whiteSpace: 'nowrap' as const,
+    userSelect: 'none' as const,
+  });
+
+  return (
+    <div
+      className="absolute pointer-events-auto"
+      style={{
+        left: '50%',
+        transform: 'translateX(-50%)',
+        bottom: 12,
+        background: 'var(--spine-bg-panel)',
+        border: '1px solid var(--spine-border)',
+        borderRadius: 4,
+        boxShadow: '0 6px 20px rgba(0, 0, 0, 0.55)',
+        zIndex: 30,
+        overflow: 'hidden',
+      }}
+    >
+      {/* 标题栏：编辑路径 + 退出（深色底） */}
+      <div
+        className="flex items-center"
+        style={{
+          background: 'var(--spine-bg-panel-dark)',
+          padding: '4px 6px 4px 10px',
+          borderBottom: '1px solid var(--spine-border)',
+        }}
+      >
+        <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--spine-text)' }}>编辑路径</span>
+        <button
+          style={{
+            marginLeft: 16, background: 'transparent', border: 'none',
+            color: 'var(--spine-text)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '0 2px',
+          }}
+          title="退出路径编辑（Esc）"
+          onClick={() => setPathEdit(null)}
+        >✕</button>
+      </div>
+
+      {/* 内容区 */}
+      <div style={{ padding: '6px 8px' }}>
+        {/* 行 1：创建 / 删除 工具 */}
+        <div className="flex items-center justify-center" style={{ gap: 4, marginBottom: 5 }}>
+          <button
+            style={pathBtnStyle(pathTool === 'create')}
+            title="创建：单击加结；按住拖动拖出手柄调弧度；点回起点闭合；右键结束开放路径"
+            onClick={() => setPathTool('create')}
+          ><PathIconCreate />创建</button>
+          <button
+            style={pathBtnStyle(pathTool === 'delete')}
+            title="删除：单击结删除"
+            onClick={() => setPathTool('delete')}
+          ><PathIconDelete />删除</button>
+        </div>
+
+        {/* 行 2：新建（新建一条路径）/ 新建顶点模式 */}
+        <div className="flex items-center justify-center" style={{ gap: 4, marginBottom: 5 }}>
+          <button
+            style={pathBtnStyle(false)}
+            title="新建：创建一条新路径（先弹命名对话框）"
+            onClick={() => {
+              // ★ 让 HierarchyPanel 弹统一的命名对话框（复用「新建 → 路径」入口）
+              window.dispatchEvent(new CustomEvent('spine:new-path'));
+            }}
+          ><PathIconNew />新建</button>
+          <button
+            style={pathBtnStyle(newVertexMode)}
+            title={newVertexMode ? '退出新建顶点模式' : '新建顶点：在当前路径上继续追加顶点'}
+            onClick={() => toggleNewVertexMode()}
+          ><PathIconAppend />{newVertexMode ? '追加中' : '追加'}</button>
+        </div>
+
+        {/* 行 3：顶点数 */}
+        <div className="flex items-center justify-center" style={{ gap: 12 }}>
+          <span style={{ fontSize: 11, color: 'var(--spine-text)' }}>顶点: {vertexCount}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---- 「编辑路径」面板的小图标（几何风格，颜色对齐 Spine）----
+function PathIconCreate() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden>
+      <path d="M2.5 2 L5.5 6 L9.5 4.5 L11.5 11" stroke="#5BBE5D" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+      <rect x="1" y="1" width="3" height="3" rx="0.6" fill="#5BBE5D" />
+      <path d="M11.6 1.6 L11.6 6 M9.4 3.8 L13.8 3.8" stroke="#5BBE5D" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function PathIconDelete() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden>
+      <path d="M2.5 2 L5.5 6 L9.5 4.5 L11.5 11" stroke="#E61E1E" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+      <rect x="1" y="1" width="3" height="3" rx="0.6" fill="#E61E1E" />
+      <path d="M10.4 9.4 L12.6 11.6 M12.6 9.4 L10.4 11.6" stroke="#E61E1E" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function PathIconNew() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden>
+      <path d="M2.5 2 L5.5 6 L9.5 4.5 L11.5 11" stroke="#BBBBBB" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M11.6 1.6 L11.6 6 M9.4 3.8 L13.8 3.8" stroke="#5BBE5D" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function PathIconAppend() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden>
+      <path d="M2.5 2 L5.5 6 L9.5 4.5 L11.5 11" stroke="#F0A020" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+      <rect x="5" y="1" width="3" height="3" rx="0.6" fill="#F0A020" />
+    </svg>
   );
 }
 
