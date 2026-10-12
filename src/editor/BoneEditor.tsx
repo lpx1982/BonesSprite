@@ -160,8 +160,6 @@ function applyTransformConstraintsToSkeleton(
 const physicsRuntimeByConstraint = new Map<string, PhysicsRuntimeState>();
 /** 上次物理约束推进的时间戳（performance.now，秒），用于算 delta。 */
 let lastPhysicsApplyAt = 0;
-/** [骨骼调试] 上次引擎骨架重建的骨骼 id 列表（仅增删时打印，避免拖动刷屏）。 */
-let lastSkeletonIds = '';
 
 /**
  * 把 store 里的物理约束组装成引擎解算上下文，并按顺序应用到引擎骨架。
@@ -2676,13 +2674,6 @@ export function BoneEditor() {
       };
 
       const buildSkeleton = (nodes: BoneNode[]) => {
-        // [骨骼调试] 仅在骨骼「增删」（id 集合变化）时打印骨架重建记录，
-        //   用于对照「层级树里的骨骼」vs「引擎骨架（画布要画的骨骼）」是否同步。
-        const idsKey = nodes.map((n) => n.id).join(',');
-        if (idsKey !== lastSkeletonIds) {
-          console.log('[骨骼调试] 骨架重建 骨骼数=%d ids=[%s]', nodes.length, idsKey);
-          lastSkeletonIds = idsKey;
-        }
         boneById.clear();
         const rootNode = nodes.find((n) => n.parentId === null);
         if (!rootNode) { skeletonRef = null; return; }
@@ -2992,11 +2983,7 @@ export function BoneEditor() {
 
         for (const node of nodes) {
           const b = boneById.get(node.id);
-          if (!b) {
-            // [骨骼调试] store 里有该骨骼，但引擎骨架缺失 → 画布不会绘制它（对应「树里有、画布无」现象）
-            console.warn('[骨骼调试] 画布跳过骨骼（引擎骨架缺失） id=%s 名=%s', node.id, node.name);
-            continue;
-          }
+          if (!b) continue;
           // 单选兼容：优先用 selectedBoneIds（多选），fallback 到 selectedBoneId
           const isSelected = (selectedBoneIds && selectedBoneIds.length > 0)
             ? selectedBoneIds.includes(node.id)
@@ -4460,30 +4447,6 @@ export function BoneEditor() {
               length,
               ...(targetSlot ? { name: targetSlot.name, slotId: targetSlot.id } : {}),
             });
-            // [骨骼调试] 记录生成骨骼的信息：id / 名字 / 点击世界坐标 / local 坐标 / 长度 / 父骨 / 骨骼总数，
-            //   并对比「父骨世界位置」与「新骨在引擎骨架中的实际世界位置」（画布实际画在哪）。
-            {
-              const sDbg = usePixiBonesStore.getState();
-              const newIdDbg = sDbg.selectedBoneId;
-              const nbDbg = newIdDbg ? sDbg.bones.find((b) => b.id === newIdDbg) : null;
-              const nbRef = newIdDbg ? boneById.get(newIdDbg) : null;
-              const nbWorld = nbRef && skeletonRef ? skeletonRef.getWorldPosition(nbRef) : null;
-              const fmtP = (v?: { x: number; y: number } | null) =>
-                v ? `(${Math.round(v.x * 10) / 10}, ${Math.round(v.y * 10) / 10})` : '(无)';
-              console.log(
-                '[骨骼调试] 生成骨骼 id=%s 名=%s | 点击世界=%s | local=%s | 旋转°=%f 长度=%f | 父骨id=%s | 父骨世界=%s | 骨骼世界=%s | 总数=%d',
-                newIdDbg,
-                nbDbg?.name,
-                fmtP({ x: startX, y: startY }),
-                fmtP({ x: localX, y: localY }),
-                Math.round(((localRot * 180) / Math.PI) * 10) / 10,
-                length,
-                dragState.parentId,
-                fmtP(parentWorld),
-                fmtP(nbWorld),
-                sDbg.bones.length,
-              );
-            }
             if (targetSlot) {
               const newId = usePixiBonesStore.getState().selectedBoneId;
               if (newId) {
@@ -5174,17 +5137,10 @@ export function BoneEditor() {
             ? selId
             : (rootBone ? rootBone.id : null);
           if (!parentId) return;
-          if (selId != null && parentId !== selId) {
-            console.warn('[骨骼调试] 选中骨骼 id=%s 已不存在（残留），创建时回退到父骨 id=%s', selId, parentId);
-          }
           const parentBone = boneById.get(parentId);
           if (!parentBone) return;
           // 父骨骼的世界坐标（pointerup 时用来算新骨骼的 local (x,y)）
           const parentWorld = skeletonRef!.getWorldPosition(parentBone);
-          // [骨骼调试] 记录创建模式下鼠标按下位置（屏幕 / 世界坐标）与父骨骼、捕获的父骨世界位置
-          console.log(
-            `[骨骼调试] 鼠标按下(创建模式) 屏幕=(${Math.round(ev.global.x)},${Math.round(ev.global.y)}) 世界=(${startWorldX.toFixed(1)},${startWorldY.toFixed(1)}) 父骨id=${parentId} 父骨世界=(${parentWorld.x.toFixed(1)},${parentWorld.y.toFixed(1)})`,
-          );
           // 创建预览 Gfx（pointermove 时画线，pointerup 时销毁）
           const preview = new Gfx();
           preview.eventMode = 'none';

@@ -104,7 +104,7 @@ function applyAbsoluteWorld(skeleton: Skeleton, ctx: TransformSolveContext): voi
     modified = true;
   }
 
-  if (scaleMix > 0) {
+  if (scaleMix !== 0) {
     // x 轴缩放：源 scaleX = sqrt(ta² + tb²)；offsetScaleX 是「源缩放上的增量乘数」
     let s = Math.sqrt(a * a + b * b);
     let ts = Math.sqrt(ta * ta + tb * tb);
@@ -118,7 +118,7 @@ function applyAbsoluteWorld(skeleton: Skeleton, ctx: TransformSolveContext): voi
     modified = true;
   }
 
-  if (shearMix > 0) {
+  if (shearMix !== 0) {
     // 目标「倾斜角 - 旋转角」差异 + offsetShearY → 混合后旋转目标 y 轴
     const by = Math.atan2(d, c);
     let r = Math.atan2(td, tc) - Math.atan2(tb, ta) - (by - Math.atan2(b, a));
@@ -174,7 +174,7 @@ function applyRelativeWorld(skeleton: Skeleton, ctx: TransformSolveContext): voi
     modified = true;
   }
 
-  if (scaleMix > 0) {
+  if (scaleMix !== 0) {
     // 相对：缩放因子 = (源scale - 1 + offset) × mix + 1
     let s = (Math.sqrt(ta * ta + tb * tb) - 1 + ctx.offsetScaleX) * scaleMix + 1;
     a *= s; b *= s;
@@ -183,7 +183,7 @@ function applyRelativeWorld(skeleton: Skeleton, ctx: TransformSolveContext): voi
     modified = true;
   }
 
-  if (shearMix > 0) {
+  if (shearMix !== 0) {
     // 相对：源的「倾斜角 - 旋转角」增量（+offset），旋转目标 y 轴
     let r = Math.atan2(td, tc) - Math.atan2(tb, ta);
     r = wrapRad(r);

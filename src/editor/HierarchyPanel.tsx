@@ -4646,12 +4646,11 @@ function TransformConstraintsSectionPropsBlock(props: TransformConstraintsSectio
         {/* ── 偏移 Offset（可折叠；PRO + 匹配 占位） ── */}
         {foldBtn(offsetOpen, () => setOffsetOpen(!offsetOpen), '偏移',
           <span className="ml-auto flex items-center gap-1 shrink-0">
-            <button
+            <span
               className="rounded px-1.5 text-[11px]"
               style={{ background: C.panel, color: C.dim, border: '1px solid ' + C.border, cursor: 'not-allowed' }}
-              disabled
               title="匹配源骨骼当前值（PRO，暂未实现）"
-            >匹配</button>
+            >匹配</span>
             <ProBadge C={C} />
           </span>)}
         {offsetOpen && (
@@ -4668,32 +4667,31 @@ function TransformConstraintsSectionPropsBlock(props: TransformConstraintsSectio
         {/* ── 混合 Mix（可折叠；PRO 占位） ── */}
         {foldBtn(mixOpen, () => setMixOpen(!mixOpen), '混合',
           <span className="ml-auto flex items-center gap-1 shrink-0">
-            <button
+            <span
               className="rounded px-1.5 text-[11px]"
               style={{ background: C.panel, color: C.dim, border: '1px solid ' + C.border, cursor: 'not-allowed' }}
-              disabled
               title="匹配源骨骼当前值（PRO，暂未实现）"
-            >匹配</button>
+            >匹配</span>
             <ProBadge C={C} />
           </span>)}
         {mixOpen && (
           <div className="flex flex-col gap-1.5">
-            {renderNumRow('rotateMix', '🔄', '旋转', 0, 1, 0.01, { pct: true })}
-            {renderNumRow('translateMix', '↔', '平移', 0, 1, 0.01, { pct: true })}
-            {renderNumRow('scaleMix', '📐', '缩放', 0, 1, 0.01, { pct: true })}
-            {renderNumRow('shearMix', '➗', '倾斜', 0, 1, 0.01, { pct: true })}
+            {/* signed：Spine 允许负 Mix（反向跟随），负值必须能输入 */}
+            {renderNumRow('rotateMix', '🔄', '旋转', 0, 1, 0.01, { pct: true, signed: true })}
+            {renderNumRow('translateMix', '↔', '平移', 0, 1, 0.01, { pct: true, signed: true })}
+            {renderNumRow('scaleMix', '📐', '缩放', 0, 1, 0.01, { pct: true, signed: true })}
+            {renderNumRow('shearMix', '➗', '倾斜', 0, 1, 0.01, { pct: true, signed: true })}
           </div>
         )}
 
         {/* ── 属性 Properties（可折叠；PRO + 匹配 占位） ── */}
         {foldBtn(propsOpen, () => setPropsOpen(!propsOpen), '属性',
           <span className="ml-auto flex items-center gap-1 shrink-0">
-            <button
+            <span
               className="rounded px-1.5 text-[11px]"
               style={{ background: C.panel, color: C.dim, border: '1px solid ' + C.border, cursor: 'not-allowed' }}
-              disabled
               title="匹配源骨骼当前值（PRO，暂未实现）"
-            >匹配</button>
+            >匹配</span>
             <ProBadge C={C} />
           </span>)}
         {propsOpen && (
