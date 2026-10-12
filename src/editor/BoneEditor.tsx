@@ -1842,7 +1842,8 @@ export function BoneEditor() {
         const aid = slot.activeAttachmentId;
         const path = aid ? s.attachmentPaths[aid] : null;
         if (!path || path.vertices.length < 2) return;
-        const slotWorld = computeSlotWorldMatrix(slot, s.slotBindings[slot.id], boneById, s.slotTransforms, path, s.attachmentMeshes);
+        // ★ 与路径曲线渲染同源：传「约束前」骨骼 world 快照，保证灰线 gizmo 与曲线重叠
+        const slotWorld = computeSlotWorldMatrix(slot, s.slotBindings[slot.id], boneById, s.slotTransforms, path, s.attachmentMeshes, setupWorldByBoneId);
         const sx = root.scale.x;
         const sy = root.scale.y;
         const toScreen = (px: number, py: number) => {
@@ -4064,6 +4065,7 @@ export function BoneEditor() {
             // ★ 与 drawPathConstraintGizmo 用同一个 computeSlotWorldMatrix，保证控制柄落点与回写一致
             const slotWorld = computeSlotWorldMatrix(
               slot, st.slotBindings[slot.id], boneById, st.slotTransforms, path, st.attachmentMeshes,
+              setupWorldByBoneId,
             );
             const inv = invAffine(slotWorld);
             if (inv && sx !== 0 && sy !== 0) {
