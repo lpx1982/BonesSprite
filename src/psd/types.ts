@@ -120,4 +120,10 @@ export interface PathData {
   rotation: number;
   /** 缩放（「冻结」后归 1）。 */
   scaleX: number; scaleY: number;
+  /** 路径显示颜色（0xRRGGBB，仿 Spine 路径面板「颜色」；默认 0xff7f2a 路径橙）。 */
+  color: number;
+  /** 选项：选择 / 导出 / 名称（仿 Spine 附件通用 Options，仅编辑器内部 UI 状态，不参与导入导出）。 */
+  selectable: boolean;
+  exportable: boolean;
+  nameable: boolean;
 }

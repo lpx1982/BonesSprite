@@ -110,6 +110,9 @@ export const DOCK_PANEL_DEFAULT_WIDTH: Record<string, number> = {
 export const DOCK_PANEL_MIN_WIDTH = 180;
 export const DOCK_RESIZER_WIDTH = 6;
 
+/** 路径附件默认显示颜色（0xRRGGBB；仿 Spine 默认路径橙）。 */
+export const DEFAULT_PATH_COLOR = 0xff7f2a;
+
 /**
  * 骨骼的可序列化表示。所有 BoneNode 共同构成一棵骨树（parentId === null 是根）。
  *
@@ -640,6 +643,12 @@ export interface PixiBonesState {
   reversePath: (attachmentId: string) => void;
   /** 冻结：rotation 归 0、scaleX/scaleY 归 1。推历史。 */
   freezePath: (attachmentId: string) => void;
+  /** 重置：rotation 归 0、scaleX/scaleY 归 1（同「冻结」但不烘焙，仿 Spine「重置」）。推历史。 */
+  resetPath: (attachmentId: string) => void;
+  /** 设置路径显示颜色（0xRRGGBB，仿 Spine 路径面板「颜色」）。推历史。 */
+  setPathColor: (attachmentId: string, color: number) => void;
+  /** 设置选项开关（选择 / 导出 / 名称，仅编辑器内部 UI 状态）。推历史。 */
+  setPathOption: (attachmentId: string, opt: 'selectable' | 'exportable' | 'nameable', v: boolean) => void;
   /** 设置选中的结索引（框选 / ⌘ 多选用；不推历史） */
   setPathSelectedVertices: (ids: number[]) => void;
 
@@ -2041,7 +2050,10 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     set((st) => ({
       attachmentPaths: {
         ...st.attachmentPaths,
-        [id]: { vertices: [], closed: false, constantSpeed: true, rotation: 0, scaleX: 1, scaleY: 1 },
+        [id]: {
+          vertices: [], closed: false, constantSpeed: true, rotation: 0, scaleX: 1, scaleY: 1,
+          color: DEFAULT_PATH_COLOR, selectable: true, exportable: true, nameable: true,
+        },
       },
       // 加入插槽附件末尾并设为当前显示
       slots: st.slots.map((sl) => (sl.id === slotId
@@ -2078,7 +2090,10 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       slotVisibility: { ...st.slotVisibility, [slotId]: true },
       attachmentPaths: {
         ...st.attachmentPaths,
-        [pathId]: { vertices: [], closed: false, constantSpeed: true, rotation: 0, scaleX: 1, scaleY: 1 },
+        [pathId]: {
+          vertices: [], closed: false, constantSpeed: true, rotation: 0, scaleX: 1, scaleY: 1,
+          color: DEFAULT_PATH_COLOR, selectable: true, exportable: true, nameable: true,
+        },
       },
       // 自动进入编辑 + 新建顶点模式（单击加结）
       pathEditAttachmentId: pathId,
@@ -2179,6 +2194,37 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
         ...st.attachmentPaths,
         [attachmentId]: { ...p, rotation: 0, scaleX: 1, scaleY: 1 },
       },
+    }));
+  },
+  resetPath: (attachmentId) => {
+    const s = get();
+    const p = s.attachmentPaths[attachmentId];
+    if (!p) return;
+    if (p.rotation === 0 && p.scaleX === 1 && p.scaleY === 1) return;
+    s.pushHistory();
+    set((st) => ({
+      attachmentPaths: {
+        ...st.attachmentPaths,
+        [attachmentId]: { ...p, rotation: 0, scaleX: 1, scaleY: 1 },
+      },
+    }));
+  },
+  setPathColor: (attachmentId, color) => {
+    const s = get();
+    const p = s.attachmentPaths[attachmentId];
+    if (!p || p.color === color) return;
+    s.pushHistory();
+    set((st) => ({
+      attachmentPaths: { ...st.attachmentPaths, [attachmentId]: { ...p, color } },
+    }));
+  },
+  setPathOption: (attachmentId, opt, v) => {
+    const s = get();
+    const p = s.attachmentPaths[attachmentId];
+    if (!p) return;
+    s.pushHistory();
+    set((st) => ({
+      attachmentPaths: { ...st.attachmentPaths, [attachmentId]: { ...p, [opt]: v } },
     }));
   },
   setPathSelectedVertices: (ids) => set({ pathSelectedVertices: ids }),

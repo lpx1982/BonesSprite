@@ -27,7 +27,7 @@
  */
 import type { PixiBonesLayer, PixiBonesSlot, PathData, PathVertex } from '@psd/types';
 import type { BoneNode, SlotBinding, EditorAnimation, AnimProperty, AnimTrack, AnimKeyframe, ProjectData, PathConstraintDef, PathConstraintAnimProp, PathSpacingMode, PathRotateMode } from '../editor/store';
-import { PC_PROP_ANIM } from '../editor/store';
+import { PC_PROP_ANIM, DEFAULT_PATH_COLOR } from '../editor/store';
 import { parseImageFile } from '@psd/parseImage';
 
 // =================================================================================
@@ -290,6 +290,7 @@ export async function buildProjectFromSpineJson(
         closed: p.closed ?? false,
         constantSpeed: p.constantSpeed ?? true,
         rotation: 0, scaleX: 1, scaleY: 1,
+        color: DEFAULT_PATH_COLOR, selectable: true, exportable: true, nameable: true,
       },
     });
   }

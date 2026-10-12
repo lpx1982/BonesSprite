@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, DOCK_PANEL_DEFAULT_WIDTH, type BoneNode, type SlotBinding, type IkConstraintDef, type PathConstraintDef, type PathSpacingMode, type PathRotateMode } from './store';
+import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, DOCK_PANEL_DEFAULT_WIDTH, DEFAULT_PATH_COLOR, type BoneNode, type SlotBinding, type IkConstraintDef, type PathConstraintDef, type PathSpacingMode, type PathRotateMode } from './store';
 import { type PixiBonesLayer, type PixiBonesSlot, type PathData } from '@psd/index';
 import { importAssetFile } from './importAsset';
 import { PromptDialog } from './PromptDialog';
@@ -172,6 +172,12 @@ export function HierarchyPanel() {
   const createPathAttachment = usePixiBonesStore((s) => s.createPathAttachment);
   const removePathAttachment = usePixiBonesStore((s) => s.removePathAttachment);
   const freezePath = usePixiBonesStore((s) => s.freezePath);
+  const resetPath = usePixiBonesStore((s) => s.resetPath);
+  const reversePath = usePixiBonesStore((s) => s.reversePath);
+  const setPathClosed = usePixiBonesStore((s) => s.setPathClosed);
+  const setPathConstantSpeed = usePixiBonesStore((s) => s.setPathConstantSpeed);
+  const setPathColor = usePixiBonesStore((s) => s.setPathColor);
+  const setPathOption = usePixiBonesStore((s) => s.setPathOption);
   const pushHistory = usePixiBonesStore((s) => s.pushHistory);
   const selectedSectionKey = usePixiBonesStore((s) => s.selectedSectionKey);
   const selectSection = usePixiBonesStore((s) => s.selectSection);
@@ -453,6 +459,16 @@ export function HierarchyPanel() {
   /** 当前选中的附件对象（层级树点附件行时非 null）→ 底部显示「附件属性」面板 */
   const selectedAttachment = selectedAttachmentId
     ? attachmentById.get(selectedAttachmentId) ?? null
+    : null;
+  /** 当前选中的路径附件数据（选中路径附件行时非 null）→ 底部显示「路径属性」面板 */
+  const selectedPathData = selectedAttachmentId
+    ? attachmentPaths[selectedAttachmentId] ?? null
+    : null;
+  /** 选中路径附件的引用插槽（面板标题名 / 重命名目标；优先当前选中插槽，否则取第一个引用它的） */
+  const selectedPathSlot = selectedPathData
+    ? (selectedSlotId
+        ? (slots.find((s) => s.id === selectedSlotId) ?? null)
+        : slots.find((s) => s.attachmentIds.includes(selectedAttachmentId!)) ?? null)
     : null;
   /** 当前选中插槽绑定的骨骼名（底部面板显示「父级」用） */
   const selectedBindingBoneName = selectedSlotId && slotBindings[selectedSlotId]
@@ -1441,19 +1457,36 @@ export function HierarchyPanel() {
           isolated={hideNonSelected}
           C={C}
         />
-      ) : selectedAttachmentId && attachmentPaths[selectedAttachmentId] ? (
+      ) : selectedAttachmentId && selectedPathData ? (
         <PathAttachmentPropsBlock
-          name={`路径 ${parseInt(selectedAttachmentId.slice(5), 10)}`}
+          name={selectedPathSlot?.name ?? `路径 ${parseInt(selectedAttachmentId.slice(5), 10)}`}
+          path={selectedPathData}
           editing={pathEditAttachmentId === selectedAttachmentId}
           onEdit={() => setPathEdit(pathEditAttachmentId === selectedAttachmentId ? null : selectedAttachmentId)}
-          onFreeze={selectedSlotId ? () => freezePath(selectedAttachmentId) : undefined}
-          onDelete={selectedSlotId
+          onClosed={(v) => setPathClosed(selectedAttachmentId, v)}
+          onConstantSpeed={(v) => setPathConstantSpeed(selectedAttachmentId, v)}
+          onColor={(c) => setPathColor(selectedAttachmentId, c)}
+          onOption={(opt, v) => setPathOption(selectedAttachmentId, opt, v)}
+          onReset={() => resetPath(selectedAttachmentId)}
+          onFreeze={() => freezePath(selectedAttachmentId)}
+          onReverse={() => reversePath(selectedAttachmentId)}
+          onCopy={() => duplicateAttachment(selectedAttachmentId, selectedSlotId)}
+          onRename={selectedPathSlot
             ? () => {
-                if (confirm(`删除路径附件 "${`路径 ${parseInt(selectedAttachmentId.slice(5), 10)}`}"？\n它会被从所有插槽中移除。`)) {
-                  removePathAttachment(selectedAttachmentId);
-                }
+                setPendingRename({
+                  title: '重命名路径',
+                  message: '为此路径输入一个新名称:',
+                  initialValue: selectedPathSlot.name,
+                  onConfirm: (v) => { renameSlot(selectedPathSlot.id, v); closeRename(); },
+                });
               }
             : undefined}
+          onDelete={() => {
+            const label = selectedPathSlot?.name ?? `路径 ${parseInt(selectedAttachmentId.slice(5), 10)}`;
+            if (confirm(`删除路径附件 "${label}"？\n它会被从所有插槽中移除。`)) {
+              removePathAttachment(selectedAttachmentId);
+            }
+          }}
           C={C}
         />
       ) : selectedAttachment ? (
@@ -2425,10 +2458,16 @@ function BonePropsBlock(props: BonePropsBlockProps) {
   );
 }
 
-function CheckChip({ label, defaultChecked, C }: { label: string; defaultChecked?: boolean; C: any }) {
+function CheckChip({ label, checked, onChange, defaultChecked, C }: { label: string; checked?: boolean; onChange?: (v: boolean) => void; defaultChecked?: boolean; C: any }) {
   return (
     <label className="flex items-center gap-1 cursor-pointer select-none" style={{ color: C.text }}>
-      <input type="checkbox" defaultChecked={defaultChecked} className="w-3 h-3" />
+      <input
+        type="checkbox"
+        checked={checked}
+        defaultChecked={checked === undefined ? defaultChecked : undefined}
+        onChange={onChange ? (e) => onChange(e.target.checked) : undefined}
+        className="w-3 h-3"
+      />
       <span>{label}</span>
     </label>
   );
@@ -2563,35 +2602,94 @@ function PanelFooterBtn({
 
 // =================================================================================
 //  选中路径附件的属性块（仿 Spine 路径附件面板）
-//    「✒ 路径: 名字」标题栏 + 编辑路径 / 冻结
+//    「✒ 路径: 名字」标题栏 + 长度 / 选项 / 封闭·定速 / 颜色
+//    + 底部按钮：编辑路径 / 重置 / 冻结 / 反转
 // =================================================================================
 interface PathAttachmentPropsBlockProps {
   name: string;
+  /** 路径附件数据（顶点 / 封闭 / 定速 / 颜色 / 选项） */
+  path: PathData;
   /** 当前是否处于路径编辑态（画布上显示结 / 柄 gizmo） */
   editing: boolean;
   onEdit: () => void;
-  /** 冻结：rotation 归 0、scaleX/scaleY 归 1（无上下文插槽时不可用） */
-  onFreeze?: () => void;
-  /** 删除路径附件（无上下文插槽时不可用） */
-  onDelete?: () => void;
+  /** 切换「封闭」 */
+  onClosed: (v: boolean) => void;
+  /** 切换「定速」 */
+  onConstantSpeed: (v: boolean) => void;
+  /** 设置显示颜色（0xRRGGBB） */
+  onColor: (c: number) => void;
+  /** 设置选项开关（选择 / 导出 / 名称） */
+  onOption: (opt: 'selectable' | 'exportable' | 'nameable', v: boolean) => void;
+  /** 重置：旋转归 0、缩放归 1（仿 Spine「重置」） */
+  onReset: () => void;
+  /** 冻结：把旋转 / 缩放烘焙进顶点再归 0 / 1 */
+  onFreeze: () => void;
+  /** 反转顶点顺序 */
+  onReverse: () => void;
+  /** 复制路径附件（副本插入到插槽下方） */
+  onCopy: () => void;
+  /** 重命名路径（= 重命名引用它的插槽） */
+  onRename?: () => void;
+  /** 删除路径附件 */
+  onDelete: () => void;
   C: any;
 }
 
 function PathAttachmentPropsBlock(props: PathAttachmentPropsBlockProps) {
-  const { name, editing, onEdit, onFreeze, onDelete, C } = props;
+  const { name, path, editing, onEdit, onClosed, onConstantSpeed, onColor, onOption, onReset, onFreeze, onReverse, onCopy, onRename, onDelete, C } = props;
+  const colorHex = '#' + (path.color ?? DEFAULT_PATH_COLOR).toString(16).padStart(6, '0');
   return (
     <div style={{ borderTop: '1px solid ' + C.border, background: C.panelDk }}>
+      {/* 标题栏：✒️ 路径: 名字 + 右上角 复制 / 重命名 / 删除 */}
       <PanelTitleBar
         icon="✒️"
         kindLabel="路径"
         name={name}
         C={C}
+        onCopy={onCopy}
+        onRename={onRename}
         onDelete={onDelete}
         deleteTitle="删除该路径附件（同时从所有插槽移除）"
       />
 
-      {/* 操作按钮：编辑路径（进入 / 退出） / 冻结 */}
-      <div className="px-2 pb-2 pt-1 grid grid-cols-2 gap-1 text-[12px]">
+      {/* 长度（只读）：累计段长（贝塞尔采样求弧长） */}
+      <PanelRow icon="📏" label="长度" C={C}>
+        <span className="text-[13px] tabular-nums" style={{ color: C.text }}>
+          {pathLength(path).toFixed(1)}
+        </span>
+      </PanelRow>
+
+      {/* 选项：选择 / 导出 / 名称（仿 Spine 附件 Options） */}
+      <PanelRow icon="☰" label="选项" C={C}>
+        <span className="flex items-center gap-3">
+          <CheckChip label="选择" checked={path.selectable !== false} onChange={(v) => onOption('selectable', v)} C={C} />
+          <CheckChip label="导出" checked={path.exportable !== false} onChange={(v) => onOption('exportable', v)} C={C} />
+          <CheckChip label="名称" checked={path.nameable !== false} onChange={(v) => onOption('nameable', v)} C={C} />
+        </span>
+      </PanelRow>
+
+      {/* 封闭 / 定速（PRO） */}
+      <PanelRow icon="✒️" label="路径" C={C}>
+        <span className="flex items-center gap-3">
+          <CheckChip label="封闭" checked={path.closed} onChange={onClosed} C={C} />
+          <CheckChip label="定速" checked={path.constantSpeed} onChange={onConstantSpeed} C={C} />
+          <span className="text-[10px] font-bold" style={{ color: '#e5c07b' }}>PRO</span>
+        </span>
+      </PanelRow>
+
+      {/* 颜色：拾色器（控制画布上路径曲线的显示色） */}
+      <PanelRow icon="🎨" label="颜色" C={C}>
+        <input
+          type="color"
+          value={colorHex}
+          onChange={(e) => onColor(parseInt(e.target.value.slice(1), 16))}
+          style={{ width: 30, height: 20, padding: 0, border: '1px solid ' + C.border, background: 'transparent', cursor: 'pointer', borderRadius: 3 }}
+        />
+        <span className="text-[12px] tabular-nums" style={{ color: C.dim }}>{colorHex.toUpperCase()}</span>
+      </PanelRow>
+
+      {/* 底部按钮：编辑路径 / 重置 / 冻结 / 反转（PRO） */}
+      <div className="px-2 pb-2 pt-1 grid grid-cols-4 gap-1 text-[12px]">
         <PanelFooterBtn
           C={C}
           onClick={onEdit}
@@ -2601,18 +2699,65 @@ function PathAttachmentPropsBlock(props: PathAttachmentPropsBlockProps) {
             ? '退出路径编辑'
             : '进入路径编辑：单击加结、拖结、拖柄、双击删结、右键切换创建/删除工具'}
           active={editing}
+          pro
         />
         <PanelFooterBtn
           C={C}
-          onClick={onFreeze ?? (() => {})}
+          onClick={onReset}
+          icon="↺"
+          label="重置"
+          title="把路径的旋转归 0、缩放归 1"
+          pro
+        />
+        <PanelFooterBtn
+          C={C}
+          onClick={onFreeze}
           icon="❄"
           label="冻结"
-          title="把路径的旋转归 0、缩放归 1"
-          disabled={!onFreeze}
+          title="把旋转 / 缩放烘焙进顶点，再归 0 / 1"
+          pro
+        />
+        <PanelFooterBtn
+          C={C}
+          onClick={onReverse}
+          icon="⇄"
+          label="反转"
+          title="反转顶点顺序（交换入 / 出柄，保持曲线形状）"
+          pro
         />
       </div>
     </div>
   );
+}
+
+/** 路径累计长度（近似弧长：直线段取距离，贝塞尔段 8 段采样求和；封闭时含末段 → 首段）。 */
+function pathLength(p: PathData): number {
+  const v = p.vertices;
+  if (v.length < 2) return 0;
+  const segs = p.closed ? v.length : v.length - 1;
+  let total = 0;
+  const S = 8;
+  for (let i = 0; i < segs; i++) {
+    const a = v[i];
+    const b = v[(i + 1) % v.length];
+    const hasCtl = a.handleOutX !== 0 || a.handleOutY !== 0 || b.handleInX !== 0 || b.handleInY !== 0;
+    if (!hasCtl) {
+      total += Math.hypot(b.x - a.x, b.y - a.y);
+      continue;
+    }
+    const p1x = a.x + a.handleOutX, p1y = a.y + a.handleOutY;
+    const p2x = b.x + b.handleInX, p2y = b.y + b.handleInY;
+    let px = a.x, py = a.y;
+    for (let s = 1; s <= S; s++) {
+      const t = s / S;
+      const mt = 1 - t;
+      const x = mt * mt * mt * a.x + 3 * mt * mt * t * p1x + 3 * mt * t * t * p2x + t * t * t * b.x;
+      const y = mt * mt * mt * a.y + 3 * mt * mt * t * p1y + 3 * mt * t * t * p2y + t * t * t * b.y;
+      total += Math.hypot(x - px, y - py);
+      px = x; py = y;
+    }
+  }
+  return total;
 }
 
 // =================================================================================

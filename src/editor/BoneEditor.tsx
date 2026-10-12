@@ -1572,7 +1572,7 @@ export function BoneEditor() {
             g.lineTo(b.x, b.y);
           }
         }
-        g.stroke({ width: 2, color: 0xFFFFFF, alpha: 0.6 });
+        g.stroke({ width: 2, color: path.color ?? 0xff7f2a, alpha: 0.6 });
       };
 
       /** 为一个插槽创建路径 view：wrap + 曲线 Gfx（曲线画在 wrap 局部坐标，跟随 slot 变换 / 骨骼绑定）。 */
