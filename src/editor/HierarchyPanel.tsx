@@ -3549,7 +3549,7 @@ interface PathConstraintsSectionPropsBlockProps {
 
 function PathConstraintsSectionPropsBlock(props: PathConstraintsSectionPropsBlockProps) {
   const {
-    pathConstraints, slots, attachmentPaths,
+    pathConstraints, bones, slots, attachmentPaths,
     onRemove, onRename, onRenamePopup, onCopy,
     onPositionMode, onPosition, onSpacingMode, onSpacing, onRotateMode,
     onRotateMix, onTranslateMix, onRotationOffset, pushHistory, C,
@@ -3559,6 +3559,8 @@ function PathConstraintsSectionPropsBlock(props: PathConstraintsSectionPropsBloc
   const selected = pathConstraints.find((c) => c.id === selectedId) ?? null;
 
   const slotName = (id: string) => slots.find((x) => x.id === id)?.name ?? '(已删)';
+  const boneName = (id: string) => bones.find((b) => b.id === id)?.name ?? '(已删)';
+  const slotBindings = usePixiBonesStore((s) => s.slotBindings);
 
   // ★ Spine 风格面板：折叠区 / 链接滑块 UI 状态
   const [offsetOpen, setOffsetOpen] = useState(true);
@@ -3569,6 +3571,9 @@ function PathConstraintsSectionPropsBlock(props: PathConstraintsSectionPropsBloc
   const targetSlotObj = slots.find((s) => s.id === selected?.targetSlotId);
   const targetPathAid = targetSlotObj?.activeAttachmentId ?? null;
   const targetPathName = targetPathAid && attachmentPaths[targetPathAid] ? targetPathAid : null;
+  // 目标插槽绑定的骨骼（Spine：目标 = 该骨骼名）
+  const targetBoundBoneId = selected ? slotBindings[selected.targetSlotId]?.boneId ?? null : null;
+  const targetBoundBoneName = targetBoundBoneId ? boneName(targetBoundBoneId) : null;
 
   const startPathConstraintRetarget = usePixiBonesStore((s) => s.startPathConstraintRetarget);
 
@@ -3635,18 +3640,13 @@ function PathConstraintsSectionPropsBlock(props: PathConstraintsSectionPropsBloc
             >✎</button>
           </div>
 
-          {/* 目标：插槽名 + 附件名 + 编辑 + 删除（删除约束，骨骼退回原位） */}
+          {/* 目标：被绑定的骨骼名 + 编辑 + 删除（删除约束，骨骼退回原位） */}
           <div className="flex items-center gap-1">
             <span className="shrink-0 w-10" style={{ color: C.accent }}>目标</span>
             <span className="flex-1 min-w-0 truncate" style={{ color: C.text }}>
-              {targetSlotObj ? (
-                <>
-                  <span style={{ color: C.text }}>{slotName(selected.targetSlotId)}</span>
-                  <span style={{ color: C.dim }}> / {targetPathName ?? '（无附件）'}</span>
-                </>
-              ) : (
-                <span style={{ color: C.dim }}>（未绑定插槽）</span>
-              )}
+              {targetBoundBoneName
+                ? <span style={{ color: C.text }}>{targetBoundBoneName}</span>
+                : <span style={{ color: C.dim }}>（未绑定骨骼）</span>}
             </span>
             <button
               className="w-4 h-4 flex items-center justify-center rounded text-[12px] shrink-0"
