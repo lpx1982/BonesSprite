@@ -372,6 +372,7 @@ export async function buildProjectFromSpineJson(
     slotStyle: {},
     attachmentStyle: {},
     attachmentMeshes: {},
+    attachmentPaths: {},
     slotOrder: slotsOut.map((s) => s.id),  // 按出现顺序：先到 = 底
     slotBindings,
     bones: bonesOut,

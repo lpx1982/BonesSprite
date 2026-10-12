@@ -181,15 +181,24 @@ export function Editor() {
           } else if (s.meshEditSlotId) {
             e.preventDefault();
             s.setMeshEditSlot(null);
+          } else if (s.pathEditAttachmentId) {
+            // 退出路径编辑（清新建顶点模式 / 选中 / 工具归 create）
+            e.preventDefault();
+            s.setPathEdit(null);
           }
           return;
         }
-        // 空格：也退出权重绑定模式
+        // 空格：也退出权重绑定模式 / 路径编辑
         if (key === ' ' || key === 'Spacebar') {
           const s = usePixiBonesStore.getState();
           if (s.weightBindMode) {
             e.preventDefault();
             s.toggleWeightBindMode();
+            return;
+          }
+          if (s.pathEditAttachmentId) {
+            e.preventDefault();
+            s.setPathEdit(null);
             return;
           }
         }

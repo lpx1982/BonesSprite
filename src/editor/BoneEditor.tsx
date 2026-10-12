@@ -17,7 +17,7 @@ import { Bone as EngineBone } from '@engine/Bone';
 import { Skeleton } from '@engine/Skeleton';
 import { applyIkConstraints, type IkSolveContext } from '@engine/IkConstraint';
 import { parsePsd, type PixiBonesLayer, type PixiBonesPsd, type PixiBonesSlot } from '@psd/index';
-import type { MeshData } from '@psd/types';
+import type { MeshData, PathData, PathVertex } from '@psd/types';
 import { importAssetFile } from './importAsset';
 import { CanvasOverlay } from './CanvasOverlay';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -75,6 +75,10 @@ function applyIkConstraintsToSkeleton(
  *   - **右键拖** → 平移画布（panX, panY）
  *   - **滚轮** → 缩放（每次以鼠标位置为中心）
  */
+/** 路径编辑：上一次点击的结（双击同一结 320ms 内 = 删除）。
+ *  ★ 必须放模块级：点击结时会 setPathSelectedVertices → React 重渲染 →
+ *    组件内局部变量会被重置，双击检测就失效。 */
+let lastPathVertexClick = { idx: -1, t: 0 };
 export function BoneEditor() {
   const hostRef = useRef<HTMLDivElement>(null);
 
@@ -183,6 +187,50 @@ export function BoneEditor() {
           additive: boolean;
           prevSel: number[];
         }
+      /** 路径编辑：拖动一批结（create / delete 工具都支持拖动结） */
+      | {
+          kind: 'path-vertex';
+          slotId: string;
+          attachmentId: string;
+          /** 参与拖动的结索引 */
+          indices: number[];
+          /** 拖动开始时的完整顶点数组副本 */
+          startVertices: PathVertex[];
+          /** 按下时的鼠标「路径局部坐标」 */
+          startLocal: { x: number; y: number };
+          /** 位移是否已写入 store（首帧才推历史） */
+          moved: boolean;
+          /** delete 工具：松开时若没有位移则删除该结（单击删结） */
+          deleteOnClick?: boolean;
+        }
+      /** 路径编辑：拖动控制柄 */
+      | {
+          kind: 'path-handle';
+          slotId: string;
+          attachmentId: string;
+          /** 结索引 */
+          vertexIdx: number;
+          /** 拖的是入柄还是出柄 */
+          side: 'in' | 'out';
+          /** 拖动开始时的鼠标「路径局部坐标」 */
+          startLocal: { x: number; y: number };
+          /** 拖动开始时的结（含柄） */
+          startVertex: PathVertex;
+          /** 位移是否已写入 store（首帧才推历史） */
+          moved: boolean;
+        }
+      /** 路径编辑：框选结（空白处拖动） */
+      | {
+          kind: 'path-marquee';
+          slotId: string;
+          attachmentId: string;
+          startScreen: { x: number; y: number };
+          nowScreen: { x: number; y: number };
+          rect: Gfx;
+          additive: boolean;
+          /** 按下时已选中的结 */
+          prevSel: number[];
+        }
       | null;
     /** 0 长度骨骼上的悬停分区（黑圈内=移动，圈外=旋转） */
     type HoverZone = { boneId: string; kind: 'move' | 'rotate' };
@@ -277,6 +325,12 @@ export function BoneEditor() {
       const meshHandles = new Gfx();
       meshHandles.eventMode = 'none';
       a.stage.addChild(meshHandles);
+
+      // 路径编辑：结方块 / 控制柄圆点 / 预览虚线的绘制层（屏幕坐标）。
+      // 不接收事件（命中由 stage 的 pointerdown + 自己算距离处理）。
+      const pathHandles = new Gfx();
+      pathHandles.eventMode = 'none';
+      a.stage.addChild(pathHandles);
 
       // 旋转拖动时跟随鼠标的绿色旋转光标（Spine 风格：按下出现，松开消失）
       const rotateCursor = new Gfx();
@@ -528,6 +582,10 @@ export function BoneEditor() {
           const useMesh = !showFullImage || hasWeights;
           addSlotView(slot, layer, useMesh ? meshes[layer.id] : undefined);
         }
+        // 路径附件：没有图片图层，单独建 wrap + 曲线（顶点 = wrap 局部坐标）
+        for (const { slot, path } of pathRenderablesOf(slots)) {
+          addPathSlotView(slot, path);
+        }
       };
 
       /**
@@ -579,14 +637,17 @@ export function BoneEditor() {
         // ★ 读一下当前 store 的 attachmentMeshes：
         //   当某 attachment 已绑骨骼（mesh.bones 非空）时，applyBindings 不要把它绑的骨骼矩阵当 wrap.matrix 的骨骼驱动用
         //   （wrap.matrix 此时只承担 slot transform + 图层偏移；顶点位置由 applySkinning 按权重算 root 坐标）。
-        const meshesNow = usePixiBonesStore.getState().attachmentMeshes;
+        const stBind = usePixiBonesStore.getState();
+        const meshesNow = stBind.attachmentMeshes;
+        const pathsNow = stBind.attachmentPaths;
         for (const slot of slots) {
           // ★ 每插槽一份 sprite：直接取该插槽当前激活的附件
           const wrap = viewBySlotId.get(slot.id);
           if (!wrap) continue;
           const aid = slot.activeAttachmentId;
           const layer = aid ? byId.get(aid) ?? null : null;
-          if (!layer) continue;
+          const path = aid ? pathsNow[aid] ?? null : null;
+          if (!layer && !path) continue;
           const view = wrap.children[0] as AttachView | undefined;
           {
             const binding = bindings[slot.id];
@@ -631,12 +692,29 @@ export function BoneEditor() {
             const m_c = cosR * Yx - sinR * Yy;
             const m_d = sinR * Yx + cosR * Yy;
             // ★ 枢轴居中化：枢轴 C = 激活附件中心
-            const halfW = layer.width / 2;
-            const halfH = layer.height / 2;
-            const Cx = layer.left + txL + halfW;
-            const Cy = layer.top + tyL + halfH;
-            const lx = Cx - (m_a * halfW + m_c * halfH);
-            const ly = Cy - (m_b * halfW + m_d * halfH);
+            //   图片附件 = 图片中心（layer 尺寸，锚点 = layer.left/top）；
+            //   路径附件 = 路径包围盒中心（顶点直接是 wrap 局部坐标，无锚点偏移）
+            let pcx: number;
+            let pcy: number;
+            let Cx: number;
+            let Cy: number;
+            if (path) {
+              const bb = pathBounds(path);
+              pcx = bb ? bb.cx : 0;
+              pcy = bb ? bb.cy : 0;
+              Cx = pcx + txL;
+              Cy = pcy + tyL;
+            } else {
+              const l = layer as PixiBonesLayer;   // 已由「!layer && !path」排除
+              const halfW = l.width / 2;
+              const halfH = l.height / 2;
+              pcx = halfW;
+              pcy = halfH;
+              Cx = l.left + txL + halfW;
+              Cy = l.top + tyL + halfH;
+            }
+            const lx = Cx - (m_a * pcx + m_c * pcy);
+            const ly = Cy - (m_b * pcx + m_d * pcy);
             const slotLocal = [m_a, m_b, m_c, m_d, lx, ly];
             // 骨骼矩阵 m（左乘）：wrap = m × slotLocal
             const out = mulAffine(m, slotLocal);
@@ -713,18 +791,29 @@ export function BoneEditor() {
         const st = usePixiBonesStore.getState();
         const editingId = st.meshEditSlotId;
         const editCursor = editingId ? meshToolCursor(st.meshTool) : 'pointer';
+        // 路径编辑：正在编辑的路径用「路径工具」指针（create=箭头+「+」/ delete=箭头+「-」，复用 buildArrowCursor）
+        const pathEditId = st.pathEditAttachmentId;
+        const pathCursor = pathEditId ? meshToolCursor(st.pathEditTool) : 'pointer';
         for (const slot of slots) {
           const wrap = viewBySlotId.get(slot.id);
           const view = wrap?.children[0] as AttachView | undefined;
           if (!view) continue;
           const aid = slot.activeAttachmentId;
           const layer = aid ? byId.get(aid) ?? null : null;
-          if (!layer) continue;
+          const path = aid ? st.attachmentPaths[aid] ?? null : null;
+          if (!layer && !path) continue;
+          // 路径附件：没有 tint / 混合模式，只设指针
+          if (path) {
+            const wantPathCursor = aid === pathEditId ? pathCursor : 'pointer';
+            if (view.cursor !== wantPathCursor) view.cursor = wantPathCursor;
+            continue;
+          }
+          const l = layer as PixiBonesLayer;   // 已由「!layer && !path」排除
           // 颜色：tint = 插槽色 × 附件色；「变暗」勾选时正在编辑的插槽再乘一个暗灰（纯压暗、保持不透明，仿 Spine）
-          const tintColors = [attachmentStyle[layer.id]?.color, slotStyle[slot.id]?.color];
+          const tintColors = [attachmentStyle[l.id]?.color, slotStyle[slot.id]?.color];
           if (st.meshDim && slot.id === editingId) tintColors.push('#4d4d4d');
           view.tint = composeTint(...tintColors);
-          const blend = attachmentStyle[layer.id]?.blend || slotStyle[slot.id]?.blend || layer.blendMode;
+          const blend = attachmentStyle[l.id]?.blend || slotStyle[slot.id]?.blend || l.blendMode;
           (view as unknown as { blendMode: string }).blendMode = blend || 'normal';
           const wantCursor = slot.id === editingId ? editCursor : 'pointer';
           if (view.cursor !== wantCursor) view.cursor = wantCursor;
@@ -1432,6 +1521,262 @@ export function BoneEditor() {
           Y = py + layer.top;
         }
         return { x: root.x + X * root.scale.x, y: root.y + Y * root.scale.y };
+      };
+
+      // =================================================================================
+      //  路径附件（仿 Spine 3.8 Path Attachment）：渲染 + 编辑上下文
+      //  ★ 路径顶点 = wrap 局部坐标（没有图片图层，无需 layer.left/top 锚点偏移）；
+      //    slot 变换 / 骨骼绑定照常作用于 wrap（applyBindings 的枢轴 = 路径包围盒中心）。
+      // =================================================================================
+
+      /** 当前「要绘制的插槽 → 路径附件」列表（按 slotOrder 绘制顺序）。 */
+      const pathRenderablesOf = (slots: PixiBonesSlot[]): Array<{ slot: PixiBonesSlot; path: PathData }> => {
+        const paths = usePixiBonesStore.getState().attachmentPaths;
+        const ordered = orderLayers(slots, usePixiBonesStore.getState().slotOrder);
+        const out: Array<{ slot: PixiBonesSlot; path: PathData }> = [];
+        for (const slot of ordered) {
+          const id = slot.activeAttachmentId;
+          if (!id) continue;
+          const path = paths[id];
+          if (path) out.push({ slot, path });
+        }
+        return out;
+      };
+
+      /** 画一条路径曲线到 Gfx（路径附件本体：白色 0.6 透明度 2px，仿 Spine 的 PathAttachment 显示）。 */
+      const drawPathCurve = (g: Gfx, path: PathData) => {
+        const v = path.vertices;
+        if (v.length === 0) return;
+        // 闭合且 ≥2 结 → 首尾也连一段；否则 结数-1 段
+        const segs = path.closed && v.length > 1 ? v.length : v.length - 1;
+        for (let i = 0; i < segs; i++) {
+          const a = v[i];
+          const b = v[(i + 1) % v.length];
+          const hasCtl = a.handleOutX !== 0 || a.handleOutY !== 0 || b.handleInX !== 0 || b.handleInY !== 0;
+          if (i === 0) g.moveTo(a.x, a.y);
+          if (hasCtl) {
+            g.bezierCurveTo(
+              a.x + a.handleOutX, a.y + a.handleOutY,
+              b.x + b.handleInX, b.y + b.handleInY,
+              b.x, b.y,
+            );
+          } else {
+            g.lineTo(b.x, b.y);
+          }
+        }
+        g.stroke({ width: 2, color: 0xFFFFFF, alpha: 0.6 });
+      };
+
+      /** 路径包围盒（顶点 min/max + 中心）。空路径返回 null。 */
+      const pathBounds = (
+        path: PathData,
+      ): { minX: number; minY: number; maxX: number; maxY: number; cx: number; cy: number } | null => {
+        const v = path.vertices;
+        if (v.length === 0) return null;
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const p of v) {
+          if (p.x < minX) minX = p.x;
+          if (p.y < minY) minY = p.y;
+          if (p.x > maxX) maxX = p.x;
+          if (p.y > maxY) maxY = p.y;
+        }
+        return { minX, minY, maxX, maxY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
+      };
+
+      /** 为一个插槽创建路径 view：wrap + 曲线 Gfx（曲线画在 wrap 局部坐标，跟随 slot 变换 / 骨骼绑定）。 */
+      const addPathSlotView = (slot: PixiBonesSlot, path: PathData) => {
+        const curve = new Gfx();
+        curve.eventMode = 'static';
+        curve.cursor = 'pointer';
+        drawPathCurve(curve, path);
+        // 标记：让 stage 的 pointerdown 能识别「点在哪个插槽的路径上」
+        (curve as unknown as { __slotId: string }).__slotId = slot.id;
+        const wrap = new Container();
+        wrap.label = slot.name;
+        wrap.addChild(curve);
+        root.addChild(wrap);
+        viewBySlotId.set(slot.id, wrap);
+      };
+
+      /** 屏幕坐标 → 路径附件局部坐标（= wrap 局部；与 screenToAttachmentLocal 同构，但路径无 layer 偏移）。 */
+      const screenToPathLocal = (slotId: string, gx: number, gy: number): { x: number; y: number } | null => {
+        const sx = root.scale.x;
+        const sy = root.scale.y;
+        if (sx === 0 || sy === 0) return null;
+        const wx = (gx - root.x) / sx;
+        const wy = (gy - root.y) / sy;
+        const m = wrapMatrixBySlot.get(slotId);
+        if (!m) return { x: wx, y: wy };
+        const inv = invAffine(m);
+        if (!inv) return null;
+        return { x: inv[0] * wx + inv[2] * wy + inv[4], y: inv[1] * wx + inv[3] * wy + inv[5] };
+      };
+
+      /** 路径局部坐标 → 屏幕坐标（screenToPathLocal 的逆）。 */
+      const pathLocalToScreen = (slotId: string, px: number, py: number): { x: number; y: number } => {
+        const m = wrapMatrixBySlot.get(slotId);
+        let X: number;
+        let Y: number;
+        if (m) {
+          X = m[0] * px + m[2] * py + m[4];
+          Y = m[1] * px + m[3] * py + m[5];
+        } else {
+          X = px;
+          Y = py;
+        }
+        return { x: root.x + X * root.scale.x, y: root.y + Y * root.scale.y };
+      };
+
+      /** 当前正在编辑的路径上下文（不在路径编辑态 / 数据不全时返回 null）。 */
+      const pathEditContext = () => {
+        const s = usePixiBonesStore.getState();
+        const attachmentId = s.pathEditAttachmentId;
+        if (!attachmentId) return null;
+        const path = s.attachmentPaths[attachmentId];
+        if (!path) return null;
+        const slot = s.slots.find((x) => x.activeAttachmentId === attachmentId) ?? null;
+        if (!slot) return null;
+        return { slot, attachmentId, path };
+      };
+
+      /** 就地重画某路径附件在所有插槽里的曲线（拖动结 / 柄时用，避免整棵重建）。 */
+      const redrawPathCurves = (attachmentId: string) => {
+        const s = usePixiBonesStore.getState();
+        const path = s.attachmentPaths[attachmentId];
+        for (const slot of s.slots) {
+          if (slot.activeAttachmentId !== attachmentId) continue;
+          const wrap = viewBySlotId.get(slot.id);
+          if (!wrap) continue;
+          const v = wrap.children[0];
+          if (!v || !(v instanceof Gfx)) continue;
+          v.clear();
+          if (path) drawPathCurve(v, path);
+        }
+      };
+
+      /** 删除路径上的一个结（结构变化 → setPathData 推历史）；同步修正选中索引。 */
+      const deletePathVertex = (attachmentId: string, i: number) => {
+        const s = usePixiBonesStore.getState();
+        const path = s.attachmentPaths[attachmentId];
+        if (!path) return;
+        const vertices = path.vertices.filter((_, k) => k !== i);
+        // 修正选中索引：被删结之后的索引前移一位
+        const selected = s.pathSelectedVertices
+          .filter((k) => k !== i)
+          .map((k) => (k > i ? k - 1 : k));
+        s.setPathData(attachmentId, { ...path, vertices });
+        s.setPathSelectedVertices(selected);
+      };
+
+      /** de Casteljau 分裂一段（结 i → 结 i+1，参数 u），插入新结并继承柄 → 曲线形状不变。 */
+      const splitPathSegment = (path: PathData, i: number, u: number): PathVertex[] => {
+        const v = path.vertices;
+        const n = v.length;
+        if (n < 2) return v.slice();
+        const a = v[i];
+        const b = v[(i + 1) % n];
+        const p0x = a.x, p0y = a.y;
+        const p1x = a.x + a.handleOutX, p1y = a.y + a.handleOutY;
+        const p2x = b.x + b.handleInX, p2y = b.y + b.handleInY;
+        const p3x = b.x, p3y = b.y;
+        const lerp = (ax: number, ay: number, bx: number, by: number) => ({ x: ax + (bx - ax) * u, y: ay + (by - ay) * u });
+        const A = lerp(p0x, p0y, p1x, p1y);
+        const B = lerp(p1x, p1y, p2x, p2y);
+        const C = lerp(p2x, p2y, p3x, p3y);
+        const D = lerp(A.x, A.y, B.x, B.y);
+        const E = lerp(B.x, B.y, C.x, C.y);
+        const Q = lerp(D.x, D.y, E.x, E.y);
+        const vNew: PathVertex = {
+          x: Q.x, y: Q.y,
+          handleInX: D.x - Q.x, handleInY: D.y - Q.y,
+          handleOutX: E.x - Q.x, handleOutY: E.y - Q.y,
+        };
+        const out = v.slice();
+        out[i] = { ...a, handleOutX: A.x - p0x, handleOutY: A.y - p0y };
+        out[(i + 1) % n] = { ...b, handleInX: C.x - p3x, handleInY: C.y - p3y };
+        out.splice(i + 1, 0, vNew);
+        return out;
+      };
+
+      /** 路径段（屏幕空间采样）离鼠标最近的点：{ i = 段起点结索引, u = 段内参数 }；超容差返回 null。 */
+      const nearestPathSegment = (
+        path: PathData,
+        slotId: string,
+        gx: number, gy: number,
+        tol: number,
+      ): { i: number; u: number } | null => {
+        const v = path.vertices;
+        if (v.length < 2) return null;
+        const segs = path.closed && v.length > 1 ? v.length : v.length - 1;
+        let best: { i: number; u: number; d: number } | null = null;
+        const SAMPLES = 24;
+        for (let i = 0; i < segs; i++) {
+          const a = v[i];
+          const b = v[(i + 1) % v.length];
+          const pa = pathLocalToScreen(slotId, a.x, a.y);
+          const p1 = pathLocalToScreen(slotId, a.x + a.handleOutX, a.y + a.handleOutY);
+          const p2 = pathLocalToScreen(slotId, b.x + b.handleInX, b.y + b.handleInY);
+          const pb = pathLocalToScreen(slotId, b.x, b.y);
+          let prev = pa;
+          for (let k = 1; k <= SAMPLES; k++) {
+            const t = k / SAMPLES;
+            const mt = 1 - t;
+            const w0 = mt * mt * mt, w1 = 3 * mt * mt * t, w2 = 3 * mt * t * t, w3 = t * t * t;
+            const pt = {
+              x: w0 * pa.x + w1 * p1.x + w2 * p2.x + w3 * pb.x,
+              y: w0 * pa.y + w1 * p1.y + w2 * p2.y + w3 * pb.y,
+            };
+            // 采样点之间取最近距离（比单点更贴合曲线）
+            const d = distToSegment(gx, gy, prev.x, prev.y, pt.x, pt.y);
+            if (d < tol && (!best || d < best.d)) best = { i, u: t, d };
+            prev = pt;
+          }
+        }
+        return best ? { i: best.i, u: best.u } : null;
+      };
+
+      /** 画路径编辑 gizmo（结方块 + 柄细线圆点 + 新建顶点模式虚线预览），全部屏幕坐标。 */
+      const drawPathGizmos = () => {
+        pathHandles.clear();
+        const s = usePixiBonesStore.getState();
+        const attachmentId = s.pathEditAttachmentId;
+        if (!attachmentId) return;
+        const ctx = pathEditContext();
+        if (!ctx) return;
+        const { slot, path } = ctx;
+        const v = path.vertices;
+        const selected = new Set(s.pathSelectedVertices);
+        const editingNew = s.pathNewVertexMode;
+
+        // 结方块（选中 = 高亮）+ 柄细线圆点（出 = 蓝 / 入 = 浅红）
+        for (let i = 0; i < v.length; i++) {
+          const p = pathLocalToScreen(slot.id, v[i].x, v[i].y);
+          const isSel = selected.has(i);
+          const r = isSel ? 5 : 3.5;
+          pathHandles.rect(p.x - r, p.y - r, r * 2, r * 2);
+          pathHandles.fill({ color: isSel ? 0xFFD34D : 0xFFFFFF, alpha: isSel ? 1 : 0.85 });
+          if (isSel) pathHandles.stroke({ width: 1.5, color: 0xFFFFFF, alpha: 1 });
+          if (v[i].handleOutX !== 0 || v[i].handleOutY !== 0) {
+            const out = pathLocalToScreen(slot.id, v[i].x + v[i].handleOutX, v[i].y + v[i].handleOutY);
+            pathHandles.moveTo(p.x, p.y).lineTo(out.x, out.y);
+            pathHandles.stroke({ width: 1, color: 0x7EC8FF, alpha: 0.9 });
+            pathHandles.circle(out.x, out.y, 3);
+            pathHandles.fill({ color: 0x7EC8FF, alpha: 0.95 });
+          }
+          if (v[i].handleInX !== 0 || v[i].handleInY !== 0) {
+            const inn = pathLocalToScreen(slot.id, v[i].x + v[i].handleInX, v[i].y + v[i].handleInY);
+            pathHandles.moveTo(p.x, p.y).lineTo(inn.x, inn.y);
+            pathHandles.stroke({ width: 1, color: 0xE8A0A0, alpha: 0.9 });
+            pathHandles.circle(inn.x, inn.y, 3);
+            pathHandles.fill({ color: 0xE8A0A0, alpha: 0.95 });
+          }
+        }
+
+        // 新建顶点模式：最后一个结 → 当前鼠标 的虚线预览
+        if (editingNew && v.length > 0) {
+          const last = pathLocalToScreen(slot.id, v[v.length - 1].x, v[v.length - 1].y);
+          drawDashedLine(pathHandles, last.x, last.y, lastPointer.x, lastPointer.y, 6, 4, 0xFFFFFF, 1.2);
+        }
       };
 
       /** 屏幕坐标下最上层（最后绘制的）可见**插槽** id；无则 null。
@@ -3459,6 +3804,98 @@ export function BoneEditor() {
               }
             }
           }
+        } else if (dragState.kind === 'path-vertex') {
+          // 拖动结（create / delete 工具）：选中的结按「路径局部坐标」位移整体平移，柄跟着走
+          const pctx = pathEditContext();
+          if (pctx && pctx.attachmentId === dragState.attachmentId) {
+            const p = screenToPathLocal(dragState.slotId, ev.global.x, ev.global.y);
+            if (p) {
+              const dx = p.x - dragState.startLocal.x;
+              const dy = p.y - dragState.startLocal.y;
+              if (!dragState.moved && (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01)) {
+                dragState.moved = true;
+                st.pushHistory();   // 首次真正位移时才推历史（避免点一下也入栈）
+              }
+              if (dragState.moved) {
+                const verts = dragState.startVertices.slice();
+                for (const vi of dragState.indices) {
+                  verts[vi] = { ...verts[vi], x: dragState.startVertices[vi].x + dx, y: dragState.startVertices[vi].y + dy };
+                }
+                st.setPathVertices(dragState.attachmentId, verts);
+                drawPathGizmos();
+              }
+            }
+          }
+        } else if (dragState.kind === 'path-handle') {
+          // 拖动控制柄：改该结的 in/out 柄；shift = 锁柄角度；alt = 尖点（只动被拖柄）
+          const pctx = pathEditContext();
+          if (pctx && pctx.attachmentId === dragState.attachmentId) {
+            const p = screenToPathLocal(dragState.slotId, ev.global.x, ev.global.y);
+            if (p) {
+              const k = dragState.startVertex;
+              // 新柄向量（结 → 鼠标）
+              let hx = p.x - k.x;
+              let hy = p.y - k.y;
+              if (ev.shiftKey) {
+                // 锁柄角度：投影到「拖动前」柄方向，只改长度
+                const orig = dragState.side === 'out'
+                  ? { x: k.handleOutX, y: k.handleOutY }
+                  : { x: k.handleInX, y: k.handleInY };
+                const len0 = Math.hypot(orig.x, orig.y) || 1;
+                const ux = orig.x / len0;
+                const uy = orig.y / len0;
+                const proj = hx * ux + hy * uy;
+                hx = ux * proj;
+                hy = uy * proj;
+              }
+              const prevC = dragState.side === 'out' ? k.handleOutX : k.handleInX;
+              const prevCy = dragState.side === 'out' ? k.handleOutY : k.handleInY;
+              if (!dragState.moved && Math.hypot(hx - prevC, hy - prevCy) > 0.01) {
+                dragState.moved = true;
+                st.pushHistory();
+              }
+              if (dragState.moved) {
+                const vNext: PathVertex = { ...k };
+                if (dragState.side === 'out') { vNext.handleOutX = hx; vNext.handleOutY = hy; }
+                else { vNext.handleInX = hx; vNext.handleInY = hy; }
+                // 默认模式（不按 alt）：若另一侧柄与「拖动前」当前柄方向近似相反（|角度差|≈180°）→ 镜像等长反向
+                const prevO = dragState.side === 'out' ? k.handleInX : k.handleOutX;
+                const prevOy = dragState.side === 'out' ? k.handleInY : k.handleOutY;
+                const angDiff = Math.abs(angleBetween(prevC, prevCy, prevO, prevOy));
+                if (!ev.altKey && angDiff > Math.PI * 0.8) {
+                  if (dragState.side === 'out') { vNext.handleInX = -hx; vNext.handleInY = -hy; }
+                  else { vNext.handleOutX = -hx; vNext.handleOutY = -hy; }
+                }
+                st.setPathVertex(dragState.attachmentId, dragState.vertexIdx, vNext);
+                drawPathGizmos();
+              }
+            }
+          }
+        } else if (dragState.kind === 'path-marquee') {
+          // 框选结：实时画矩形 + 更新选中集合
+          dragState.nowScreen = { x: ev.global.x, y: ev.global.y };
+          const { startScreen, nowScreen, rect } = dragState;
+          const x = Math.min(startScreen.x, nowScreen.x);
+          const y = Math.min(startScreen.y, nowScreen.y);
+          const w = Math.abs(nowScreen.x - startScreen.x);
+          const h = Math.abs(nowScreen.y - startScreen.y);
+          rect.clear();
+          rect.rect(x, y, w, h)
+              .stroke({ width: 1, color: 0x4FB8F8, alpha: 0.8 })
+              .fill({ color: 0x4FB8F8, alpha: 0.12 });
+          const stPath = usePixiBonesStore.getState();
+          const path = stPath.attachmentPaths[dragState.attachmentId];
+          if (path) {
+            const picked: number[] = [];
+            for (let i = 0; i < path.vertices.length; i++) {
+              const q = pathLocalToScreen(dragState.slotId, path.vertices[i].x, path.vertices[i].y);
+              if (q.x >= x && q.x <= x + w && q.y >= y && q.y <= y + h) picked.push(i);
+            }
+            stPath.setPathSelectedVertices(
+              dragState.additive ? Array.from(new Set([...dragState.prevSel, ...picked])) : picked,
+            );
+            drawPathGizmos();
+          }
         } else if (dragState.kind === 'mesh-marquee') {
           // 框选顶点：实时画矩形 + 更新选中集合
           dragState.nowScreen = { x: ev.global.x, y: ev.global.y };
@@ -3571,10 +4008,21 @@ export function BoneEditor() {
       };
       const onPointerUp = (ev: FederatedPointerEvent) => {
         if (!dragState) return;
-        // 网格编辑 / 权重模式：顶点框选收尾（销毁选框；顶点拖动无需特殊处理）
-        if (dragState.kind === 'mesh-marquee' || dragState.kind === 'weight-marquee') {
+        // 网格编辑 / 权重模式 / 路径编辑：框选收尾（销毁选框；顶点拖动无需特殊处理）
+        if (
+          dragState.kind === 'mesh-marquee'
+          || dragState.kind === 'weight-marquee'
+          || dragState.kind === 'path-marquee'
+        ) {
           a.stage.removeChild(dragState.rect);
           dragState.rect.destroy();
+        }
+        // 路径编辑 delete 工具：单击（未拖动）结 = 删结
+        if (dragState.kind === 'path-vertex' && dragState.deleteOnClick && !dragState.moved) {
+          const pDel = { attachmentId: dragState.attachmentId, index: dragState.indices[0] };
+          dragState = null;
+          deletePathVertex(pDel.attachmentId, pDel.index);
+          return;
         }
         // 创建子骨骼：pointerup 时如果在 create-from 状态，根据当前鼠标位置 addBone
         if (dragState.kind === 'create-from') {
@@ -3908,6 +4356,160 @@ export function BoneEditor() {
       a.stage.on('pointerdown', (ev: FederatedPointerEvent) => {
         if (ev.button !== 0) return;
         const stGrid = usePixiBonesStore.getState();
+        // ★ 路径编辑模式优先：新建顶点 / 拖柄 / 拖结 / 删结 / 段上插结 / 框选
+        if (stGrid.pathEditAttachmentId) {
+          const pctx = pathEditContext();
+          if (pctx && pctx.attachmentId === stGrid.pathEditAttachmentId) {
+            const path = pctx.path;
+            const slotId = pctx.slot.id;
+            const attachmentId = pctx.attachmentId;
+
+            // 新建顶点模式：单击加结；点回第一个结（12px 内）= 封闭并退出
+            if (stGrid.pathNewVertexMode) {
+              ev.stopPropagation();
+              const pn = screenToPathLocal(slotId, ev.global.x, ev.global.y);
+              if (!pn) return;
+              if (path.vertices.length >= 3) {
+                const s0 = pathLocalToScreen(slotId, path.vertices[0].x, path.vertices[0].y);
+                if (Math.hypot(s0.x - ev.global.x, s0.y - ev.global.y) < 12) {
+                  stGrid.setPathClosed(attachmentId, true);   // 推历史
+                  stGrid.togglePathNewVertexMode();           // 退出新建模式（清选中 / 工具归 create）
+                  return;
+                }
+              }
+              // 加结：一次推一条历史（撤销可逐结回退）
+              stGrid.pushHistory();
+              stGrid.setPathVertices(attachmentId, [...path.vertices, {
+                x: pn.x, y: pn.y,
+                handleInX: 0, handleInY: 0, handleOutX: 0, handleOutY: 0,
+              }]);
+              return;
+            }
+
+            const p = screenToPathLocal(slotId, ev.global.x, ev.global.y);
+            if (!p) return;
+
+            // 柄命中优先（出 = 蓝 / 入 = 浅红，与 gizmo 一致：零长度柄不可点）
+            let hitHandle: { vi: number; side: 'in' | 'out' } | null = null;
+            for (let i = 0; i < path.vertices.length; i++) {
+              const vv = path.vertices[i];
+              const out = pathLocalToScreen(slotId, vv.x + vv.handleOutX, vv.y + vv.handleOutY);
+              const inn = pathLocalToScreen(slotId, vv.x + vv.handleInX, vv.y + vv.handleInY);
+              if ((vv.handleOutX !== 0 || vv.handleOutY !== 0) && Math.hypot(out.x - ev.global.x, out.y - ev.global.y) < 9) {
+                hitHandle = { vi: i, side: 'out' };
+                break;
+              }
+              if ((vv.handleInX !== 0 || vv.handleInY !== 0) && Math.hypot(inn.x - ev.global.x, inn.y - ev.global.y) < 9) {
+                hitHandle = { vi: i, side: 'in' };
+                break;
+              }
+            }
+
+            // 结命中（屏幕距离阈值 9px）
+            let hitIdx = -1;
+            let bestD = 9;
+            for (let i = 0; i < path.vertices.length; i++) {
+              const sp = pathLocalToScreen(slotId, path.vertices[i].x, path.vertices[i].y);
+              const d = Math.hypot(sp.x - ev.global.x, sp.y - ev.global.y);
+              if (d < bestD) { bestD = d; hitIdx = i; }
+            }
+
+            const tool = stGrid.pathEditTool;
+
+            // 柄拖动（先选中该结；小距离拖动 = 只选中结）
+            if (hitHandle) {
+              ev.stopPropagation();
+              const curSel = stGrid.pathSelectedVertices;
+              if (!curSel.includes(hitHandle.vi)) stGrid.setPathSelectedVertices([hitHandle.vi]);
+              dragState = {
+                kind: 'path-handle',
+                slotId,
+                attachmentId,
+                vertexIdx: hitHandle.vi,
+                side: hitHandle.side,
+                startLocal: p,
+                startVertex: path.vertices[hitHandle.vi],
+                moved: false,
+              };
+              return;
+            }
+
+            // delete 工具：单击结 = 删结（松开时没位移）；⌘/ctrl = 多选切换
+            if (tool === 'delete' && hitIdx >= 0) {
+              ev.stopPropagation();
+              if (ev.metaKey || ev.ctrlKey || ev.shiftKey) {
+                const cur = stGrid.pathSelectedVertices;
+                stGrid.setPathSelectedVertices(cur.includes(hitIdx) ? cur.filter((k) => k !== hitIdx) : [...cur, hitIdx]);
+                return;
+              }
+              const cur = stGrid.pathSelectedVertices;
+              const idxs = cur.includes(hitIdx) ? cur : [hitIdx];
+              if (!cur.includes(hitIdx)) stGrid.setPathSelectedVertices([hitIdx]);
+              dragState = {
+                kind: 'path-vertex',
+                slotId,
+                attachmentId,
+                indices: [...idxs],
+                startVertices: path.vertices.slice(),
+                startLocal: p,
+                moved: false,
+                deleteOnClick: true,   // 松开时没位移 = 单击删结
+              };
+              return;
+            }
+
+            // create 工具：点结 = 拖结；双击同一结（320ms 内）= 删除
+            if (tool === 'create' && hitIdx >= 0) {
+              ev.stopPropagation();
+              const now = performance.now();
+              if (lastPathVertexClick.idx === hitIdx && now - lastPathVertexClick.t < 320) {
+                lastPathVertexClick = { idx: -1, t: 0 };
+                deletePathVertex(attachmentId, hitIdx);
+                return;
+              }
+              lastPathVertexClick = { idx: hitIdx, t: now };
+              const cur = stGrid.pathSelectedVertices;
+              const idxs = cur.includes(hitIdx) ? cur : [hitIdx];
+              if (!cur.includes(hitIdx)) stGrid.setPathSelectedVertices([hitIdx]);
+              dragState = {
+                kind: 'path-vertex',
+                slotId,
+                attachmentId,
+                indices: [...idxs],
+                startVertices: path.vertices.slice(),
+                startLocal: p,
+                moved: false,
+              };
+              return;
+            }
+
+            // create 工具：点两结之间的线段 → de Casteljau 分裂插入新结（曲线形状不变）
+            if (tool === 'create') {
+              ev.stopPropagation();
+              const near = nearestPathSegment(path, slotId, ev.global.x, ev.global.y, 10);
+              if (near) {
+                stGrid.setPathData(attachmentId, { ...path, vertices: splitPathSegment(path, near.i, near.u) });
+              }
+              return;
+            }
+
+            // 空白处拖动 → 框选结
+            const rectG = new Gfx();
+            rectG.eventMode = 'none';
+            a.stage.addChild(rectG);
+            dragState = {
+              kind: 'path-marquee',
+              slotId,
+              attachmentId,
+              startScreen: { x: ev.global.x, y: ev.global.y },
+              nowScreen: { x: ev.global.x, y: ev.global.y },
+              rect: rectG,
+              additive: ev.shiftKey || ev.metaKey || ev.ctrlKey,
+              prevSel: stGrid.pathSelectedVertices,
+            };
+            return;
+          }
+        }
         // ★ 网格编辑模式优先：拖顶点 / 加顶点 / 删顶点 / 框选顶点
         if (stGrid.meshEditSlotId) {
           const ctx = meshEditContext();
@@ -4316,12 +4918,20 @@ export function BoneEditor() {
       a.canvas.addEventListener('dblclick', onCanvasDblClick);
 
       /**
-       * 网格编辑：**右键轮转工具** —— 修改 → 创建 → 删除 → 修改 …（仿 Spine）。
-       * 只在网格编辑状态下接管右键（其它时候保留浏览器默认右键菜单）。
+       * 路径 / 网格编辑：**右键轮转工具** —— 路径 create ↔ delete；网格 修改→创建→删除（仿 Spine）。
+       * 只在对应编辑状态下接管右键（其它时候保留浏览器默认右键菜单）。
        */
       const meshToolOrder: Array<'modify' | 'create' | 'delete'> = ['modify', 'create', 'delete'];
       const onCanvasContextMenu = (e: MouseEvent) => {
         const st = usePixiBonesStore.getState();
+        // 路径编辑优先（右键轮转 create ↔ delete）
+        if (st.pathEditAttachmentId) {
+          e.preventDefault();
+          const next = st.pathEditTool === 'create' ? 'delete' : 'create';
+          st.setPathTool(next);
+          drawPathGizmos();
+          return;
+        }
         if (!st.meshEditSlotId) return;   // 非网格编辑 → 不拦截
         e.preventDefault();
         const next = meshToolOrder[(meshToolOrder.indexOf(st.meshTool) + 1) % meshToolOrder.length];
@@ -4353,6 +4963,7 @@ export function BoneEditor() {
       applyBindings(initial.psd, initial.images, initial.slots, initial.slotBindings, initial.slotTransforms);
       applySlotStyles(initial.psd, initial.images, initial.slots, initial.slotStyle, initial.attachmentStyle);
       drawMeshHandles();
+      drawPathGizmos();
       drawBones(initial.bones, initial.selectedBoneId);
 
       let prev = usePixiBonesStore.getState();
@@ -4415,6 +5026,23 @@ export function BoneEditor() {
               syncMeshVertices(k);
             }
           }
+        }
+        // 路径附件数据变化：就地重画曲线（顶点拖动 / 柄拖动 / 增删结共用）；
+        // 增删路径本身会触发 slots 变化 → 已走 rebuildAssets，这里只需补 gizmo
+        if (state.attachmentPaths !== prev.attachmentPaths) {
+          for (const k of Object.keys(state.attachmentPaths)) {
+            redrawPathCurves(k);
+          }
+          drawPathGizmos();
+        }
+        // 路径编辑态变化（进出编辑 / 新建顶点模式 / 工具 / 选中）→ 重画 gizmo
+        if (
+          state.pathEditAttachmentId !== prev.pathEditAttachmentId
+          || state.pathNewVertexMode !== prev.pathNewVertexMode
+          || state.pathEditTool !== prev.pathEditTool
+          || state.pathSelectedVertices !== prev.pathSelectedVertices
+        ) {
+          drawPathGizmos();
         }
         if (state.psd !== prev.psd) {
           // 新 PSD：重置视口（用户之前可能 zoom 过）
@@ -4592,6 +5220,11 @@ export function BoneEditor() {
           && state.attachmentStyle === prev.attachmentStyle
           && state.slotBindings === prev.slotBindings
           && state.attachmentMeshes === prev.attachmentMeshes
+          && state.attachmentPaths === prev.attachmentPaths
+          && state.pathEditAttachmentId === prev.pathEditAttachmentId
+          && state.pathNewVertexMode === prev.pathNewVertexMode
+          && state.pathEditTool === prev.pathEditTool
+          && state.pathSelectedVertices === prev.pathSelectedVertices
           && state.selectedBoneId === prev.selectedBoneId
           && state.selectedBoneIds === prev.selectedBoneIds
           && state.activeTool === prev.activeTool
@@ -4619,6 +5252,11 @@ export function BoneEditor() {
           && state.attachmentStyle === prev.attachmentStyle
           && state.slotBindings === prev.slotBindings
           && state.attachmentMeshes === prev.attachmentMeshes
+          && state.attachmentPaths === prev.attachmentPaths
+          && state.pathEditAttachmentId === prev.pathEditAttachmentId
+          && state.pathNewVertexMode === prev.pathNewVertexMode
+          && state.pathEditTool === prev.pathEditTool
+          && state.pathSelectedVertices === prev.pathSelectedVertices
           && state.selectedBoneId === prev.selectedBoneId
           && state.selectedBoneIds === prev.selectedBoneIds
           && state.activeTool === prev.activeTool
@@ -4631,6 +5269,8 @@ export function BoneEditor() {
           // ★ 骨骼移动后选中框也要跟随（drawHighlight 用 wrapMatrixBySlot 变换四角画边框；
           //   漏掉会导致图片跟着骨骼走了、蓝色选中框还停在原位置）
           drawHighlight(state.psd, state.images, state.slots, state.selectedSlotIds);
+          // 路径 gizmo 也跟随骨骼（编辑中的路径柄/结位置会变）
+          drawPathGizmos();
           updateAttachmentHover(lastPointer.x, lastPointer.y, state.editorMode === 'create' && metaDown);
           prev = state;
           return;
@@ -4646,6 +5286,7 @@ export function BoneEditor() {
         drawBones(state.bones, state.selectedBoneId, state.selectedBoneIds);
         drawSlotHandles(state.psd, state.images, state.slots, state.selectedSlotId, state.activeTool, state.slotTransforms);
         drawMeshHandles();
+        drawPathGizmos();
         // 缩放 / 平移后，悬停提示框要跟着重画（否则会残留在旧位置）
         updateAttachmentHover(
           lastPointer.x,
@@ -4884,6 +5525,11 @@ function distToSegment(
   let t = ((px - ax) * dx + (py - ay) * dy) / len2;
   t = Math.max(0, Math.min(1, t));
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+/** 两向量夹角（弧度，[-π, π]；路径柄镜像判定用）。 */
+function angleBetween(ax: number, ay: number, bx: number, by: number): number {
+  return Math.atan2(ax * by - ay * bx, ax * bx + ay * by);
 }
 
 /** 画一条虚线（Pixi v8 的 Graphics 不支持 setLineDash，手动拆成小线段）。 */

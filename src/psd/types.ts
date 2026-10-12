@@ -93,3 +93,31 @@ export interface MeshData {
   /** 完整绑定世界矩阵（6 元/骨，对齐 Spine LBS）。缺省时回退到平移近似。 */
   boneBindMatrices?: number[];
 }
+
+/**
+ * 路径结（Path Attachment 顶点）。控制柄为相对该结位置的偏移。
+ * 相邻结 i→i+1 用「i 的出柄 → i+1 的入柄」画三次贝塞尔；两侧无柄 = 直线。
+ */
+export interface PathVertex {
+  x: number; y: number;
+  /** 入柄（前一段的曲线控制点），相对 (x,y) */
+  handleInX: number; handleInY: number;
+  /** 出柄（后一段的曲线控制点），相对 (x,y) */
+  handleOutX: number; handleOutY: number;
+}
+
+/**
+ * 路径附件数据（仿 Spine 3.8 PathAttachment，复合贝塞尔曲线）。
+ * 顶点 = 附件局部坐标（与网格 vertices 同坐标系，直接就是 wrap 局部坐标）。
+ */
+export interface PathData {
+  vertices: PathVertex[];
+  /** 封闭：首尾结相连（末段 = 最后结 → 第一个结）。 */
+  closed: boolean;
+  /** 恒速（Spine constantSpeed；先留字段，解算阶段 2 用）。 */
+  constantSpeed: boolean;
+  /** 旋转（编辑器提供便于整体变换；「冻结」后归 0）。 */
+  rotation: number;
+  /** 缩放（「冻结」后归 1）。 */
+  scaleX: number; scaleY: number;
+}

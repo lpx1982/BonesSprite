@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { Skeleton } from '@engine/Skeleton';
-import type { PixiBonesPsd, PixiBonesLayer, PixiBonesSlot, MeshData } from '@psd/types';
+import type { PixiBonesPsd, PixiBonesLayer, PixiBonesSlot, MeshData, PathData, PathVertex } from '@psd/types';
 import { flattenLayers } from '@psd/index';
 import type { Locale } from './i18n';
 
@@ -170,6 +170,8 @@ export type HistorySnapshot = {
   slotTransforms: Record<string, { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }>;
   /** 网格数据也纳入快照，这样拖顶点 / 增删顶点都能 Cmd+Z 撤销 */
   attachmentMeshes: Record<string, MeshData>;
+  /** 路径附件数据也纳入快照（增删结 / 封闭 / 反转 / 冻结都能 Cmd+Z 撤销） */
+  attachmentPaths: Record<string, PathData>;
   selectedBoneId: string | null;
   /** 动画数据也纳入快照：关键帧增删/拖动、动画增删重命名都能 Cmd+Z 撤销 */
   animations: EditorAnimation[];
@@ -206,6 +208,7 @@ function makeSnapshot(s: PixiBonesState): HistorySnapshot {
     attachmentMeshes: JSON.parse(JSON.stringify(
       Object.fromEntries(Object.entries(s.attachmentMeshes).map(([k, m]) => [k, fillMeshDefaults(m)])),
     )),
+    attachmentPaths: JSON.parse(JSON.stringify(s.attachmentPaths)),
     selectedBoneId: s.selectedBoneId,
     animations: JSON.parse(JSON.stringify(s.animations)),
     constraints: JSON.parse(JSON.stringify(s.constraints)),
@@ -229,6 +232,7 @@ function snapshotToState(snap: HistorySnapshot) {
     bones: snap.bones,
     slotTransforms: snap.slotTransforms,
     attachmentMeshes: snap.attachmentMeshes,
+    attachmentPaths: snap.attachmentPaths,
     selectedBoneId: snap.selectedBoneId,
     animations: snap.animations,
     constraints: snap.constraints,
@@ -259,6 +263,8 @@ export interface ProjectData {
   slotStyle: Record<string, { color: string; blend: string }>;
   attachmentStyle: Record<string, { color: string; blend: string }>;
   attachmentMeshes: Record<string, MeshData>;
+  /** 路径附件数据（key = attachmentId，独立 id 空间，不在 images 里）。 */
+  attachmentPaths: Record<string, PathData>;
   slotOrder: string[];
   slotBindings: Record<string, SlotBinding>;
   bones: BoneNode[];
@@ -506,6 +512,45 @@ export interface PixiBonesState {
    *  （和 fitRequestId 同一套路：面板不直接改网格数据，只发请求） */
   traceRequestId: number;
   requestTrace: () => void;
+
+  // ---- 路径附件（仿 Spine 3.8 Path Attachment，复合贝塞尔曲线）----
+  /** 路径附件数据（key = attachmentId；有记录 = 路径附件，渲染走 Graphics 画贝塞尔）。 */
+  attachmentPaths: Record<string, PathData>;
+  /** 正在编辑的路径附件 id（null = 不在路径编辑模式）。 */
+  pathEditAttachmentId: string | null;
+  /** 路径编辑工具：create（默认）= 点线段插入结 / 拖结 / 双击删结；delete = 单击删结 / 框选 */
+  pathEditTool: 'create' | 'delete';
+  /** 新建顶点模式：单击加结，点回第一个结（12px 内）即封闭并退出 */
+  pathNewVertexMode: boolean;
+  /** 选中的结索引（支持多选） */
+  pathSelectedVertices: number[];
+  /** 进入 / 退出路径编辑；退出时同时清 pathNewVertexMode / pathSelectedVertices，工具归 'create' */
+  setPathEdit: (attachmentId: string | null) => void;
+  /** 切换路径编辑工具（右键轮转） */
+  setPathTool: (t: 'create' | 'delete') => void;
+  /** 开：清空选中、清 pathEditTool；关：退出新建顶点模式 */
+  togglePathNewVertexMode: () => void;
+  /** 新建一个空路径附件：加入 attachmentPaths、追加到插槽 attachmentIds 末尾并设为当前显示，
+   *  自动进入编辑 + 新建顶点模式。命名 `路径 ${n}`（n = 当前路径数 + 1）。推历史。 */
+  createPathAttachment: (slotId: string) => string;
+  /** 删除路径附件：删数据 + 从所有插槽摘除引用；若正在编辑该路径则退出编辑。推历史。 */
+  removePathAttachment: (attachmentId: string) => void;
+  /** 结构变化（增删结 / 封闭 / 反转 / 冻结 / 属性）。推历史。 */
+  setPathData: (attachmentId: string, path: PathData) => void;
+  /** 写入整份顶点（拖动结 / 柄时高频调用，不推历史） */
+  setPathVertices: (attachmentId: string, vertices: PathVertex[]) => void;
+  /** 单结微调（拖动柄，不推历史） */
+  setPathVertex: (attachmentId: string, i: number, v: Partial<PathVertex>) => void;
+  /** 设置封闭。推历史。 */
+  setPathClosed: (attachmentId: string, closed: boolean) => void;
+  /** 设置恒速。推历史。 */
+  setPathConstantSpeed: (attachmentId: string, v: boolean) => void;
+  /** 反转 vertices 顺序，每个结交换 handleIn/handleOut（保持曲线形状）。推历史。 */
+  reversePath: (attachmentId: string) => void;
+  /** 冻结：rotation 归 0、scaleX/scaleY 归 1。推历史。 */
+  freezePath: (attachmentId: string) => void;
+  /** 设置选中的结索引（框选 / ⌘ 多选用；不推历史） */
+  setPathSelectedVertices: (ids: number[]) => void;
 
   // ---- 描绘对话框（仿 Spine 的 Trace 弹窗） ----
   traceDialogOpen: boolean;
@@ -1073,6 +1118,13 @@ function genConstraintId(): string {
   return `ik_${_constraintIdCounter}`;
 }
 
+/** 路径附件 id 自增（独立 id 空间，不在 images / 图层里）。 */
+let _pathIdCounter = 0;
+function genPathId(): string {
+  _pathIdCounter++;
+  return `path_${_pathIdCounter}`;
+}
+
 /**
  * 把骨骼 / 插槽 / 动画的 id 自增计数器推到已载入 id 的最大序号之后。
  * 载入工程后必须调用，否则新建的 bone_1 / slot_1 / anim_1 会和已载入的 id 撞号。
@@ -1370,6 +1422,32 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   duplicateAttachment: (attachmentId, slotId = null) => {
     get().pushHistory();
     set((state) => {
+      // ★ 路径附件：不在 images 里，深拷贝路径数据、生成新 id、引用进插槽
+      const pathSrc = state.attachmentPaths[attachmentId];
+      if (pathSrc) {
+        const copy: PathData = JSON.parse(JSON.stringify(pathSrc));
+        const copyId = genPathId();
+        const slots = slotId
+          ? state.slots.map((s) => {
+              if (s.id !== slotId) return s;
+              const attachmentIds = [...s.attachmentIds];
+              const at = attachmentIds.indexOf(attachmentId);
+              if (at >= 0) attachmentIds.splice(at + 1, 0, copyId);
+              else attachmentIds.push(copyId);
+              return { ...s, attachmentIds, activeAttachmentId: copyId };
+            })
+          : state.slots;
+        return {
+          attachmentPaths: { ...state.attachmentPaths, [copyId]: copy },
+          slots,
+          selectedSlotId: slotId ?? state.selectedSlotId,
+          selectedSlotIds: slotId ? [slotId] : state.selectedSlotIds,
+          selectedAttachmentId: copyId,
+          selectedRowKey: slotId ? 'slotatt:' + slotId + ':' + copyId : 'asset:' + copyId,
+          selectedBoneId: null,
+          selectedSectionKey: null,
+        };
+      }
       const src = state.images.find((l) => l.id === attachmentId);
       if (!src) return state;
       const copy = cloneLayerDeep(src);
@@ -1778,6 +1856,145 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   setMeshWireframe: (attachmentId, v) => set((state) => ({
     meshWireframe: { ...state.meshWireframe, [attachmentId]: v },
   })),
+  // ===== 路径附件（仿 Spine 3.8 Path Attachment）=====
+  attachmentPaths: {},
+  pathEditAttachmentId: null,
+  pathEditTool: 'create',
+  pathNewVertexMode: false,
+  pathSelectedVertices: [],
+  setPathEdit: (attachmentId) => set({
+    pathEditAttachmentId: attachmentId,
+    // 进入 / 退出编辑都重置为初始工具态（退出时清新建模式 / 选中；进入时同样从干净状态开始）
+    pathNewVertexMode: false,
+    pathSelectedVertices: [],
+    pathEditTool: 'create',
+  }),
+  setPathTool: (t) => set({ pathEditTool: t }),
+  togglePathNewVertexMode: () => set((state) => {
+    if (state.pathNewVertexMode) {
+      // 关：退出新建顶点模式
+      return { pathNewVertexMode: false, pathSelectedVertices: [], pathEditTool: 'create' as const };
+    }
+    // 开：清空选中、清 pathEditTool（回到默认 create）
+    return { pathNewVertexMode: true, pathSelectedVertices: [], pathEditTool: 'create' as const };
+  }),
+  createPathAttachment: (slotId) => {
+    const s = get();
+    if (!s.slots.some((sl) => sl.id === slotId)) return '';
+    const id = genPathId();
+    // 命名规则：`路径 ${n}`（n = 当前路径数 + 1），由层级树按 id 序号显示
+    s.pushHistory();
+    set((st) => ({
+      attachmentPaths: {
+        ...st.attachmentPaths,
+        [id]: { vertices: [], closed: false, constantSpeed: true, rotation: 0, scaleX: 1, scaleY: 1 },
+      },
+      // 加入插槽附件末尾并设为当前显示
+      slots: st.slots.map((sl) => (sl.id === slotId
+        ? { ...sl, attachmentIds: [...sl.attachmentIds, id], activeAttachmentId: id }
+        : sl)),
+      // 自动进入编辑 + 新建顶点模式
+      pathEditAttachmentId: id,
+      pathNewVertexMode: true,
+      pathSelectedVertices: [],
+      pathEditTool: 'create',
+      selectedSlotId: slotId,
+      selectedSlotIds: [slotId],
+      selectedAttachmentId: id,
+      selectedRowKey: 'slotatt:' + slotId + ':' + id,
+      selectedBoneId: null,
+      selectedBoneIds: [],
+      selectedSectionKey: null,
+    }));
+    return id;
+  },
+  removePathAttachment: (attachmentId) => {
+    const s = get();
+    if (!s.attachmentPaths[attachmentId]) return;
+    s.pushHistory();
+    set((st) => {
+      const attachmentPaths = { ...st.attachmentPaths };
+      delete attachmentPaths[attachmentId];
+      // 从所有插槽摘除引用
+      const slots = st.slots.map((sl) => {
+        if (!sl.attachmentIds.includes(attachmentId)) return sl;
+        const attachmentIds = sl.attachmentIds.filter((a) => a !== attachmentId);
+        const activeAttachmentId = sl.activeAttachmentId && attachmentIds.includes(sl.activeAttachmentId)
+          ? sl.activeAttachmentId
+          : (attachmentIds[0] ?? null);
+        return { ...sl, attachmentIds, activeAttachmentId };
+      });
+      // 若正在编辑该路径则退出编辑
+      const editing = st.pathEditAttachmentId === attachmentId;
+      return {
+        attachmentPaths,
+        slots,
+        pathEditAttachmentId: editing ? null : st.pathEditAttachmentId,
+        pathNewVertexMode: editing ? false : st.pathNewVertexMode,
+        pathSelectedVertices: editing ? [] : st.pathSelectedVertices,
+        pathEditTool: editing ? ('create' as const) : st.pathEditTool,
+        selectedAttachmentId: st.selectedAttachmentId === attachmentId ? null : st.selectedAttachmentId,
+      };
+    });
+  },
+  setPathData: (attachmentId, path) => {
+    const s = get();
+    if (!s.attachmentPaths[attachmentId]) return;
+    s.pushHistory();
+    set((st) => ({ attachmentPaths: { ...st.attachmentPaths, [attachmentId]: path } }));
+  },
+  setPathVertices: (attachmentId, vertices) => set((state) => {
+    const p = state.attachmentPaths[attachmentId];
+    if (!p) return state;
+    return { attachmentPaths: { ...state.attachmentPaths, [attachmentId]: { ...p, vertices } } };
+  }),
+  setPathVertex: (attachmentId, i, v) => set((state) => {
+    const p = state.attachmentPaths[attachmentId];
+    if (!p || !p.vertices[i]) return state;
+    const vertices = p.vertices.slice();
+    vertices[i] = { ...vertices[i], ...v };
+    return { attachmentPaths: { ...state.attachmentPaths, [attachmentId]: { ...p, vertices } } };
+  }),
+  setPathClosed: (attachmentId, closed) => {
+    const s = get();
+    const p = s.attachmentPaths[attachmentId];
+    if (!p || p.closed === closed) return;
+    s.pushHistory();
+    set((st) => ({ attachmentPaths: { ...st.attachmentPaths, [attachmentId]: { ...p, closed } } }));
+  },
+  setPathConstantSpeed: (attachmentId, v) => {
+    const s = get();
+    const p = s.attachmentPaths[attachmentId];
+    if (!p || p.constantSpeed === v) return;
+    s.pushHistory();
+    set((st) => ({ attachmentPaths: { ...st.attachmentPaths, [attachmentId]: { ...p, constantSpeed: v } } }));
+  },
+  reversePath: (attachmentId) => {
+    const s = get();
+    const p = s.attachmentPaths[attachmentId];
+    if (!p) return;
+    s.pushHistory();
+    const vertices = p.vertices.map((v) => ({
+      x: v.x, y: v.y,
+      handleInX: v.handleOutX, handleInY: v.handleOutY,
+      handleOutX: v.handleInX, handleOutY: v.handleInY,
+    })).reverse();
+    set((st) => ({ attachmentPaths: { ...st.attachmentPaths, [attachmentId]: { ...p, vertices } } }));
+  },
+  freezePath: (attachmentId) => {
+    const s = get();
+    const p = s.attachmentPaths[attachmentId];
+    if (!p) return;
+    if (p.rotation === 0 && p.scaleX === 1 && p.scaleY === 1) return;
+    s.pushHistory();
+    set((st) => ({
+      attachmentPaths: {
+        ...st.attachmentPaths,
+        [attachmentId]: { ...p, rotation: 0, scaleX: 1, scaleY: 1 },
+      },
+    }));
+  },
+  setPathSelectedVertices: (ids) => set({ pathSelectedVertices: ids }),
   slotOrder: [],
   setSlotOrder: (ids) => set({ slotOrder: ids }),
   selectedSlotId: null,
@@ -2260,6 +2477,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       slotStyle: d.slotStyle,
       attachmentStyle: d.attachmentStyle,
       attachmentMeshes: d.attachmentMeshes,
+      attachmentPaths: d.attachmentPaths ?? {},
       slotOrder: d.slotOrder,
       slotBindings: d.slotBindings,
       bones: d.bones.map(normalizeBone),
@@ -2279,10 +2497,14 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       loop: true,
       fps: 30,
       keyframeLock: true,
-      // 临时态一律清零（编辑网格 / 描绘 / 拾取 / 权重绑定 / 各种选中）
+      // 临时态一律清零（编辑网格 / 路径 / 描绘 / 拾取 / 权重绑定 / 各种选中）
       meshEditSlotId: null,
       meshSelectedVertices: [],
       meshNewPolygon: null,
+      pathEditAttachmentId: null,
+      pathNewVertexMode: false,
+      pathSelectedVertices: [],
+      pathEditTool: 'create',
       attachingSlotId: null,
       ikPickBoneId: null,
       ikPickChildBoneId: null,
@@ -2313,6 +2535,15 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       Math.max(0, ...(d.constraints ?? []).map((c) => {
         if (!c.id.startsWith('ik_')) return 0;
         const n = parseInt(c.id.slice(3), 10);
+        return Number.isFinite(n) ? n : 0;
+      })),
+    );
+    // 路径附件 id 计数器对齐（path_ 前缀）
+    _pathIdCounter = Math.max(
+      _pathIdCounter,
+      Math.max(0, ...Object.keys(d.attachmentPaths ?? {}).map((id) => {
+        if (!id.startsWith('path_')) return 0;
+        const n = parseInt(id.slice(5), 10);
         return Number.isFinite(n) ? n : 0;
       })),
     );

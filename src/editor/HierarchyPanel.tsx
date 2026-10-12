@@ -72,6 +72,10 @@ interface TreeRow {
   attachmentActive?: boolean;
   /** 附件行是否已转成网格（曲面）：有 attachmentMeshes 记录 */
   isMesh?: boolean;
+  /** 附件行是否为路径附件（有 attachmentPaths 记录；无素材图层） */
+  isPath?: boolean;
+  /** 路径附件行对应的附件 id（kind='asset' 且 isPath 时有效） */
+  pathAttachmentId?: string;
   /** 是否可拖拽（「绘制顺序」里的插槽行） */
   draggableRow?: boolean;
   icon: string;
@@ -154,6 +158,13 @@ export function HierarchyPanel() {
   const setMeshWireframe = usePixiBonesStore((s) => s.setMeshWireframe);
   const meshEditSlotId = usePixiBonesStore((s) => s.meshEditSlotId);
   const setMeshEditSlot = usePixiBonesStore((s) => s.setMeshEditSlot);
+  // 路径附件（仿 Spine 路径附件）
+  const attachmentPaths = usePixiBonesStore((s) => s.attachmentPaths);
+  const pathEditAttachmentId = usePixiBonesStore((s) => s.pathEditAttachmentId);
+  const setPathEdit = usePixiBonesStore((s) => s.setPathEdit);
+  const createPathAttachment = usePixiBonesStore((s) => s.createPathAttachment);
+  const removePathAttachment = usePixiBonesStore((s) => s.removePathAttachment);
+  const freezePath = usePixiBonesStore((s) => s.freezePath);
   const pushHistory = usePixiBonesStore((s) => s.pushHistory);
   const selectedSectionKey = usePixiBonesStore((s) => s.selectedSectionKey);
   const selectSection = usePixiBonesStore((s) => s.selectSection);
@@ -580,20 +591,39 @@ export function HierarchyPanel() {
       if (isCollapsed) return;
       slot.attachmentIds.forEach((aid, j) => {
         const l = attachmentById.get(aid);
-        if (!l) return;
-        out.push({
-          key: 'slotatt:' + slot.id + ':' + aid,
-          kind: 'asset',
-          depth: depth + 1,
-          isLast: j === slot.attachmentIds.length - 1,
-          asset: l,
-          slotId: slot.id,
-          attachmentActive: aid === slot.activeAttachmentId,
-          isMesh: !!attachmentMeshes[l.id],
-          icon: '🖼',
-          label: l.name,
-          collapsible: false,
-        });
+        const p = attachmentPaths[aid];
+        if (!l && !p) return;
+        const isLast = j === slot.attachmentIds.length - 1;
+        if (l) {
+          out.push({
+            key: 'slotatt:' + slot.id + ':' + aid,
+            kind: 'asset',
+            depth: depth + 1,
+            isLast,
+            asset: l,
+            slotId: slot.id,
+            attachmentActive: aid === slot.activeAttachmentId,
+            isMesh: !!attachmentMeshes[l.id],
+            icon: '🖼',
+            label: l.name,
+            collapsible: false,
+          });
+        } else {
+          // 路径附件行（没有素材图层，只有 PathData；名字按 id 序号显示 `路径 ${n}`）
+          out.push({
+            key: 'slotatt:' + slot.id + ':' + aid,
+            kind: 'asset',
+            depth: depth + 1,
+            isLast,
+            slotId: slot.id,
+            attachmentActive: aid === slot.activeAttachmentId,
+            isPath: true,
+            pathAttachmentId: aid,
+            icon: '✒️',
+            label: `路径 ${parseInt(aid.slice(5), 10)}`,
+            collapsible: false,
+          });
+        }
       });
     };
 
@@ -1346,6 +1376,21 @@ export function HierarchyPanel() {
           isolated={hideNonSelected}
           C={C}
         />
+      ) : selectedAttachmentId && attachmentPaths[selectedAttachmentId] ? (
+        <PathAttachmentPropsBlock
+          name={`路径 ${parseInt(selectedAttachmentId.slice(5), 10)}`}
+          editing={pathEditAttachmentId === selectedAttachmentId}
+          onEdit={() => setPathEdit(pathEditAttachmentId === selectedAttachmentId ? null : selectedAttachmentId)}
+          onFreeze={selectedSlotId ? () => freezePath(selectedAttachmentId) : undefined}
+          onDelete={selectedSlotId
+            ? () => {
+                if (confirm(`删除路径附件 "${`路径 ${parseInt(selectedAttachmentId.slice(5), 10)}`}"？\n它会被从所有插槽中移除。`)) {
+                  removePathAttachment(selectedAttachmentId);
+                }
+              }
+            : undefined}
+          C={C}
+        />
       ) : selectedAttachment ? (
         <AttachmentPropsBlock
           attachment={selectedAttachment}
@@ -1398,6 +1443,7 @@ export function HierarchyPanel() {
           slot={selectedSlot}
           candidates={attachments.filter((l) => !selectedSlot?.attachmentIds.includes(l.id))}
           onAddAttachment={(aid) => addAttachmentToSlot(selectedSlotId, aid)}
+          onCreatePath={() => createPathAttachment(selectedSlotId)}
           color={slotStyle[selectedSlotId]?.color ?? ''}
           onColor={(c) => setSlotStyle(selectedSlotId, { color: c })}
           blend={slotStyle[selectedSlotId]?.blend ?? 'normal'}
@@ -1740,10 +1786,12 @@ function TreeRowView(props: TreeRowViewProps) {
         else if (isAnim) onSelectAnimation();
         else if (isSection && sectionKey !== null) onSelectSection(sectionKey);
         else if (isSlot && slot) onSelectSlot(slot.id, row.key);
-        else if (isAsset && asset) {
-          // 附件行：有引用它的插槽则顺便切为「当前显示」，然后选中该素材
-          if (assetSlotId) onActivateAttachment(assetSlotId, asset.id);
-          onSelectAttachment(assetSlotId, asset.id, row.key);
+        else if (isAsset && (asset || row.isPath)) {
+          // 附件行（图片 / 路径）：有引用它的插槽则顺便切为「当前显示」，然后选中该附件
+          const aid = asset ? asset.id : (row.pathAttachmentId ?? '');
+          if (!aid) return;
+          if (assetSlotId) onActivateAttachment(assetSlotId, aid);
+          onSelectAttachment(assetSlotId, aid, row.key);
         }
         else if (isConstraint && row.constraint) onSelectConstraint(row.constraint.id);
       }}
@@ -1814,6 +1862,9 @@ function TreeRowView(props: TreeRowViewProps) {
         )}
         {isAsset && row.isMesh && (
           <span className="ml-1 text-[11px]" style={{ color: C.accent }} title="网格附件（曲面）">▦ 曲面</span>
+        )}
+        {isAsset && row.isPath && (
+          <span className="ml-1 text-[11px]" style={{ color: '#8ec9ff' }} title="路径附件（复合贝塞尔）">✒ 路径</span>
         )}
       </span>
 
@@ -2373,6 +2424,60 @@ function PanelFooterBtn({
 }
 
 // =================================================================================
+//  选中路径附件的属性块（仿 Spine 路径附件面板）
+//    「✒ 路径: 名字」标题栏 + 编辑路径 / 冻结
+// =================================================================================
+interface PathAttachmentPropsBlockProps {
+  name: string;
+  /** 当前是否处于路径编辑态（画布上显示结 / 柄 gizmo） */
+  editing: boolean;
+  onEdit: () => void;
+  /** 冻结：rotation 归 0、scaleX/scaleY 归 1（无上下文插槽时不可用） */
+  onFreeze?: () => void;
+  /** 删除路径附件（无上下文插槽时不可用） */
+  onDelete?: () => void;
+  C: any;
+}
+
+function PathAttachmentPropsBlock(props: PathAttachmentPropsBlockProps) {
+  const { name, editing, onEdit, onFreeze, onDelete, C } = props;
+  return (
+    <div style={{ borderTop: '1px solid ' + C.border, background: C.panelDk }}>
+      <PanelTitleBar
+        icon="✒️"
+        kindLabel="路径"
+        name={name}
+        C={C}
+        onDelete={onDelete}
+        deleteTitle="删除该路径附件（同时从所有插槽移除）"
+      />
+
+      {/* 操作按钮：编辑路径（进入 / 退出） / 冻结 */}
+      <div className="px-2 pb-2 pt-1 grid grid-cols-2 gap-1 text-[12px]">
+        <PanelFooterBtn
+          C={C}
+          onClick={onEdit}
+          icon="✒"
+          label={editing ? '退出编辑' : '编辑路径'}
+          title={editing
+            ? '退出路径编辑'
+            : '进入路径编辑：单击加结、拖结、拖柄、双击删结、右键切换创建/删除工具'}
+          active={editing}
+        />
+        <PanelFooterBtn
+          C={C}
+          onClick={onFreeze ?? (() => {})}
+          icon="❄"
+          label="冻结"
+          title="把路径的旋转归 0、缩放归 1"
+          disabled={!onFreeze}
+        />
+      </div>
+    </div>
+  );
+}
+
+// =================================================================================
 //  选中插槽的属性块（仿 Spine 插槽面板）
 //    预览 + 「◉ 插槽: 名字」标题栏 + 颜色 + 混合 + ＋新建…/↖父级
 // =================================================================================
@@ -2381,6 +2486,8 @@ interface SlotPropsBlockProps {
   /** 「＋ 新建…」挑选器：可加入该插槽的候选素材 */
   candidates: PixiBonesLayer[];
   onAddAttachment: (attachmentId: string) => void;
+  /** 「＋ 新建…」里的「新建路径附件」（无插槽上下文时不可用） */
+  onCreatePath?: () => void;
   /** 插槽颜色（hex，'' = 不覆盖） */
   color: string;
   onColor: (color: string) => void;
@@ -2402,7 +2509,7 @@ interface SlotPropsBlockProps {
 
 function SlotPropsBlock(props: SlotPropsBlockProps) {
   const {
-    slot, candidates, onAddAttachment,
+    slot, candidates, onAddAttachment, onCreatePath,
     color, onColor, blend, onBlend, bindingBoneName, onParent, onUnbind, onDelete, onRename, onCopy, C,
   } = props;
   // 「＋ 新建…」选择器：把已有素材加入该插槽
@@ -2464,9 +2571,21 @@ function SlotPropsBlock(props: SlotPropsBlockProps) {
         </select>
       </PanelRow>
 
-      {/* ＋ 新建…：挑选已有素材加入该插槽 */}
+      {/* ＋ 新建…：挑选已有素材加入该插槽 / 新建路径附件 */}
       {picking && (
         <div className="mx-2 my-1 rounded" style={{ background: C.panel, border: '1px solid ' + C.border, maxHeight: 132, overflowY: 'auto' }}>
+          <button
+            className="w-full flex items-center gap-1 px-2 py-1 text-[12px] text-left"
+            style={{ background: 'transparent', border: 'none', color: C.text, cursor: 'pointer' }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = C.toolbar)}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+            onClick={() => { onCreatePath?.(); setPicking(false); }}
+            title="新建一个空路径附件并进入编辑（单击加结、右键轮转工具）"
+          >
+            <span>✒️</span>
+            <span className="truncate">新建路径附件</span>
+          </button>
+          <div className="mx-1 border-t" style={{ borderColor: C.border }} />
           {candidates.length === 0 ? (
             <div className="px-2 py-1 text-[12px]" style={{ color: C.dim }}>没有可添加的素材</div>
           ) : candidates.map((l) => (

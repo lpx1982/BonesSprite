@@ -10,7 +10,7 @@
  */
 import { useEffect, useRef } from 'react';
 import { usePixiBonesStore, type ProjectData, type BoneNode, type SlotBinding, type EditorAnimation, type BonePose, type IkConstraintDef } from './store';
-import type { PixiBonesLayer, PixiBonesPsd, PixiBonesSlot, MeshData } from '@psd/types';
+import type { PixiBonesLayer, PixiBonesPsd, PixiBonesSlot, MeshData, PathData } from '@psd/types';
 import { idbPut, idbGet } from './idb';
 
 const PROJECT_VERSION = 1;
@@ -51,6 +51,8 @@ interface SerializedProject {
   slotStyle: ProjectData['slotStyle'];
   attachmentStyle: ProjectData['attachmentStyle'];
   attachmentMeshes: Record<string, MeshData>;
+  /** 路径附件数据（独立 id 空间；旧存档缺省为空）。 */
+  attachmentPaths: Record<string, PathData>;
   slotOrder: string[];
   slotBindings: Record<string, SlotBinding>;
   bones: BoneNode[];
@@ -178,6 +180,7 @@ function buildSnapshot(): SerializedProject {
     slotStyle: s.slotStyle,
     attachmentStyle: s.attachmentStyle,
     attachmentMeshes: meshes,
+    attachmentPaths: s.attachmentPaths,
     slotOrder: s.slotOrder,
     slotBindings: s.slotBindings,
     bones: s.bones,
@@ -293,6 +296,7 @@ async function snapshotToProjectData(snap: SerializedProject): Promise<ProjectDa
     slotStyle: snap.slotStyle,
     attachmentStyle: snap.attachmentStyle,
     attachmentMeshes: meshes,
+    attachmentPaths: snap.attachmentPaths ?? {},
     slotOrder: snap.slotOrder,
     slotBindings: snap.slotBindings,
     bones: snap.bones,
