@@ -3580,7 +3580,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     };
   }),
   // 批量设置附件选中（框选路径用）：ids = 全量集合，mainId = 主选中（面板显示它）。
-  // 不碰骨骼选中 —— 框选时骨骼与路径可共存（各自独立选中集）
+  // ★ 类别互斥：路径与骨骼 / 图片不能共存 —— 选中路径时清空骨骼与插槽选择
   setSelectedAttachments: (ids, mainId) => set((s) => {
     const main = mainId ?? (ids.length > 0 ? ids[ids.length - 1] : null);
     const mainSlot = main ? s.slots.find((x) => x.activeAttachmentId === main) ?? null : null;
@@ -3590,6 +3590,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       selectedSlotId: mainSlot?.id ?? null,
       selectedSlotIds: mainSlot ? [mainSlot.id] : [],
       selectedRowKey: main ? (mainSlot ? 'slotatt:' + mainSlot.id + ':' + main : 'asset:' + main) : null,
+      selectedBoneId: null,
+      selectedBoneIds: [],
       selectedSectionKey: null,
       attachingSlotId: null,
       weightMeshId: main ?? s.weightMeshId,
