@@ -4468,12 +4468,12 @@ export function BoneEditor() {
               ev.stopPropagation();
               const pn = screenToPathLocal(slotId, ev.global.x, ev.global.y);
               if (!pn) return;
-              // 闭合：点回第一个结（≥3 结，12px 内）
+              // 闭合：点回第一个结（≥3 结，12px 内）= 封闭并**自动退出编辑**（完成创建）
               if (path.vertices.length >= 3) {
                 const s0 = pathLocalToScreen(slotId, path.vertices[0].x, path.vertices[0].y);
                 if (Math.hypot(s0.x - ev.global.x, s0.y - ev.global.y) < 12) {
                   stGrid.setPathClosed(attachmentId, true);   // 推历史
-                  stGrid.togglePathNewVertexMode();           // 退出新建模式（清选中 / 工具归 create）
+                  stGrid.setPathEdit(null);                   // 闭合完成 → 退出路径编辑（按钮回到「编辑路径」）
                   return;
                 }
               }
