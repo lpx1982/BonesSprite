@@ -387,7 +387,8 @@ function solve(skeleton: Skeleton, ctx: PathSolveContext): void {
           advance = (ctx.spacing / 100) * total;
           break;
         case 'proportional':
-          advance = (ctx.spacing * (prev.length + bone.length)) / 2;
+          // Spine 3.8：proportional = (本骨长度 + 前骨长度) × spacing（spacing 是比例系数，不除 2）
+          advance = ctx.spacing * (prev.length + bone.length);
           break;
       }
       arc = clampArc(arc + advance);

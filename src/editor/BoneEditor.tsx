@@ -94,7 +94,8 @@ function applyPathConstraintsToSkeleton(
     if (!slot) continue;
     const aid = slot.activeAttachmentId;
     const path = aid ? st.attachmentPaths[aid] : null;
-    if (!path) continue;
+    // ★ 路径必须至少 2 个顶点才有弧长/切线可算；不足则跳过（避免骨骼被拉到退化坐标）
+    if (!path || path.vertices.length < 2) continue;
     const layer = aid ? (byId.get(aid) ?? null) : null;
     const binding = slotBindings[slot.id];
     const slotWorld = computeSlotWorldMatrix(slot, binding, boneById, slotTransforms, path ?? layer, st.attachmentMeshes);
