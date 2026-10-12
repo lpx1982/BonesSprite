@@ -54,7 +54,7 @@ interface TreeRow {
    * slot  = 插槽行（◉ 插槽名），其下挂它全部附件行
    * asset = 附件行（🖼 图片名）
    */
-  kind: 'project' | 'bone' | 'section' | 'asset' | 'slot' | 'animation' | 'constraint' | 'path-constraint';
+  kind: 'project' | 'bone' | 'section' | 'asset' | 'slot' | 'animation' | 'constraint' | 'path-constraint' | 'physics-constraint';
   /** 缩进层级：project=0，根骨/分区=1，更深 = 子骨 / 插槽 / 附件 */
   depth: number;
   /** 是否是同层最后一个（决定连线画「└」还是「├」） */
@@ -68,6 +68,8 @@ interface TreeRow {
   constraint?: IkConstraintDef;
   /** 路径约束行（kind='path-constraint'）对应的数据 */
   pathConstraint?: PathConstraintDef;
+  /** 物理约束行（kind='physics-constraint'）对应的数据 */
+  physicsConstraint?: PhysicsConstraintDef;
   /** 约束行在所在列表里的下标 / 长度（▲▼ 按钮禁用判断用） */
   listIndex?: number;
   listLength?: number;
@@ -754,6 +756,7 @@ export function HierarchyPanel() {
                 ? [
                     ...constraints.map((c) => 'constraint:' + c.id),
                     ...pathConstraints.map((c) => 'pathconstraint:' + c.id),
+                    ...physicsConstraints.map((c) => 'physicsconstraint:' + c.id),
                   ]
                 : [];
           out.push({
@@ -809,6 +812,23 @@ export function HierarchyPanel() {
                 listLength: pathConstraints.length,
                 subLabel: `${slotName} → ${boneNames}`,
                 icon: '📐',
+                label: c.name,
+                collapsible: false,
+              });
+            });
+            // ★ 物理约束行：label = 名称，subLabel = 小字「骨骼名」
+            physicsConstraints.forEach((c, j) => {
+              const boneName = bones.find((b) => b.id === c.boneId)?.name ?? '(已删)';
+              out.push({
+                key: 'physicsconstraint:' + c.id,
+                kind: 'physics-constraint',
+                depth: depth + 1,
+                isLast: j === physicsConstraints.length - 1,
+                physicsConstraint: c,
+                listIndex: j,
+                listLength: physicsConstraints.length,
+                subLabel: `${boneName}`,
+                icon: '🌊',
                 label: c.name,
                 collapsible: false,
               });
@@ -1440,6 +1460,8 @@ export function HierarchyPanel() {
                       onSelectConstraint={selectConstraint}
                       onRemovePathConstraint={removePathConstraint}
                       onMovePathConstraint={movePathConstraint}
+                      onRemovePhysicsConstraint={removePhysicsConstraint}
+                      onMovePhysicsConstraint={movePhysicsConstraint}
                       onSelectAnimation={selectAnimationNode}
                       slotBindings={slotBindings}
                       attachmentById={attachmentById}
@@ -1877,6 +1899,9 @@ interface TreeRowViewProps {
   /** 路径约束行：行内删除 / 调整应用顺序 */
   onRemovePathConstraint?: (id: string) => void;
   onMovePathConstraint?: (id: string, toIndex: number) => void;
+  /** 物理约束行：行内删除 / 调整应用顺序 */
+  onRemovePhysicsConstraint?: (id: string) => void;
+  onMovePhysicsConstraint?: (id: string, toIndex: number) => void;
   /** 层级树顶部的「动画」节点被点击 */
   onSelectAnimation: () => void;
   slotBindings: Record<string, SlotBinding>;
@@ -1902,7 +1927,7 @@ function TreeRowView(props: TreeRowViewProps) {
     row, selectedBoneId, onSelect, onAddChild, collapsed, onToggleCollapse, search, C,
     selectedRowKey, onSelectSlot, onSelectAttachment,
     onActivateAttachment, selectedSectionKey, onSelectSection, selectedConstraintId, onSelectConstraint, onSelectAnimation,
-    onRemovePathConstraint, onMovePathConstraint,
+    onRemovePathConstraint, onMovePathConstraint, onRemovePhysicsConstraint, onMovePhysicsConstraint,
     slotBindings, boneNameById, onImport, drag, drop,
     onAssetHoverEnter, onAssetHoverMove, onAssetHoverLeave,
     onRequestRename,
@@ -1923,6 +1948,8 @@ function TreeRowView(props: TreeRowViewProps) {
   const isConstraint = row.kind === 'constraint';
   /** 路径约束行（📐，挂在「约束」分区下、IK 之后） */
   const isPathConstraint = row.kind === 'path-constraint';
+  /** 物理约束行（🌊，挂在「约束」分区下、路径约束之后） */
+  const isPhysicsConstraint = row.kind === 'physics-constraint';
   /** 分区原始 key（'section:images' → 'images'） */
   const sectionKey = isSection && row.key.startsWith('section:') ? row.key.slice('section:'.length) : null;
   const node = row.node;
@@ -1943,7 +1970,8 @@ function TreeRowView(props: TreeRowViewProps) {
     ((isSlot || isAsset || isAnim) && row.key === selectedRowKey) ||
     (isSection && sectionKey !== null && selectedSectionKey === sectionKey) ||
     (isConstraint && !!row.constraint && selectedConstraintId === row.constraint.id) ||
-    (isPathConstraint && !!row.pathConstraint && selectedConstraintId === row.pathConstraint.id);
+    (isPathConstraint && !!row.pathConstraint && selectedConstraintId === row.pathConstraint.id) ||
+    (isPhysicsConstraint && !!row.physicsConstraint && selectedConstraintId === row.physicsConstraint.id);
 
   // 绑定信息（按插槽查；附件行显示它所属插槽的绑定）
   const binding = assetSlotId ? slotBindings[assetSlotId] : (slot ? slotBindings[slot.id] : undefined);
@@ -1957,7 +1985,7 @@ function TreeRowView(props: TreeRowViewProps) {
 
   const isCollapsed = collapsed.has(row.key);
   const thumb = isAsset && asset ? attachmentThumb(asset) : null;
-  const clickable = isBone || isAsset || isSection || isSlot || isAnim || isConstraint || isPathConstraint;
+  const clickable = isBone || isAsset || isSection || isSlot || isAnim || isConstraint || isPathConstraint || isPhysicsConstraint;
 
   /** 绑定/解绑「该行对应的插槽」 */
   const doBindToggle = () => {
@@ -2034,6 +2062,7 @@ function TreeRowView(props: TreeRowViewProps) {
         }
         else if (isConstraint && row.constraint) onSelectConstraint(row.constraint.id);
         else if (isPathConstraint && row.pathConstraint) onSelectConstraint(row.pathConstraint.id);
+        else if (isPhysicsConstraint && row.physicsConstraint) onSelectConstraint(row.physicsConstraint.id);
       }}
       onDoubleClick={(e) => {
         // ★ 双击 = 触发重命名（Spine 行为）
@@ -2181,6 +2210,36 @@ function TreeRowView(props: TreeRowViewProps) {
               e.stopPropagation();
               onRemovePathConstraint?.(row.pathConstraint!.id);
               if (selectedConstraintId === row.pathConstraint!.id) usePixiBonesStore.getState().selectSection('constraints');
+            }}
+          >✕</button>
+        </div>
+      )}
+
+      {/* 物理约束行右侧：上移 / 下移 / 删除（调整应用顺序；hover 才显示） */}
+      {isPhysicsConstraint && row.physicsConstraint && (
+        <div className="flex items-center shrink-0 opacity-0 group-hover:opacity-100">
+          <button
+            className="w-4 h-4 flex items-center justify-center rounded text-[12px]"
+            style={{ background: 'transparent', border: 'none', color: C.dim, cursor: (row.listIndex ?? 0) === 0 ? 'default' : 'pointer' }}
+            disabled={(row.listIndex ?? 0) === 0}
+            title="上移（更先应用）"
+            onClick={(e) => { e.stopPropagation(); onMovePhysicsConstraint?.(row.physicsConstraint!.id, (row.listIndex ?? 0) - 1); }}
+          >▲</button>
+          <button
+            className="w-4 h-4 flex items-center justify-center rounded text-[12px]"
+            style={{ background: 'transparent', border: 'none', color: C.dim, cursor: (row.listIndex ?? 0) >= (row.listLength ?? 1) - 1 ? 'default' : 'pointer' }}
+            disabled={(row.listIndex ?? 0) >= (row.listLength ?? 1) - 1}
+            title="下移（更后应用）"
+            onClick={(e) => { e.stopPropagation(); onMovePhysicsConstraint?.(row.physicsConstraint!.id, (row.listIndex ?? 0) + 1); }}
+          >▼</button>
+          <button
+            className="w-4 h-4 flex items-center justify-center rounded text-[12px]"
+            style={{ background: 'transparent', border: 'none', color: C.warning, cursor: 'pointer' }}
+            title="删除物理约束"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemovePhysicsConstraint?.(row.physicsConstraint!.id);
+              if (selectedConstraintId === row.physicsConstraint!.id) usePixiBonesStore.getState().selectSection('constraints');
             }}
           >✕</button>
         </div>
@@ -3895,8 +3954,12 @@ function PathConstraintsSectionPropsBlock(props: PathConstraintsSectionPropsBloc
 }
 
 // =================================================================================
-//  物理约束属性面板（仿 Spine 4.1 Physics Constraint：标题栏 + Setup/Properties 两组滑块）
-//  - 与 IK / 路径约束共用 selectedConstraintId（id 前缀 phy_ 区分）
+//  物理约束属性面板（对齐 Spine 4.1 Physics Constraint 属性面板布局）
+//   - 标题栏：🌊 物理约束: <name> + ⚙ / ⧉ / ✎ / ✕
+//   - 装配（可折叠）：目标 / 移动(X,Y) / 旋转 / 缩放X / 倾斜X / 限制 / 帧/秒
+//   - Properties：惯性 / 力度 / 阻尼 / 质量 / 风 / 重力 / 混合（右侧 🔗 链式标记）
+//   - 底部动作栏：模拟 / 确定性 / + 新建 / 皮肤…（PRO 禁用）+ 重置 / 全部重置
+//   - 数值按 Spine 习惯以「百分比」显示（内部 0..1，×100 显示、÷100 写回）
 // =================================================================================
 interface PhysicsConstraintsSectionPropsBlockProps {
   physicsConstraints: PhysicsConstraintDef[];
@@ -3916,77 +3979,69 @@ interface PhysicsConstraintsSectionPropsBlockProps {
 function PhysicsConstraintsSectionPropsBlock(props: PhysicsConstraintsSectionPropsBlockProps) {
   const { physicsConstraints, bones, onRemove, onRename, onRenamePopup, onCopy, onBone, onProp, C } = props;
   const selectedId = usePixiBonesStore((s) => s.selectedConstraintId);
+  const physicsSimulate = usePixiBonesStore((s) => s.physicsSimulate);
+  const setPhysicsSimulate = usePixiBonesStore((s) => s.setPhysicsSimulate);
+  const physicsDeterministic = usePixiBonesStore((s) => s.physicsDeterministic);
+  const setPhysicsDeterministic = usePixiBonesStore((s) => s.setPhysicsDeterministic);
   const selected = physicsConstraints.find((c) => c.id === selectedId) ?? null;
   const boneName = (id: string) => bones.find((b) => b.id === id)?.name ?? '(已删)';
+  /** 「装配」区块折叠 */
+  const [setupOpen, setSetupOpen] = useState(true);
+  /** 目标行「✎」→ 内联展开骨骼下拉 */
+  const [pickBone, setPickBone] = useState(false);
 
-  // 通用滑块行：图标 + 标签 + 数字输入 + 滑块（0..1）
-  const renderPercent = (id: string, key: 'x' | 'y' | 'rotate' | 'shearX' | 'scaleX') => {
-    if (!selected) return null;
-    const v = selected[key];
-    return (
-      <div key={key} className="flex items-center gap-1">
-        <span className="shrink-0 w-10" style={{ color: C.accent }}>{
-          key === 'x' ? 'X' : key === 'y' ? 'Y' : key === 'rotate' ? '旋转' : key === 'shearX' ? '剪切' : '缩放'
-        }</span>
-        <input
-          type="number"
-          className="w-14 shrink-0 rounded px-1 py-0.5 outline-none text-[13px]"
-          style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
-          defaultValue={v}
-          onBlur={(e) => {
-            const n = Number(e.target.value);
-            if (!isNaN(n) && n !== v) onProp(id, key, Math.max(0, Math.min(1, n)));
-          }}
-          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-        />
-        <input
-          type="range"
-          className="flex-1"
-          min={0}
-          max={1}
-          step={0.01}
-          value={v}
-          onChange={(e) => onProp(id, key, Number(e.target.value))}
-        />
-        <span className="shrink-0 w-8 text-right" style={{ color: C.dim }}>{Math.round(v * 100)}</span>
-      </div>
-    );
+  const numCls = 'w-14 shrink-0 rounded px-1 py-0.5 outline-none text-[13px]';
+  const numStyle = { background: C.panel, color: C.text, border: '1px solid ' + C.border };
+  const blurOnEnter = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
   };
-  // 通用数值滑块行（无 0..1 限制）
-  const renderFree = (id: string, key: 'inertia' | 'strength' | 'damping' | 'massInverse' | 'wind' | 'gravity' | 'mix', max: number, label: string) => {
+  /** 0..1 属性行（百分比显示 ×100）：label + 数值输入 + 滑块 + 百分数值 + 🔗 */
+  const renderPct = (
+    key: 'x' | 'y' | 'rotate' | 'shearX' | 'scaleX' | 'inertia' | 'strength' | 'damping' | 'massInverse' | 'wind' | 'gravity' | 'mix',
+    label: string,
+    signed = false,
+  ) => {
     if (!selected) return null;
     const v = selected[key];
+    const pct = Math.round(v * 100 * 10) / 10;
     return (
       <div key={key} className="flex items-center gap-1">
-        <span className="shrink-0 w-10" style={{ color: C.accent }}>{label}</span>
+        <span className="shrink-0 w-9 text-[12px]" style={{ color: C.accent }}>{label}</span>
         <input
           type="number"
-          step={0.01}
-          className="w-16 shrink-0 rounded px-1 py-0.5 outline-none text-[13px]"
-          style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
-          defaultValue={v}
+          className={numCls}
+          style={numStyle}
+          min={signed ? -100 : 0}
+          max={100}
+          step={0.1}
+          defaultValue={pct}
           onBlur={(e) => {
             const n = Number(e.target.value);
-            if (!isNaN(n) && n !== v) onProp(id, key, n);
+            if (!isNaN(n)) {
+              const k = signed ? Math.max(-1, Math.min(1, n / 100)) : Math.max(0, Math.min(1, n / 100));
+              onProp(selected.id, key, k);
+            }
           }}
-          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+          onKeyDown={blurOnEnter}
         />
         <input
           type="range"
           className="flex-1"
-          min={0}
-          max={max}
-          step={0.01}
-          value={Math.min(v, max)}
-          onChange={(e) => onProp(id, key, Number(e.target.value))}
+          min={signed ? -100 : 0}
+          max={100}
+          step={0.1}
+          value={Math.max(signed ? -100 : 0, Math.min(100, pct))}
+          onChange={(e) => onProp(selected.id, key, Number(e.target.value) / 100)}
         />
+        <span className="shrink-0 w-8 text-right text-[11px]" style={{ color: C.dim }}>{pct}</span>
+        <span className="shrink-0 text-[10px]" style={{ color: C.dim }} title="链式（作用于子骨骼）">🔗</span>
       </div>
     );
   };
 
   return (
     <div style={{ borderTop: '1px solid ' + C.border, background: C.panelDk, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      {/* 标题栏：🌊 物理约束: <name> + 复制 / 重命名 / 删除（参考其它属性面板） */}
+      {/* 标题栏：🌊 物理约束: <name> + ⚙ / ⧉ / ✎ / ✕ */}
       <PanelTitleBar
         icon="🌊"
         kindLabel="物理约束"
@@ -4003,67 +4058,198 @@ function PhysicsConstraintsSectionPropsBlock(props: PhysicsConstraintsSectionPro
 
       {selected && (
         <div className="px-2 py-1.5 flex flex-col gap-1.5 text-[13px] overflow-y-auto" style={{ borderTop: '1px solid ' + C.border }}>
-          {/* 骨骼：单选下拉 */}
-          <div className="flex items-center gap-1">
-            <span className="shrink-0 w-10" style={{ color: C.accent }}>骨骼</span>
-            <select
-              className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
-              style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
-              value={selected.boneId}
-              onChange={(e) => onBone(selected.id, e.target.value)}
-            >
-              {bones.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-            </select>
-            <span className="shrink-0" style={{ color: C.dim }}>{boneName(selected.boneId)}</span>
-          </div>
+          {/* ── 装配（可折叠）── */}
+          <button
+            className="flex items-center gap-1 w-full text-left py-0.5"
+            style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}
+            onClick={() => setSetupOpen(!setupOpen)}
+          >
+            <span className="text-[10px]" style={{ color: C.dim }}>{setupOpen ? '▼' : '▶'}</span>
+            <span className="text-[12px] font-semibold" style={{ color: C.text }}>装配</span>
+          </button>
 
-          {/* Setup：X / Y / 旋转 / 剪切 / 缩放 影响程度 */}
-          <div className="flex flex-col gap-1 pt-1 border-t" style={{ borderColor: C.border }}>
-            <div className="text-[12px]" style={{ color: C.dim }}>Setup · 属性受影响程度（0..1）</div>
-            {renderPercent(selected.id, 'x')}
-            {renderPercent(selected.id, 'y')}
-            {renderPercent(selected.id, 'rotate')}
-            {renderPercent(selected.id, 'shearX')}
-            {renderPercent(selected.id, 'scaleX')}
-            {/* Limit / FPS */}
-            <div className="flex items-center gap-1">
-              <span className="shrink-0 w-10" style={{ color: C.accent }}>限速</span>
-              <input
-                type="number"
-                className="w-16 shrink-0 rounded px-1 py-0.5 outline-none text-[13px]"
-                style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
-                defaultValue={selected.limit}
-                onBlur={(e) => {
-                  const n = Number(e.target.value);
-                  if (!isNaN(n) && n !== selected.limit) onProp(selected.id, 'limit', Math.max(0, n));
-                }}
-                onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-              />
-              <span className="text-[11px] shrink-0" style={{ color: C.dim }}>FPS</span>
-              <input
-                type="number"
-                className="w-16 shrink-0 rounded px-1 py-0.5 outline-none text-[13px]"
-                style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border }}
-                defaultValue={selected.fps}
-                onBlur={(e) => {
-                  const n = Number(e.target.value);
-                  if (!isNaN(n) && n !== selected.fps) onProp(selected.id, 'fps', Math.max(1, Math.min(240, n)));
-                }}
-                onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-              />
+          {setupOpen && (
+            <div className="flex flex-col gap-1.5">
+              {/* 目标：显示被绑定骨骼名 + ✎ 编辑（展开内联下拉选骨） */}
+              <div className="flex items-center gap-1">
+                <span className="text-[12px] shrink-0" style={{ color: C.dim }}>📌</span>
+                <span className="shrink-0 w-9 text-[12px]" style={{ color: C.accent }}>目标</span>
+                {pickBone ? (
+                  <select
+                    className="flex-1 min-w-0 rounded px-1 py-0.5 outline-none text-[13px]"
+                    style={numStyle}
+                    autoFocus
+                    value={selected.boneId}
+                    onChange={(e) => { onBone(selected.id, e.target.value); setPickBone(false); }}
+                    onBlur={() => setPickBone(false)}
+                  >
+                    {bones.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                  </select>
+                ) : (
+                  <span className="flex-1 truncate text-[13px]" style={{ color: C.selected }}>{boneName(selected.boneId)}</span>
+                )}
+                <button
+                  className="w-5 h-4 flex items-center justify-center rounded text-[12px] shrink-0"
+                  style={{ background: 'transparent', border: 'none', color: C.dim, cursor: 'pointer' }}
+                  title="更换目标骨骼"
+                  onClick={(e) => { e.stopPropagation(); setPickBone(!pickBone); }}
+                >✎</button>
+              </div>
+
+              {/* 移动：X / Y 双轴（各自 0..100 百分比） */}
+              <div className="flex items-center gap-1">
+                <span className="shrink-0 w-9 text-[12px]" style={{ color: C.accent }}>移动</span>
+                <span className="text-[10px] shrink-0" style={{ color: C.dim }}>X</span>
+                <input
+                  type="number"
+                  className="w-10 shrink-0 rounded px-1 py-0.5 outline-none text-[13px]"
+                  style={numStyle}
+                  min={0} max={100} step={0.1}
+                  defaultValue={Math.round(selected.x * 100 * 10) / 10}
+                  onBlur={(e) => {
+                    const n = Number(e.target.value);
+                    if (!isNaN(n)) onProp(selected.id, 'x', Math.max(0, Math.min(1, n / 100)));
+                  }}
+                  onKeyDown={blurOnEnter}
+                />
+                <input
+                  type="range"
+                  className="flex-1"
+                  min={0} max={100} step={0.1}
+                  value={Math.min(100, selected.x * 100)}
+                  onChange={(e) => onProp(selected.id, 'x', Number(e.target.value) / 100)}
+                />
+                <span className="text-[10px] shrink-0" style={{ color: C.dim }}>Y</span>
+                <input
+                  type="number"
+                  className="w-10 shrink-0 rounded px-1 py-0.5 outline-none text-[13px]"
+                  style={numStyle}
+                  min={0} max={100} step={0.1}
+                  defaultValue={Math.round(selected.y * 100 * 10) / 10}
+                  onBlur={(e) => {
+                    const n = Number(e.target.value);
+                    if (!isNaN(n)) onProp(selected.id, 'y', Math.max(0, Math.min(1, n / 100)));
+                  }}
+                  onKeyDown={blurOnEnter}
+                />
+                <input
+                  type="range"
+                  className="flex-1"
+                  min={0} max={100} step={0.1}
+                  value={Math.min(100, selected.y * 100)}
+                  onChange={(e) => onProp(selected.id, 'y', Number(e.target.value) / 100)}
+                />
+              </div>
+
+              {renderPct('rotate', '旋转')}
+              {renderPct('scaleX', '缩放X')}
+              {renderPct('shearX', '倾斜X')}
+
+              {/* 限制：单帧偏移上限（世界像素） */}
+              <div className="flex items-center gap-1">
+                <span className="shrink-0 w-9 text-[12px]" style={{ color: C.accent }}>限制</span>
+                <input
+                  type="number"
+                  className={numCls}
+                  style={numStyle}
+                  min={0}
+                  defaultValue={selected.limit}
+                  onBlur={(e) => {
+                    const n = Number(e.target.value);
+                    if (!isNaN(n)) onProp(selected.id, 'limit', Math.max(0, n));
+                  }}
+                  onKeyDown={blurOnEnter}
+                />
+                <input
+                  type="range"
+                  className="flex-1"
+                  min={0} max={5000} step={10}
+                  value={Math.min(5000, selected.limit)}
+                  onChange={(e) => onProp(selected.id, 'limit', Number(e.target.value))}
+                />
+                <span className="shrink-0 w-8 text-right text-[11px]" style={{ color: C.dim }}>{selected.limit}</span>
+              </div>
+
+              {/* 帧/秒：物理更新率 */}
+              <div className="flex items-center gap-1">
+                <span className="shrink-0 w-9 text-[12px]" style={{ color: C.accent }}>帧/秒</span>
+                <input
+                  type="number"
+                  className={numCls}
+                  style={numStyle}
+                  min={1} max={240}
+                  defaultValue={selected.fps}
+                  onBlur={(e) => {
+                    const n = Number(e.target.value);
+                    if (!isNaN(n)) onProp(selected.id, 'fps', Math.max(1, Math.min(240, Math.round(n))));
+                  }}
+                  onKeyDown={blurOnEnter}
+                />
+                <input
+                  type="range"
+                  className="flex-1"
+                  min={1} max={120} step={1}
+                  value={Math.min(120, selected.fps)}
+                  onChange={(e) => onProp(selected.id, 'fps', Number(e.target.value))}
+                />
+                <span className="shrink-0 w-8 text-right text-[11px]" style={{ color: C.dim }}>{selected.fps}</span>
+              </div>
             </div>
+          )}
+
+          {/* ── Properties：模拟参数（无标题，仿 Spine）── */}
+          <div className="flex flex-col gap-1.5 pt-1.5 border-t" style={{ borderColor: C.border }}>
+            {renderPct('inertia', '惯性')}
+            {renderPct('strength', '力度')}
+            {renderPct('damping', '阻尼')}
+            {renderPct('massInverse', '质量')}
+            {renderPct('wind', '风', true)}
+            {renderPct('gravity', '重力', true)}
+            {renderPct('mix', '混合')}
           </div>
 
-          {/* Properties：模拟参数 */}
-          <div className="flex flex-col gap-1 pt-1 border-t" style={{ borderColor: C.border }}>
-            <div className="text-[12px]" style={{ color: C.dim }}>Properties · 模拟行为</div>
-            {renderFree(selected.id, 'inertia', 1, '惯性')}
-            {renderFree(selected.id, 'strength', 1, '强度')}
-            {renderFree(selected.id, 'damping', 1, '阻尼')}
-            {renderFree(selected.id, 'massInverse', 1, '质量倒数')}
-            {renderFree(selected.id, 'wind', 100, '风')}
-            {renderFree(selected.id, 'gravity', 100, '重力')}
-            {renderFree(selected.id, 'mix', 1, '混合')}
+          {/* ── 底部动作栏：模拟 / 确定性 / + 新建 / 皮肤… ── */}
+          <div className="flex items-center gap-1.5 pt-1.5 border-t" style={{ borderColor: C.border }}>
+            <button
+              className="flex-1 rounded px-2 py-1 text-[12px] font-semibold"
+              style={physicsSimulate
+                ? { background: '#3f8f5a', color: '#fff', border: '1px solid #4fae6f', cursor: 'pointer' }
+                : { background: C.panel, color: C.dim, border: '1px solid ' + C.border, cursor: 'pointer' }}
+              onClick={() => setPhysicsSimulate(!physicsSimulate)}
+              title={physicsSimulate ? '暂停物理模拟' : '开启物理模拟'}
+            >⚛ 模拟</button>
+            <label className="flex items-center gap-1 text-[12px] shrink-0" style={{ color: C.text, cursor: 'pointer' }}>
+              <input type="checkbox" checked={physicsDeterministic} onChange={(e) => setPhysicsDeterministic(e.target.checked)} />
+              确定性
+            </label>
+            <button
+              className="rounded px-2 py-1 text-[12px] shrink-0"
+              style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border, cursor: 'pointer' }}
+              onClick={() => usePixiBonesStore.getState().addPhysicsConstraint(selected.boneId)}
+              title="以当前目标骨新建一条物理约束"
+            >+ 新建</button>
+            <button
+              className="rounded px-2 py-1 text-[12px] shrink-0 opacity-60"
+              style={{ background: C.panel, color: C.dim, border: '1px solid ' + C.border, cursor: 'not-allowed' }}
+              disabled
+              title="皮肤（PRO 功能，暂不支持）"
+            >皮肤…</button>
+          </div>
+
+          {/* ── 次级动作栏：重置 / 全部重置（重置模拟偏移，骨骼回设定姿势）── */}
+          <div className="flex items-center gap-1.5">
+            <button
+              className="flex-1 rounded px-2 py-1 text-[12px]"
+              style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border, cursor: 'pointer' }}
+              onClick={() => window.dispatchEvent(new CustomEvent('spine:physics-reset', { detail: { id: selected.id } }))}
+              title="重置该约束的物理偏移"
+            >↩ 重置</button>
+            <button
+              className="flex-1 rounded px-2 py-1 text-[12px]"
+              style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border, cursor: 'pointer' }}
+              onClick={() => window.dispatchEvent(new CustomEvent('spine:physics-reset', { detail: { all: true } }))}
+              title="重置全部物理约束的偏移"
+            >↩ 全部重置</button>
           </div>
         </div>
       )}

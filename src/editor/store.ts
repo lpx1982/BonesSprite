@@ -891,6 +891,12 @@ export interface PixiBonesState {
   setPhysicsConstraintProp: (id: string, key: keyof Omit<PhysicsConstraintDef, 'id' | 'name' | 'boneId'>, v: number) => void;
   /** 调整物理约束的应用顺序：把 id 对应约束移到新索引 */
   movePhysicsConstraint: (id: string, toIndex: number) => void;
+  /** 物理模拟开关（面板底部「模拟」按钮；关掉后不再推进物理偏移） */
+  physicsSimulate: boolean;
+  setPhysicsSimulate: (v: boolean) => void;
+  /** 确定性模拟开关（面板底部「确定性」复选；预留：强制固定步长/种子，先存状态） */
+  physicsDeterministic: boolean;
+  setPhysicsDeterministic: (v: boolean) => void;
 
   // ---- IK 约束创建流程（仿 Spine：选骨 → 新建 → IK → 拾取目标 → 弹窗命名）----
   /** 正在等待拾取 IK 目标骨（非 null = 「新建 ik 约束：选择目标」拾取模式）。 */
@@ -2771,6 +2777,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
 
   // ---- 物理约束（仿 Spine 4.1 Physics Constraint）----
   physicsConstraints: [],
+  physicsSimulate: true,
+  physicsDeterministic: false,
   addPhysicsConstraint: (boneId, name) => {
     const s = get();
     if (!s.bones.some((b) => b.id === boneId)) return '';
@@ -2858,6 +2866,8 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
     s.pushHistory();
     set({ physicsConstraints: list });
   },
+  setPhysicsSimulate: (v) => set({ physicsSimulate: v }),
+  setPhysicsDeterministic: (v) => set({ physicsDeterministic: v }),
 
   showLeftPanel: false,
   showRightPanel: false,  // 默认隐藏层级树，用户从 View 菜单手动开启

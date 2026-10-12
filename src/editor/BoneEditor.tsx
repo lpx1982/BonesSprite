@@ -17,7 +17,7 @@ import { Bone as EngineBone } from '@engine/Bone';
 import { Skeleton } from '@engine/Skeleton';
 import { applyIkConstraints, type IkSolveContext } from '@engine/IkConstraint';
 import { applyPathConstraints, pathPointAt, pathLengthOf, pathNearestT, type PathSolveContext } from '@engine/PathConstraint';
-import { applyPhysicsConstraints, createPhysicsRuntime, type PhysicsSolveContext, type PhysicsRuntimeState } from '@engine/PhysicsConstraint';
+import { applyPhysicsConstraints, createPhysicsRuntime, resetPhysicsState, type PhysicsSolveContext, type PhysicsRuntimeState } from '@engine/PhysicsConstraint';
 import { parsePsd, type PixiBonesLayer, type PixiBonesPsd, type PixiBonesSlot } from '@psd/index';
 import type { MeshData, PathData, PathVertex } from '@psd/types';
 import { importAssetFile } from './importAsset';
@@ -2680,7 +2680,13 @@ export function BoneEditor() {
         //   时间相关的逐帧模拟，offset 状态跨帧缓存。
         {
           const stPhy = usePixiBonesStore.getState();
-          applyPhysicsConstraintsToSkeleton(skel, stPhy.physicsConstraints, boneById);
+          if (stPhy.physicsSimulate === false) {
+            // 模拟开关关闭：清空运行时状态，重新打开时从干净状态起步（避免残留偏移跳变）
+            physicsRuntimeByConstraint.clear();
+            lastPhysicsApplyAt = 0;
+          } else {
+            applyPhysicsConstraintsToSkeleton(skel, stPhy.physicsConstraints, boneById);
+          }
         }
         skeletonRef = skel;
       };
@@ -5781,6 +5787,21 @@ export function BoneEditor() {
     };
     window.addEventListener('spine:ask-delete', onAsk);
     return () => window.removeEventListener('spine:ask-delete', onAsk);
+  }, []);
+
+  // 监听物理约束「重置」事件（物理约束属性面板的 重置 / 全部重置 按钮分发）
+  useEffect(() => {
+    const onPhysicsReset = (e: Event) => {
+      const d = (e as CustomEvent<{ id?: string; all?: boolean }>).detail;
+      if (d?.all) physicsRuntimeByConstraint.clear();
+      else if (d?.id) {
+        const s = physicsRuntimeByConstraint.get(d.id);
+        if (s) resetPhysicsState(s);
+      }
+      lastPhysicsApplyAt = 0;
+    };
+    window.addEventListener('spine:physics-reset', onPhysicsReset);
+    return () => window.removeEventListener('spine:physics-reset', onPhysicsReset);
   }, []);
 
   return (
