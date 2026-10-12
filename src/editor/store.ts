@@ -2267,18 +2267,31 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
   pcPickMode: null,
   pcPickPathSlotId: null,
   pcPickBoneIds: [],
-  startPathConstraintPick: () => set({
-    pcPickMode: 'path',
-    pcPickPathSlotId: null,
-    pcPickBoneIds: [],
-  }),
+  startPathConstraintPick: () => {
+    const s = get();
+    // ★ 对齐 Spine：先选骨骼（单选/多选）→ 点「路径约束」→ 进入拾取目标路径
+    //   受约束骨 = 当前选中的骨骼；没选 → 提示并拒绝进入拾取
+    const boneIds = s.selectedBoneIds.length > 0
+      ? s.selectedBoneIds
+      : (s.selectedBoneId ? [s.selectedBoneId] : []);
+    if (boneIds.length === 0) {
+      window.alert('请先在画布或层级树中选中要约束的骨骼（可 Shift 多选）');
+      return;
+    }
+    set({
+      pcPickMode: 'path',
+      pcPickPathSlotId: null,
+      pcPickBoneIds: boneIds,
+    });
+  },
   pickPathConstraintPath: (slotId) => {
     const s = get();
     // 目标插槽必须正在显示一个路径附件
     const slot = s.slots.find((sl) => sl.id === slotId);
     const aid = slot?.activeAttachmentId ?? null;
     if (!aid || !s.attachmentPaths[aid]) return;
-    set({ pcPickMode: 'bone', pcPickPathSlotId: slotId });
+    // ★ 骨骼已在入口阶段确定 → 拾取到路径即完成（触发命名弹窗）
+    set({ pcPickMode: 'done', pcPickPathSlotId: slotId });
   },
   pickPathConstraintBone: (boneId, shiftKey = false) => {
     const s = get();
