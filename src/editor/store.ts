@@ -621,6 +621,9 @@ export interface PixiBonesState {
   /** 新建一个空路径附件：加入 attachmentPaths、追加到插槽 attachmentIds 末尾并设为当前显示，
    *  自动进入编辑 + 新建顶点模式。命名 `路径 ${n}`（n = 当前路径数 + 1）。推历史。 */
   createPathAttachment: (slotId: string) => string;
+  /** 骨骼属性面板「新建 → 路径」：创建一个绑定到该骨骼的新插槽 + 空路径附件，
+   *  自动进入编辑 + 新建顶点模式（单击加结）。命名 `路径 ${n}`（n = 当前路径数 + 1）。推历史。 */
+  createPathSlotForBone: (boneId: string) => string;
   /** 删除路径附件：删数据 + 从所有插槽摘除引用；若正在编辑该路径则退出编辑。推历史。 */
   removePathAttachment: (attachmentId: string) => void;
   /** 结构变化（增删结 / 封闭 / 反转 / 冻结 / 属性）。推历史。 */
@@ -2058,6 +2061,39 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       selectedSectionKey: null,
     }));
     return id;
+  },
+  createPathSlotForBone: (boneId) => {
+    const s = get();
+    if (!s.bones.some((b) => b.id === boneId)) return '';
+    const slotId = genSlotId();
+    const pathId = genPathId();
+    const n = Object.keys(s.attachmentPaths).length + 1;
+    const name = `路径 ${n}`;
+    s.pushHistory();
+    set((st) => ({
+      // 新插槽（绑定到当前骨骼，ref = 单位矩阵：绑定瞬间 delta = I，插槽随骨走）
+      slots: [...st.slots, { id: slotId, name, attachmentIds: [pathId], activeAttachmentId: pathId }],
+      slotOrder: [...st.slotOrder, slotId],
+      slotBindings: { ...st.slotBindings, [slotId]: { boneId, ref: [1, 0, 0, 1, 0, 0] } },
+      slotVisibility: { ...st.slotVisibility, [slotId]: true },
+      attachmentPaths: {
+        ...st.attachmentPaths,
+        [pathId]: { vertices: [], closed: false, constantSpeed: true, rotation: 0, scaleX: 1, scaleY: 1 },
+      },
+      // 自动进入编辑 + 新建顶点模式（单击加结）
+      pathEditAttachmentId: pathId,
+      pathNewVertexMode: true,
+      pathSelectedVertices: [],
+      pathEditTool: 'create',
+      selectedSlotId: slotId,
+      selectedSlotIds: [slotId],
+      selectedAttachmentId: pathId,
+      selectedRowKey: 'slotatt:' + slotId + ':' + pathId,
+      selectedBoneId: null,
+      selectedBoneIds: [],
+      selectedSectionKey: null,
+    }));
+    return pathId;
   },
   removePathAttachment: (attachmentId) => {
     const s = get();

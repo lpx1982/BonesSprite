@@ -2226,6 +2226,8 @@ interface BonePropsBlockProps {
 function BonePropsBlock(props: BonePropsBlockProps) {
   const { node, parentOptions, onMove, onRotate, onLength, onParent, onAddChild, onCreateIk, onDelete, onRename, onCopy, onToggleIsolate, isolated, C } = props;
   const rotDeg = (node.rotation * 180) / Math.PI;
+  // 新建 → 路径：创建绑定到当前骨骼的新插槽 + 空路径附件（对齐 Spine 入口）
+  const createPathSlotForBone = usePixiBonesStore((s) => s.createPathSlotForBone);
   // 输入框统一样式
   const inputStyle: React.CSSProperties = {
     background: C.panelDk,
@@ -2243,7 +2245,7 @@ function BonePropsBlock(props: BonePropsBlockProps) {
     const el = newBtnRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    const MENU_H = 7 * 24 + 8; // 估算：7 项 × 24px + 上下 padding
+    const MENU_H = 8 * 24 + 8; // 估算：8 项 × 24px + 上下 padding
     const up = r.top > MENU_H + 40;
     setNewMenu({ x: r.left, y: up ? r.top - MENU_H : r.bottom });
   };
@@ -2256,12 +2258,14 @@ function BonePropsBlock(props: BonePropsBlockProps) {
     document.addEventListener('mousedown', onDocDown);
     return () => document.removeEventListener('mousedown', onDocDown);
   }, [newMenu]);
-  // 新建菜单项：骨骼 / 插槽 / 皮肤 / 网格 / 约束(子菜单) / 事件 / 音频
+  // 新建菜单项：骨骼 / 插槽 / 皮肤 / 网格 / 路径 / 约束(子菜单) / 事件 / 音频
   const newMenuItems: NewMenuEntry[] = [
     { icon: '🦴', label: '骨骼', action: onAddChild },
     { icon: '◉', label: '插槽' }, // 未实现
     { icon: '🧴', label: '皮肤' }, // 未实现
     { icon: '▦', label: '网格' }, // 未实现
+    // 「新建 → 路径」：创建绑定到当前骨骼的新插槽 + 空路径附件（对齐 Spine 入口）
+    { icon: '✒️', label: '路径', action: () => { createPathSlotForBone(node.id); } },
     {
       icon: '🪢', label: '约束',
       children: [
