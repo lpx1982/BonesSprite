@@ -12,11 +12,12 @@ import {
   FederatedPointerEvent,
   FederatedWheelEvent,
 } from 'pixi.js';
-import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, type BoneNode, type SlotBinding, type IkConstraintDef, type PathConstraintDef } from './store';
+import { usePixiBonesStore, findBone, orderLayers, attachmentLayers, type BoneNode, type SlotBinding, type IkConstraintDef, type PathConstraintDef, type PhysicsConstraintDef } from './store';
 import { Bone as EngineBone } from '@engine/Bone';
 import { Skeleton } from '@engine/Skeleton';
 import { applyIkConstraints, type IkSolveContext } from '@engine/IkConstraint';
 import { applyPathConstraints, pathPointAt, pathLengthOf, pathNearestT, type PathSolveContext } from '@engine/PathConstraint';
+import { applyPhysicsConstraints, createPhysicsRuntime, type PhysicsSolveContext, type PhysicsRuntimeState } from '@engine/PhysicsConstraint';
 import { parsePsd, type PixiBonesLayer, type PixiBonesPsd, type PixiBonesSlot } from '@psd/index';
 import type { MeshData, PathData, PathVertex } from '@psd/types';
 import { importAssetFile } from './importAsset';
@@ -116,6 +117,59 @@ function applyPathConstraintsToSkeleton(
     });
   }
   if (contexts.length > 0) applyPathConstraints(skeleton, contexts);
+}
+
+/** 物理约束运行时状态（跨帧保留 offset / velocity）。键 = 约束 id。 */
+const physicsRuntimeByConstraint = new Map<string, PhysicsRuntimeState>();
+/** 上次物理约束推进的时间戳（performance.now，秒），用于算 delta。 */
+let lastPhysicsApplyAt = 0;
+
+/**
+ * 把 store 里的物理约束组装成引擎解算上下文，并按顺序应用到引擎骨架。
+ * 必须在 applyPathConstraintsToSkeleton 之后调用（Spine 顺序：IK → Path → Physics）。
+ * ★ 物理约束是「时间相关」的模拟：每次调用用「距上次调用」的真实时间差推进 offset，
+ *   骨骼每帧被重建（buildSkeleton）也不影响——状态按约束 id 缓存，与骨骼实例解耦。
+ */
+function applyPhysicsConstraintsToSkeleton(
+  skeleton: Skeleton,
+  physicsConstraints: PhysicsConstraintDef[],
+  boneById: Map<string, EngineBone>,
+): void {
+  const now = performance.now() / 1000;
+  let delta = lastPhysicsApplyAt > 0 ? now - lastPhysicsApplyAt : 0;
+  lastPhysicsApplyAt = now;
+  // 防止长时间空闲后猛跳（如从别的 tab 回来）造成爆炸偏移
+  delta = Math.min(delta, 0.1);
+  if (physicsConstraints.length === 0) return;
+  const contexts: PhysicsSolveContext[] = [];
+  for (const c of physicsConstraints) {
+    const bone = boneById.get(c.boneId);
+    if (!bone) continue;
+    let state = physicsRuntimeByConstraint.get(c.id);
+    if (!state) {
+      state = createPhysicsRuntime();
+      physicsRuntimeByConstraint.set(c.id, state);
+    }
+    contexts.push({
+      bone,
+      state,
+      x: c.x,
+      y: c.y,
+      rotate: c.rotate,
+      shearX: c.shearX,
+      scaleX: c.scaleX,
+      limit: c.limit,
+      fps: c.fps,
+      inertia: c.inertia,
+      strength: c.strength,
+      damping: c.damping,
+      massInverse: c.massInverse,
+      wind: c.wind,
+      gravity: c.gravity,
+      mix: c.mix,
+    });
+  }
+  if (contexts.length > 0) applyPhysicsConstraints(skeleton, contexts, delta);
 }
 
 /**
@@ -2621,6 +2675,12 @@ export function BoneEditor() {
         {
           const stP = usePixiBonesStore.getState();
           applyPathConstraintsToSkeleton(skel, stP.pathConstraints, boneById, stP.slots, stP.slotTransforms, stP.slotBindings, stP.images, stP.psd);
+        }
+        // ★ 物理约束：Path 之后应用（Spine 顺序：全部 IK → 全部 Path → 全部 Physics）。
+        //   时间相关的逐帧模拟，offset 状态跨帧缓存。
+        {
+          const stPhy = usePixiBonesStore.getState();
+          applyPhysicsConstraintsToSkeleton(skel, stPhy.physicsConstraints, boneById);
         }
         skeletonRef = skel;
       };
@@ -5408,7 +5468,7 @@ export function BoneEditor() {
             }
           });
         }
-        if (state.bones !== prev.bones || state.constraints !== prev.constraints || state.pathConstraints !== prev.pathConstraints) {
+        if (state.bones !== prev.bones || state.constraints !== prev.constraints || state.pathConstraints !== prev.pathConstraints || state.physicsConstraints !== prev.physicsConstraints) {
           buildSkeleton(state.bones);
           // ★ 骨骼平移 / 旋转 / 缩放（或约束变化）→ 重算所有已绑定网格的顶点蒙皮
           //   注意：applySkinning 需要 wrapMatrixBySlot 已有该插槽记录，

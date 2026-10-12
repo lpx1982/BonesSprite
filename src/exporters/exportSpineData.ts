@@ -318,6 +318,7 @@ export function exportSpineJsonFile(): void {
     setupPose: s.setupPose,
     constraints: s.constraints,
     pathConstraints: s.pathConstraints,
+    physicsConstraints: s.physicsConstraints,
   };
   const json = buildSpineJson(data);
   const safeName = (s.projectName || 'skeleton').replace(/[\\/:*?"<>|]/g, '_') || 'skeleton';

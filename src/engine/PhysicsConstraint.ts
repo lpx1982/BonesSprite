@@ -162,6 +162,16 @@ export function solvePhysics(skeleton: Skeleton, ctx: PhysicsSolveContext, delta
   const tipX = bx + boneLen * Math.cos(ca);
   const tipY = by + boneLen * Math.sin(ca);
 
+  // ★ 未初始化保护：delta<=0（或状态为零且尚未记录过位置）时，
+  //   只把本帧位置写入缓存，不产生任何偏移（避免首帧从 (0,0) 到骨骼位置造成爆炸偏移）。
+  if (delta <= 0 || (state.ux === 0 && state.uy === 0 && state.tipX === 0 && state.tipY === 0)) {
+    state.ux = bx;
+    state.uy = by;
+    state.tipX = tipX;
+    state.tipY = tipY;
+    return;
+  }
+
   // ---- 一、平移偏移（世界空间）----
   const qx = Math.max(0, ctx.limit) * delta;
   const qy = qx;

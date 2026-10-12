@@ -404,6 +404,8 @@ export interface ProjectData {
   constraints: IkConstraintDef[];
   /** 路径约束列表（独立于 IK：Spine 里应用顺序固定为全部 IK → 全部 Path；旧存档缺省为 []） */
   pathConstraints: PathConstraintDef[];
+  /** 物理约束列表（仿 Spine 4.1；旧存档缺省为 []） */
+  physicsConstraints: PhysicsConstraintDef[];
   editorTab?: EditorTab;
   viewport?: { panX: number; panY: number; zoom: number };
 }
@@ -3075,6 +3077,7 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       // —— IK 约束 ——
       constraints: [],
       pathConstraints: [],
+      physicsConstraints: [],
       selectedConstraintId: null,
       // —— 各种选中态清零 ——
       selectedSlotId: null,
@@ -4134,6 +4137,9 @@ setActiveTool: (t) => set((s) => {
         slotStyle: omit(state.slotStyle),
         slotTransforms: omit(state.slotTransforms),
         slotOrder: state.slotOrder.filter((sid) => !removedSlots.has(sid)),
+        // ★ 删除引用被删骨骼的约束（路径约束 / 物理约束）
+        pathConstraints: state.pathConstraints.filter((c) => !c.boneIds.some((bid) => toRemove.has(bid))),
+        physicsConstraints: state.physicsConstraints.filter((c) => !toRemove.has(c.boneId)),
       };
     });
   },
