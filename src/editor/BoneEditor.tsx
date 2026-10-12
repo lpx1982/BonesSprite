@@ -451,6 +451,11 @@ export function BoneEditor() {
       /** 插槽 id → 该插槽 wrap 相对 root 的矩阵（6 元组，由 applyBindings 写入）。
        *  供「屏幕 ⇄ 附件局部坐标」换算用，避免依赖 PIXI 内部矩阵的更新时机。 */
       const wrapMatrixBySlot = new Map<string, number[]>();
+      /** 骨骼 id → 约束应用前（设置姿态）的 world 矩阵（6 元组）。
+       *  ★ 路径曲线渲染用它：路径约束解算会改引擎骨 world，若路径插槽绑定受约束骨
+       *    （如新建工程路径绑 root 又约束 root），约束后的 world 会把曲线也推走 →
+       *    曲线必须用「约束前」姿态，骨骼才对齐路径（Spine 同语义）。 */
+      const setupWorldByBoneId = new Map<string, number[]>();
       const canvasRefs = new Set<HTMLCanvasElement>();
 
       a.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -737,8 +742,9 @@ export function BoneEditor() {
           const view = wrap.children[0] as AttachView | undefined;
           {
             // ★ wrap 矩阵统一走 computeSlotWorldMatrix（路径约束解算也用同一函数，
-            //   保证骨骼落点与画线位置同源）。
-            const out = computeSlotWorldMatrix(slot, bindings[slot.id], boneById, slotTransforms, path ?? layer, meshesNow);
+            //   保证骨骼落点与画线位置同源）。路径插槽传「约束前」骨骼 world 快照，
+            //   避免路径约束改骨 world 时曲线被推走。
+            const out = computeSlotWorldMatrix(slot, bindings[slot.id], boneById, slotTransforms, path ?? layer, meshesNow, setupWorldByBoneId);
             wrap.setFromMatrix(new Matrix(out[0], out[1], out[2], out[3], out[4], out[5]));
             wrapMatrixBySlot.set(slot.id, out);
             if (view) view.position.set(0, 0);
@@ -2595,6 +2601,15 @@ export function BoneEditor() {
         };
         addChildren(rootBone, rootNode.id);
         skel.update();
+        // ★ 快照「约束前」骨骼世界矩阵：路径曲线渲染用（避免路径插槽绑定受约束骨时被推走）
+        setupWorldByBoneId.clear();
+        for (const n of nodes) {
+          const b = boneById.get(n.id);
+          if (b) {
+            const e = b.worldMatrix.elements;
+            setupWorldByBoneId.set(n.id, [e[0], e[1], e[3], e[4], e[6], e[7]]);
+          }
+        }
         // ★ IK 约束：基础世界矩阵算好后按顺序应用 IK（修改引擎骨骼的 local rotation，
         //   之后所有 getWorldPosition / getWorldTip 拿到的都是 IK 后的结果）。
         //   注意：只影响引擎骨架，不写回 store（store 保存的是未约束的设置姿态）。
@@ -6726,6 +6741,7 @@ function computeSlotWorldMatrix(
   slotTransforms: Record<string, { tx: number; ty: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }>,
   pathOrLayer: PathData | PixiBonesLayer | null,
   meshesNow?: Record<string, MeshData>,
+  setupWorld?: Map<string, number[]>,
 ): number[] {
   const aid = slot.activeAttachmentId;
   const path = pathOrLayer !== null && 'vertices' in pathOrLayer ? (pathOrLayer as PathData) : null;
@@ -6739,8 +6755,14 @@ function computeSlotWorldMatrix(
   if (binding && bone && !meshSkinned) {
     const inv = invAffine(binding.ref);
     if (inv) {
-      const e = bone.worldMatrix.elements;
-      const cur = [e[0], e[1], e[3], e[4], e[6], e[7]];
+      // ★ 路径附件且提供了「约束前」骨骼 world → 用约束前矩阵：
+      //   路径约束解算会改引擎骨 world，若路径插槽绑定受约束骨，约束后的 world
+      //   会把曲线也推走，骨骼与曲线错位。曲线必须钉在约束前姿态（Spine 语义）。
+      const useSetup = path && setupWorld ? setupWorld.get(binding.boneId) : undefined;
+      const cur = useSetup ?? (() => {
+        const e = bone.worldMatrix.elements;
+        return [e[0], e[1], e[3], e[4], e[6], e[7]];
+      })();
       m = mulAffine(cur, inv);
     }
   }
