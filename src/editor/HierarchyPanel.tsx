@@ -1375,15 +1375,11 @@ export function HierarchyPanel() {
               title="关键帧：有动画属性时显示"
             >
               {(() => {
-                // 当前激活动画里哪些骨骼有非空轨道（订阅动画/活动 id 变化）
-                const curAnims = usePixiBonesStore((s) => s.animations);
-                const curActive = usePixiBonesStore((s) => s.activeAnimationId);
-                const anim = curAnims.find((a) => a.id === curActive);
+                // 当前激活动画里哪些骨骼有非空轨道（animations / activeAnimationId 已在组件顶层订阅）
+                const tracks = animations.find((a) => a.id === activeAnimationId)?.tracks ?? [];
                 const withKey = new Set<string>();
-                if (anim) {
-                  for (const tr of anim.tracks) {
-                    if (tr.keys && tr.keys.length > 0) withKey.add(tr.boneId);
-                  }
+                for (const tr of tracks) {
+                  if (tr.keys && tr.keys.length > 0) withKey.add(tr.boneId);
                 }
                 return rows.map((r) => {
                   const hasKey = r.kind === 'bone' && r.node && withKey.has(r.node.id);
