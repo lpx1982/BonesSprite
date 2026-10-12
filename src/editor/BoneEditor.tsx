@@ -3645,19 +3645,42 @@ export function BoneEditor() {
         }
         const st = usePixiBonesStore.getState();
 
-        // 路径创建拖动：实时预览「新结 → 鼠标」的虚线出柄（提示即将生成的弧度）
+        // 路径创建拖动：实时预览「新结 + 控制手柄 + 前一段曲线弧度」
         if (dragState.kind === 'path-new-vertex') {
           const nv = dragState;
           const movedNow = Math.hypot(ev.global.x - nv.startScreen.x, ev.global.y - nv.startScreen.y) > 3;
           if (movedNow) nv.moved = true;
           const stNv = usePixiBonesStore.getState();
           const path = stNv.attachmentPaths[nv.attachmentId];
-          if (path && nv.moved) {
-            const p0 = pathLocalToScreen(nv.slotId, nv.startLocal.x, nv.startLocal.y);
+          if (path) {
+            const pB = pathLocalToScreen(nv.slotId, nv.startLocal.x, nv.startLocal.y);
             pathHandles.clear();
-            drawDashedLine(pathHandles, p0.x, p0.y, ev.global.x, ev.global.y, 6, 4, 0x7EC8FF, 1.2);
-            pathHandles.rect(p0.x - 3, p0.y - 3, 6, 6);
+            // 新结白方块
+            pathHandles.rect(pB.x - 3, pB.y - 3, 6, 6);
             pathHandles.fill({ color: 0xFFFFFF, alpha: 0.85 });
+            if (nv.moved) {
+              // 控制手柄：新结 → 鼠标 蓝色直线 + 端点
+              pathHandles.moveTo(pB.x, pB.y).lineTo(ev.global.x, ev.global.y);
+              pathHandles.stroke({ width: 1, color: 0x7EC8FF, alpha: 0.9 });
+              pathHandles.circle(ev.global.x, ev.global.y, 3);
+              pathHandles.fill({ color: 0x7EC8FF, alpha: 0.95 });
+              // 前一段（A → 新结）实时显示弧度：新结入柄 = 鼠标相对新结
+              const lastIdx = path.vertices.length - 1;
+              const endLocal = screenToPathLocal(nv.slotId, ev.global.x, ev.global.y);
+              if (lastIdx >= 0 && endLocal) {
+                const A = path.vertices[lastIdx];
+                const pA = pathLocalToScreen(nv.slotId, A.x, A.y);
+                const aOut = pathLocalToScreen(nv.slotId, A.x + A.handleOutX, A.y + A.handleOutY);
+                const bIn = pathLocalToScreen(
+                  nv.slotId,
+                  nv.startLocal.x + (endLocal.x - nv.startLocal.x),
+                  nv.startLocal.y + (endLocal.y - nv.startLocal.y),
+                );
+                pathHandles.moveTo(pA.x, pA.y);
+                pathHandles.bezierCurveTo(aOut.x, aOut.y, bIn.x, bIn.y, pB.x, pB.y);
+                pathHandles.stroke({ width: 1.5, color: 0x8EC9FF, alpha: 0.9 });
+              }
+            }
           }
           return;
         }
@@ -4167,27 +4190,27 @@ export function BoneEditor() {
           deletePathVertex(pDel.attachmentId, pDel.index);
           return;
         }
-        // 路径创建（新建顶点模式）松开：加结 —— 单击 = 直线结；按住拖动 = 带出柄（弧度）
+        // 路径创建（新建顶点模式）松开：加结 —— 单击 = 直线结；按住拖动 = 带入柄（调节前一段弧度）
         if (dragState.kind === 'path-new-vertex') {
           const nv = dragState;
           const stNv = usePixiBonesStore.getState();
           const path = stNv.attachmentPaths[nv.attachmentId];
           dragState = null;
           if (!path) return;
-          // 拖动判定：位移 > 3px → 出柄 = 新结 → 松开位置（路径局部向量）
+          // 拖动判定：位移 > 3px → 入柄 = 鼠标相对新结（路径局部向量），A→B 段随之弯曲
           const moved = Math.hypot(ev.global.x - nv.startScreen.x, ev.global.y - nv.startScreen.y) > 3;
-          let hx = 0, hy = 0;
+          let ix = 0, iy = 0;
           if (moved) {
             const pEnd = screenToPathLocal(nv.slotId, ev.global.x, ev.global.y);
             if (pEnd) {
-              hx = pEnd.x - nv.startLocal.x;
-              hy = pEnd.y - nv.startLocal.y;
+              ix = pEnd.x - nv.startLocal.x;
+              iy = pEnd.y - nv.startLocal.y;
             }
           }
           stNv.pushHistory();
           stNv.setPathVertices(nv.attachmentId, [...path.vertices, {
             x: nv.startLocal.x, y: nv.startLocal.y,
-            handleInX: 0, handleInY: 0, handleOutX: hx, handleOutY: hy,
+            handleInX: ix, handleInY: iy, handleOutX: 0, handleOutY: 0,
           }]);
           drawPathGizmos();   // 清掉拖动预览，恢复结 / 柄显示
           return;
