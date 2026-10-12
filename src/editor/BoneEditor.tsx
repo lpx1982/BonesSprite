@@ -1552,7 +1552,7 @@ export function BoneEditor() {
       };
 
       /** 画一条路径曲线到 Gfx（路径附件本体：白色 0.6 透明度 2px，仿 Spine 的 PathAttachment 显示）。 */
-      const drawPathCurve = (g: Gfx, path: PathData) => {
+      const drawPathCurve = (g: Gfx, path: PathData, attachmentId: string | null) => {
         const v = path.vertices;
         if (v.length === 0) return;
         // 闭合且 ≥2 结 → 首尾也连一段；否则 结数-1 段
@@ -1572,7 +1572,14 @@ export function BoneEditor() {
             g.lineTo(b.x, b.y);
           }
         }
-        g.stroke({ width: 2, color: path.color ?? 0xff7f2a, alpha: 0.6 });
+        // ★ 选中高亮：当前选中的路径附件 → 黄色加粗描边；否则用路径颜色
+        const selected = !!attachmentId
+          && attachmentId === usePixiBonesStore.getState().selectedAttachmentId;
+        if (selected) {
+          g.stroke({ width: 3.5, color: 0xFFD34D, alpha: 1 });
+        } else {
+          g.stroke({ width: 2, color: path.color ?? 0xff7f2a, alpha: 0.6 });
+        }
       };
 
       /** 为一个插槽创建路径 view：wrap + 曲线 Gfx（曲线画在 wrap 局部坐标，跟随 slot 变换 / 骨骼绑定）。 */
@@ -1580,7 +1587,7 @@ export function BoneEditor() {
         const curve = new Gfx();
         curve.eventMode = 'static';
         curve.cursor = 'pointer';
-        drawPathCurve(curve, path);
+        drawPathCurve(curve, path, slot.activeAttachmentId);
         // 标记：让 stage 的 pointerdown 能识别「点在哪个插槽的路径上」
         (curve as unknown as { __slotId: string }).__slotId = slot.id;
         const wrap = new Container();
@@ -1642,7 +1649,7 @@ export function BoneEditor() {
           const v = wrap.children[0];
           if (!v || !(v instanceof Gfx)) continue;
           v.clear();
-          if (path) drawPathCurve(v, path);
+          if (path) drawPathCurve(v, path, attachmentId);
         }
       };
 
@@ -4213,8 +4220,16 @@ export function BoneEditor() {
               // ★ 变换工具下的选择分类锁定：当前已选「骨骼类」→ 点图层被忽略（保持骨骼选中）
               const stLock2 = usePixiBonesStore.getState();
               if (!(stLock2.activeTool !== null && stLock2.selectedBoneIds.length > 0)) {
-                if (additive) store.selectSlots([...prevSlotIds, hitSlotId], false);
-                else store.selectSlots([hitSlotId], false);
+                // ★ 点击路径曲线 → 选中该**路径附件**（显示路径属性面板）；否则选中插槽
+                const sl2 = stLock2.slots.find((x) => x.id === hitSlotId) ?? null;
+                const aid2 = sl2?.activeAttachmentId ?? null;
+                if (aid2 && stLock2.attachmentPaths[aid2]) {
+                  store.selectAttachment(hitSlotId, aid2, 'slotatt:' + hitSlotId + ':' + aid2);
+                } else if (additive) {
+                  store.selectSlots([...prevSlotIds, hitSlotId], false);
+                } else {
+                  store.selectSlots([hitSlotId], false);
+                }
               }
             }
             // 点空白：变换工具下 pointerdown 不清空（保留选择）；非变换工具 pointerdown 已清空
@@ -4915,6 +4930,19 @@ export function BoneEditor() {
           rect.eventMode = 'none';
           a.stage.addChild(rect);
           const store = usePixiBonesStore.getState();
+          // ★ 命中插槽：点击路径曲线时 ev.target 是 curve Gfx（带 __slotId 标记）→
+          //   优先识别为「点击路径」；否则按图层点判定（topSlotAt 只查图片图层，不含路径）
+          let hitSlotId: string | null = null;
+          {
+            const tSlot = (ev.target as { __slotId?: string } | null)?.__slotId ?? null;
+            if (tSlot) {
+              const stHit = usePixiBonesStore.getState();
+              const sl = stHit.slots.find((x) => x.id === tSlot) ?? null;
+              const aid = sl?.activeAttachmentId ?? null;
+              if (aid && stHit.attachmentPaths[aid]) hitSlotId = tSlot;
+            }
+            if (!hitSlotId) hitSlotId = topSlotAt(ev.global.x, ev.global.y);
+          }
           if (!additive) {
             // ★ Spine 行为：变换工具（旋转/移动/缩放/倾斜）下点击空白**不取消**选择，
             //   只有双击画布才取消（见 canvas dblclick 监听）。
@@ -4932,7 +4960,7 @@ export function BoneEditor() {
             rect,
             prevSelIds: store.selectedBoneIds,
             prevSlotIds: store.selectedSlotIds,
-            hitSlotId: topSlotAt(ev.global.x, ev.global.y),
+            hitSlotId,
           };
         }
       });
@@ -5157,6 +5185,12 @@ export function BoneEditor() {
           }
           drawPathGizmos();
           drawPathConstraintGizmo();
+        }
+        // 选中路径附件变化 → 重画所有路径曲线（选中高亮 / 恢复原色）
+        if (state.selectedAttachmentId !== prev.selectedAttachmentId) {
+          for (const k of Object.keys(state.attachmentPaths)) {
+            redrawPathCurves(k);
+          }
         }
         // 路径编辑态变化（进出编辑 / 新建顶点模式 / 工具 / 选中）→ 重画 gizmo
         if (
