@@ -210,8 +210,9 @@ export function buildSpineObject(data: ProjectData): Record<string, unknown> {
       scaleY: c.offsetScaleY,
       shearY: c.offsetShearY,
       rotateMix: c.rotateMix,
-      translateMix: c.translateMix,
-      scaleMix: c.scaleMix,
+      // Spine 3.8 只有单个 translateMix / scaleMix：取 X（若 X、Y 不同会有精度损失）
+      translateMix: c.translateMixX,
+      scaleMix: c.scaleMixX,
       shearMix: c.shearMix,
     });
   }

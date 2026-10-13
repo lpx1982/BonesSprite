@@ -505,8 +505,11 @@ export async function buildProjectFromSpineJson(
         sourceBoneId,
         boneId,
         rotateMix: tc.rotateMix ?? 1,
-        translateMix: tc.translateMix ?? 1,
-        scaleMix: tc.scaleMix ?? 1,
+        // Spine 3.8 只有单个 translateMix / scaleMix → 同时赋给 X、Y
+        translateMixX: tc.translateMix ?? 1,
+        translateMixY: tc.translateMix ?? 1,
+        scaleMixX: tc.scaleMix ?? 1,
+        scaleMixY: tc.scaleMix ?? 1,
         shearMix: tc.shearMix ?? 1,
         offsetX: tc.x ?? 0,
         offsetY: tc.y ?? 0,

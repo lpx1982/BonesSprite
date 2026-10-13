@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { Skeleton } from '@engine/Skeleton';
+import { computeWorldMatrices, computeOffsetMatch, computePropsMatch } from '@engine/transformConstraintMatch';
 import type { PixiBonesPsd, PixiBonesLayer, PixiBonesSlot, MeshData, PathData, PathVertex } from '@psd/types';
 import { flattenLayers } from '@psd/index';
 import type { Locale } from './i18n';
@@ -295,10 +296,12 @@ export interface TransformConstraintDef {
   sourceBoneId: string;
   /** 目标骨骼（被约束；Spine JSON bones[0]） */
   boneId: string;
-  /** 混合 Mix：0..1 */
+  /** 混合 Mix：0..1（对齐 Spine 4.x：平移/缩放 X、Y 分离，共 6 个值） */
   rotateMix: number;
-  translateMix: number;
-  scaleMix: number;
+  translateMixX: number;
+  translateMixY: number;
+  scaleMixX: number;
+  scaleMixY: number;
   shearMix: number;
   /** 偏移 Offset：offsetX/Y 像素；offsetRotation/offsetShearY 度；offsetScaleX/Y 乘数 */
   offsetX: number;
@@ -960,10 +963,14 @@ export interface PixiBonesState {
   setTransformConstraintSource: (id: string, sourceBoneId: string) => void;
   /** 通用数值属性设置（Mix 区 rotate/translate/scale/shear + Offset 区 x/y/rotation/scaleX/scaleY/shearY + Properties 区 min/max）。推历史。 */
   setTransformConstraintProp: (id: string, key: keyof Omit<TransformConstraintDef, 'id' | 'name' | 'sourceBoneId' | 'boneId' | 'local' | 'additive' | 'clamped'>, v: number) => void;
+  /** 批量数值属性设置（链接滑块：一次改多个 Mix 值，只推一次历史） */
+  setTransformConstraintProps: (id: string, patch: Partial<Record<keyof Omit<TransformConstraintDef, 'id' | 'name' | 'sourceBoneId' | 'boneId' | 'local' | 'additive' | 'clamped'>, number>>) => void;
   /** 选项开关设置（local / additive / clamped） */
   setTransformConstraintFlag: (id: string, key: 'local' | 'additive' | 'clamped', v: boolean) => void;
   /** 调整变换约束的应用顺序：把 id 对应约束移到新索引（0 = 最先应用；Spine 固定全部 IK → 全部 Transform → 全部 Path → 全部 Physics） */
   moveTransformConstraint: (id: string, toIndex: number) => void;
+  /** 变换约束 Match 按钮：基于「源 / 目标 未约束姿态」反推 offset（offset kind）或 min/max（props kind），推历史。 */
+  matchTransformConstraint: (id: string, kind: 'offset' | 'props') => void;
 
   // ---- 变换约束创建拾取流程（仿 Spine：选骨 → 新建 → 变换约束 → 拾取源骨 → 弹窗命名）----
   /** 正在等待拾取源骨（非 null = 「新建变换约束：选择源骨」拾取模式；boneId = 已定的目标骨）。 */
@@ -2981,10 +2988,12 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       name: cName,
       sourceBoneId,
       boneId,
-      // Mix：默认全部 1（Spine 默认 rotateMix/translateMix/scaleMix/shearMix 均为 1）
+      // Mix：默认全部 1（Spine 默认 6 个混合值均为 1）
       rotateMix: 1,
-      translateMix: 1,
-      scaleMix: 1,
+      translateMixX: 1,
+      translateMixY: 1,
+      scaleMixX: 1,
+      scaleMixY: 1,
       shearMix: 1,
       // Offset：全部 0 / 1
       offsetX: 0,
@@ -2993,13 +3002,13 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       offsetScaleX: 1,
       offsetScaleY: 1,
       offsetShearY: 0,
-      // Properties：钳制 min/max（Spine 4.1 clamped，暂存不生效）
-      minRotate: -180, maxRotate: 180,
-      minTranslateX: -Infinity, maxTranslateX: Infinity,
-      minTranslateY: -Infinity, maxTranslateY: Infinity,
-      minScaleX: -Infinity, maxScaleX: Infinity,
-      minScaleY: -Infinity, maxScaleY: Infinity,
-      minShearY: -Infinity, maxShearY: Infinity,
+      // Properties：钳制 min/max（Spine 4.1 clamped，暂存不生效；默认值对齐 Spine 面板：旋转/平移/倾斜 0..100，缩放 0..1）
+      minRotate: 0, maxRotate: 100,
+      minTranslateX: 0, maxTranslateX: 100,
+      minTranslateY: 0, maxTranslateY: 100,
+      minScaleX: 0, maxScaleX: 1,
+      minScaleY: 0, maxScaleY: 1,
+      minShearY: 0, maxShearY: 100,
       // 选项
       local: false,
       additive: false,
@@ -3076,10 +3085,31 @@ export const usePixiBonesStore = create<PixiBonesState>((set, get) => ({
       transformConstraints: st.transformConstraints.map((x) => (x.id === id ? { ...x, [key]: v } : x)),
     }));
   },
+  setTransformConstraintProps: (id, patch) => {
+    get().pushHistory();
+    set((st) => ({
+      transformConstraints: st.transformConstraints.map((x) => (x.id === id ? { ...x, ...patch } : x)),
+    }));
+  },
   setTransformConstraintFlag: (id, key, v) => {
     get().pushHistory();
     set((st) => ({
       transformConstraints: st.transformConstraints.map((x) => (x.id === id ? { ...x, [key]: v } : x)),
+    }));
+  },
+  matchTransformConstraint: (id, kind) => {
+    const s = get();
+    const c = s.transformConstraints.find((x) => x.id === id);
+    if (!c) return;
+    const worldById = computeWorldMatrices(s.bones);
+    const patch =
+      kind === 'offset'
+        ? computeOffsetMatch(c, worldById)
+        : computePropsMatch(c, worldById);
+    if (!patch) return;  // 源 / 目标骨找不到
+    s.pushHistory();
+    set((st) => ({
+      transformConstraints: st.transformConstraints.map((x) => (x.id === id ? { ...x, ...patch } : x)),
     }));
   },
   moveTransformConstraint: (id, toIndex) => {

@@ -43,10 +43,12 @@ export interface TransformSolveContext {
   source: Bone;
   /** 目标骨骼：被约束（Spine 数据里的 bones[0]） */
   target: Bone;
-  /** 混合 0..1（Mix 区） */
+  /** 混合 0..1（Mix 区；平移/缩放 X、Y 分离，对齐 Spine 4.x） */
   rotateMix: number;
-  translateMix: number;
-  scaleMix: number;
+  translateMixX: number;
+  translateMixY: number;
+  scaleMixX: number;
+  scaleMixY: number;
   shearMix: number;
   /** 偏移（Offset 区）；offsetRotation / offsetShearY 单位 = 度 */
   offsetX: number;
@@ -68,7 +70,7 @@ export interface TransformSolveContext {
  * 缩放 / 倾斜按源的 scaleX/scaleY/shearY 混合。
  */
 function applyAbsoluteWorld(skeleton: Skeleton, ctx: TransformSolveContext): void {
-  const { source, target, rotateMix, translateMix, scaleMix, shearMix } = ctx;
+  const { source, target, rotateMix, translateMixX, translateMixY, scaleMixX, scaleMixY, shearMix } = ctx;
   const se = source.worldMatrix.elements;
   const ta = se[0], tb = se[1], tc = se[3], td = se[4];
   // 反射（det < 0 = 镜像）：offset 的角度方向随反射翻转（Spine degRadReflect）
@@ -95,26 +97,30 @@ function applyAbsoluteWorld(skeleton: Skeleton, ctx: TransformSolveContext): voi
     modified = true;
   }
 
-  if (translateMix !== 0) {
-    // 源本地偏移 (offsetX, offsetY) → 源世界坐标，目标世界平移到该点 × mix
+  if (translateMixX !== 0 || translateMixY !== 0) {
+    // 源本地偏移 (offsetX, offsetY) → 源世界坐标，目标世界平移到该点 × mix（X/Y 独立混合）
     const px = ta * ctx.offsetX + tc * ctx.offsetY + se[6];
     const py = tb * ctx.offsetX + td * ctx.offsetY + se[7];
-    tx += (px - tx) * translateMix;
-    ty += (py - ty) * translateMix;
+    if (translateMixX !== 0) tx += (px - tx) * translateMixX;
+    if (translateMixY !== 0) ty += (py - ty) * translateMixY;
     modified = true;
   }
 
-  if (scaleMix !== 0) {
+  if (scaleMixX !== 0 || scaleMixY !== 0) {
     // x 轴缩放：源 scaleX = sqrt(ta² + tb²)；offsetScaleX 是「源缩放上的增量乘数」
-    let s = Math.sqrt(a * a + b * b);
-    let ts = Math.sqrt(ta * ta + tb * tb);
-    if (s > 0.00001) s = (s + (ts - s + ctx.offsetScaleX) * scaleMix) / s;
-    a *= s; b *= s;
+    if (scaleMixX !== 0) {
+      let s = Math.sqrt(a * a + b * b);
+      const ts = Math.sqrt(ta * ta + tb * tb);
+      if (s > 0.00001) s = (s + (ts - s + ctx.offsetScaleX) * scaleMixX) / s;
+      a *= s; b *= s;
+    }
     // y 轴缩放：源 scaleY = sqrt(tc² + td²)
-    s = Math.sqrt(c * c + d * d);
-    ts = Math.sqrt(tc * tc + td * td);
-    if (s > 0.00001) s = (s + (ts - s + ctx.offsetScaleY) * scaleMix) / s;
-    c *= s; d *= s;
+    if (scaleMixY !== 0) {
+      let s = Math.sqrt(c * c + d * d);
+      const ts = Math.sqrt(tc * tc + td * td);
+      if (s > 0.00001) s = (s + (ts - s + ctx.offsetScaleY) * scaleMixY) / s;
+      c *= s; d *= s;
+    }
     modified = true;
   }
 
@@ -139,7 +145,7 @@ function applyAbsoluteWorld(skeleton: Skeleton, ctx: TransformSolveContext): voi
  * 目标骨骼当前的世界变换上，不参考目标自己的姿态。
  */
 function applyRelativeWorld(skeleton: Skeleton, ctx: TransformSolveContext): void {
-  const { source, target, rotateMix, translateMix, scaleMix, shearMix } = ctx;
+  const { source, target, rotateMix, translateMixX, translateMixY, scaleMixX, scaleMixY, shearMix } = ctx;
   const se = source.worldMatrix.elements;
   const ta = se[0], tb = se[1], tc = se[3], td = se[4];
   const reflect = ta * td - tb * tc > 0 ? 1 : -1;
@@ -165,21 +171,25 @@ function applyRelativeWorld(skeleton: Skeleton, ctx: TransformSolveContext): voi
     modified = true;
   }
 
-  if (translateMix !== 0) {
-    // 相对：把源本地 offset 点按源世界位移量直接加到目标世界位置
+  if (translateMixX !== 0 || translateMixY !== 0) {
+    // 相对：把源本地 offset 点按源世界位移量直接加到目标世界位置（X/Y 独立混合）
     const px = ta * ctx.offsetX + tc * ctx.offsetY + se[6];
     const py = tb * ctx.offsetX + td * ctx.offsetY + se[7];
-    tx += px * translateMix;
-    ty += py * translateMix;
+    if (translateMixX !== 0) tx += px * translateMixX;
+    if (translateMixY !== 0) ty += py * translateMixY;
     modified = true;
   }
 
-  if (scaleMix !== 0) {
-    // 相对：缩放因子 = (源scale - 1 + offset) × mix + 1
-    let s = (Math.sqrt(ta * ta + tb * tb) - 1 + ctx.offsetScaleX) * scaleMix + 1;
-    a *= s; b *= s;
-    s = (Math.sqrt(tc * tc + td * td) - 1 + ctx.offsetScaleY) * scaleMix + 1;
-    c *= s; d *= s;
+  if (scaleMixX !== 0 || scaleMixY !== 0) {
+    // 相对：缩放因子 = (源scale - 1 + offset) × mix + 1（X/Y 独立混合）
+    if (scaleMixX !== 0) {
+      const s = (Math.sqrt(ta * ta + tb * tb) - 1 + ctx.offsetScaleX) * scaleMixX + 1;
+      a *= s; b *= s;
+    }
+    if (scaleMixY !== 0) {
+      const s = (Math.sqrt(tc * tc + td * td) - 1 + ctx.offsetScaleY) * scaleMixY + 1;
+      c *= s; d *= s;
+    }
     modified = true;
   }
 
@@ -250,7 +260,10 @@ export function applyTransformConstraints(
   contexts: TransformSolveContext[],
 ): void {
   for (const ctx of contexts) {
-    if (ctx.rotateMix === 0 && ctx.translateMix === 0 && ctx.scaleMix === 0 && ctx.shearMix === 0) continue;
+    if (
+      ctx.rotateMix === 0 && ctx.translateMixX === 0 && ctx.translateMixY === 0 &&
+      ctx.scaleMixX === 0 && ctx.scaleMixY === 0 && ctx.shearMix === 0
+    ) continue;
     if (ctx.local) {
       // 本地模式（Spine applyAbsoluteLocal）依赖 applied 变换跟踪，暂存参数不强制：
       // 本版回退绝对世界模式，行为与 Spine「未勾选本地」一致。

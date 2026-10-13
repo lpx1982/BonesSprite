@@ -246,7 +246,9 @@ export function HierarchyPanel() {
   const setTransformConstraintBone = usePixiBonesStore((s) => s.setTransformConstraintBone);
   const setTransformConstraintSource = usePixiBonesStore((s) => s.setTransformConstraintSource);
   const setTransformConstraintProp = usePixiBonesStore((s) => s.setTransformConstraintProp);
+  const setTransformConstraintProps = usePixiBonesStore((s) => s.setTransformConstraintProps);
   const setTransformConstraintFlag = usePixiBonesStore((s) => s.setTransformConstraintFlag);
+  const matchTransformConstraint = usePixiBonesStore((s) => s.matchTransformConstraint);
   const moveTransformConstraint = usePixiBonesStore((s) => s.moveTransformConstraint);
   const startTransformConstraintPick = usePixiBonesStore((s) => s.startTransformConstraintPick);
   const tcPickBoneId = usePixiBonesStore((s) => s.tcPickBoneId);
@@ -1775,7 +1777,9 @@ export function HierarchyPanel() {
             onBone={(id, boneId) => setTransformConstraintBone(id, boneId)}
             onSource={(id, sourceBoneId) => setTransformConstraintSource(id, sourceBoneId)}
             onProp={(id, key, v) => setTransformConstraintProp(id, key, v)}
+            onPropsBatch={(id, patch) => setTransformConstraintProps(id, patch)}
             onFlag={(id, key, v) => setTransformConstraintFlag(id, key, v)}
+            onMatch={(id, kind) => matchTransformConstraint(id, kind)}
             onMove={(id, toIndex) => moveTransformConstraint(id, toIndex)}
             C={C}
           />
@@ -4074,6 +4078,81 @@ function ProBadge({ C }: { C: any }) {
   );
 }
 
+/**
+ * 变换约束属性行图标（对齐 Spine 配色：旋转绿 / 平移蓝 / 缩放红 / 倾斜黄）。
+ * 用内联 SVG 而非 emoji，才能带上 Spine 的四色区分。
+ */
+type TcPropKind = 'rotate' | 'move' | 'moveX' | 'moveY' | 'scale' | 'scaleX' | 'scaleY' | 'shear';
+function TcPropIcon({ kind }: { kind: TcPropKind }) {
+  const ROT = '#7AC943', MOV = '#4FB8F8', SCL = '#E61E1E', SHR = '#F0A020';
+  const box = { width: 15, height: 15, viewBox: '0 0 16 16' } as const;
+  switch (kind) {
+    case 'rotate':
+      return (
+        <svg {...box}>
+          <path d="M8 2.6a5.4 5.4 0 1 1-5.2 4" fill="none" stroke={ROT} strokeWidth="1.8" strokeLinecap="round" />
+          <path d="M8.6 0.6 8.6 4.8 4.6 2.7Z" fill={ROT} />
+        </svg>
+      );
+    case 'move':
+      return (
+        <svg {...box}>
+          <path d="M8 1.8v12.4M1.8 8h12.4" stroke={MOV} strokeWidth="1.6" strokeLinecap="round" />
+          <path d="M8 1 10.4 3.6H5.6Z M8 15l2.4-2.6H5.6Z M1 8l2.6-2.4v4.8Z M15 8l-2.6-2.4v4.8Z" fill={MOV} />
+        </svg>
+      );
+    case 'moveX':
+      return (
+        <svg {...box}>
+          <path d="M2 8h12" stroke={MOV} strokeWidth="1.6" strokeLinecap="round" />
+          <path d="M1 8l2.6-2.4v4.8Z M15 8l-2.6-2.4v4.8Z" fill={MOV} />
+          <rect x="6.6" y="6.6" width="2.8" height="2.8" fill={MOV} />
+        </svg>
+      );
+    case 'moveY':
+      return (
+        <svg {...box}>
+          <path d="M8 2v12" stroke={MOV} strokeWidth="1.6" strokeLinecap="round" />
+          <path d="M8 1 10.4 3.6H5.6Z M8 15l2.4-2.6H5.6Z" fill={MOV} />
+          <rect x="6.6" y="6.6" width="2.8" height="2.8" fill={MOV} />
+        </svg>
+      );
+    case 'scale':
+      return (
+        <svg {...box}>
+          <rect x="4.6" y="4.6" width="7" height="7" fill="none" stroke={SCL} strokeWidth="1.6" />
+          <rect x="2.4" y="2.4" width="3.4" height="3.4" fill={SCL} />
+        </svg>
+      );
+    case 'scaleX':
+      return (
+        <svg {...box}>
+          <rect x="1.2" y="4.6" width="6.4" height="6.4" fill="none" stroke={SCL} strokeWidth="1.6" />
+          <path d="M9.4 7.9h5.2" stroke={SCL} strokeWidth="1.5" strokeLinecap="round" />
+          <path d="M15.2 7.9l-2.2-2v4Z" fill={SCL} />
+        </svg>
+      );
+    case 'scaleY':
+      return (
+        <svg {...box}>
+          <rect x="4.6" y="1.2" width="6.4" height="6.4" fill="none" stroke={SCL} strokeWidth="1.6" />
+          <path d="M7.9 9.4v5.2" stroke={SCL} strokeWidth="1.5" strokeLinecap="round" />
+          <path d="M7.9 15.2l-2-2.2h4Z" fill={SCL} />
+        </svg>
+      );
+    case 'shear':
+      return (
+        <svg {...box}>
+          <path d="M2.4 13.6 13.6 2.4" stroke={SHR} strokeWidth="1.8" strokeLinecap="round" />
+          <path d="M14.8 1.2 9.8 2.5 12.3 5Z" fill={SHR} />
+          <path d="M1.2 14.8 6.2 13.5 3.7 11Z" fill={SHR} />
+        </svg>
+      );
+    default:
+      return null;
+  }
+}
+
 interface PhysicsConstraintsSectionPropsBlockProps {
   physicsConstraints: PhysicsConstraintDef[];
   bones: BoneNode[];
@@ -4402,7 +4481,7 @@ function PhysicsConstraintsSectionPropsBlock(props: PhysicsConstraintsSectionPro
 //   装配：  🎯 源 <骨名> [✎改源] [PRO]
 //           🎯 目标 <骨名> [✎改目标] [✕删除] [PRO]
 //   偏移（折叠）：offsetX / offsetY / offsetRotation(度) / offsetScaleX / offsetScaleY / offsetShearY(度)
-//   混合（折叠）：rotateMix / translateMix / scaleMix / shearMix（0..100%）
+//   混合（折叠）：rotateMix / translateMixX,Y / scaleMixX,Y / shearMix（6 个值，0..100%）
 //   属性（折叠，PRO）：6 行钳制 min/max（旋转/平移X/平移Y/缩放X/缩放Y/倾斜Y）+ 选项行 ☐本地 ☐相加 ☐钳制
 //   底部：+ 新建…[PRO] / 皮肤…[PRO 禁用] / ◄► 占位
 // =================================================================================
@@ -4421,14 +4500,18 @@ interface TransformConstraintsSectionPropsBlockProps {
   onSource: (id: string, sourceBoneId: string) => void;
   /** 通用数值属性（Mix / Offset / Properties min/max） */
   onProp: (id: string, key: keyof Omit<TransformConstraintDef, 'id' | 'name' | 'sourceBoneId' | 'boneId' | 'local' | 'additive' | 'clamped'>, v: number) => void;
+  /** 批量数值属性（链接滑块：一次改多个 Mix 值，只推一次历史） */
+  onPropsBatch: (id: string, patch: Partial<Record<keyof Omit<TransformConstraintDef, 'id' | 'name' | 'sourceBoneId' | 'boneId' | 'local' | 'additive' | 'clamped'>, number>>) => void;
   /** 选项开关（local / additive / clamped） */
   onFlag: (id: string, key: 'local' | 'additive' | 'clamped', v: boolean) => void;
+  /** Match 按钮：基于源/目标未约束姿态反推 offset（kind='offset'）或 min/max（kind='props'） */
+  onMatch: (id: string, kind: 'offset' | 'props') => void;
   onMove: (id: string, toIndex: number) => void;
   C: any;
 }
 
 function TransformConstraintsSectionPropsBlock(props: TransformConstraintsSectionPropsBlockProps) {
-  const { transformConstraints, bones, onRemove, onRename, onRenamePopup, onCopy, onBone, onSource, onProp, onFlag, C } = props;
+  const { transformConstraints, bones, onRemove, onRename, onRenamePopup, onCopy, onBone, onSource, onProp, onPropsBatch, onFlag, onMatch, C } = props;
   const selectedId = usePixiBonesStore((s) => s.selectedConstraintId);
   const selected = transformConstraints.find((c) => c.id === selectedId) ?? null;
   const boneName = (id: string) => bones.find((b) => b.id === id)?.name ?? '(已删)';
@@ -4439,8 +4522,9 @@ function TransformConstraintsSectionPropsBlock(props: TransformConstraintsSectio
   /** 源 / 目标行「✎」→ 内联展开骨骼下拉 */
   const [pickSource, setPickSource] = useState(false);
   const [pickTarget, setPickTarget] = useState(false);
+  /** 链接滑块：勾选后旋转/平移(X/Y)/缩放(X/Y)/倾斜 六个 Mix 值同步变化（Spine Link Sliders） */
+  const [linkMix, setLinkMix] = useState(false);
 
-  const numCls = 'w-14 shrink-0 rounded px-1 py-0.5 outline-none text-[13px]';
   const numStyle = { background: C.panel, color: C.text, border: '1px solid ' + C.border };
   const blurOnEnter = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
@@ -4468,102 +4552,181 @@ function TransformConstraintsSectionPropsBlock(props: TransformConstraintsSectio
     </button>
   );
 
-  /** 数值行：icon + label + 数字输入 + 滑块 + 数值 + [PRO/单位] */
-  const renderNumRow = (
-    key: 'offsetX' | 'offsetY' | 'offsetRotation' | 'offsetScaleX' | 'offsetScaleY' | 'offsetShearY' | 'rotateMix' | 'translateMix' | 'scaleMix' | 'shearMix',
-    icon: string,
-    label: string,
+  /**
+   * 数值单元（对齐 Spine 行内布局）：数字输入（左，定宽）+ 滑块（右，撑满剩余宽度）。
+   * 一个「行」可由 1 个或 2 个单元组成（单值行滑块占满，X/Y 行各占一半）。
+   */
+  const numCell = (
+    key: 'offsetX' | 'offsetY' | 'offsetRotation' | 'offsetScaleX' | 'offsetScaleY' | 'offsetShearY'
+      | 'rotateMix' | 'translateMixX' | 'translateMixY' | 'scaleMixX' | 'scaleMixY' | 'shearMix',
     min: number,
     max: number,
     step: number,
-    opts: { signed?: boolean; pct?: boolean; pro?: boolean; unit?: string } = {},
+    opts: { signed?: boolean; pct?: boolean; mix?: boolean } = {},
   ) => {
     const v = selected[key];
     const display = opts.pct ? Math.round(v * 100 * 10) / 10 : Math.round(v * 10) / 10;
+    const lo = opts.pct ? (opts.signed ? -100 : 0) : min;
+    const hi = opts.pct ? 100 : max;
+    const st = opts.pct ? 0.1 : step;
+    /** 写值：Mix 行且开启链接滑块时，六个 Mix 值一起改（只推一次历史） */
+    const apply = (n: number) => {
+      if (opts.mix && linkMix) {
+        onPropsBatch(selected.id, {
+          rotateMix: n, translateMixX: n, translateMixY: n, scaleMixX: n, scaleMixY: n, shearMix: n,
+        });
+      } else {
+        onProp(selected.id, key, n);
+      }
+    };
     return (
-      <div key={key} className="flex items-center gap-1">
-        <span className="shrink-0 w-4 text-center text-[12px]" style={{ color: C.dim }}>{icon}</span>
-        <span className="shrink-0 w-10 text-[12px]" style={{ color: C.accent }}>{label}</span>
+      <div className="flex items-center gap-1 flex-1 min-w-0">
         <input
           type="number"
-          className={numCls}
+          key={`${key}-${display}`}
+          className="w-16 shrink-0 rounded px-1 py-0.5 outline-none text-[12px]"
           style={numStyle}
-          min={opts.pct ? (opts.signed ? -100 : 0) : min}
-          max={opts.pct ? 100 : max}
-          step={opts.pct ? 0.1 : step}
+          min={lo} max={hi} step={st}
           defaultValue={display}
           onBlur={(e) => {
             const n = Number(e.target.value);
             if (isNaN(n)) return;
-            const k = opts.pct
+            apply(opts.pct
               ? Math.max(opts.signed ? -1 : 0, Math.min(1, n / 100))
-              : Math.max(min, Math.min(max, n));
-            onProp(selected.id, key, k);
+              : Math.max(min, Math.min(max, n)));
           }}
           onKeyDown={blurOnEnter}
         />
         <input
           type="range"
-          className="flex-1"
-          min={opts.pct ? (opts.signed ? -100 : 0) : min}
-          max={opts.pct ? 100 : max}
-          step={opts.pct ? 0.1 : step}
-          value={Math.max(opts.pct ? (opts.signed ? -100 : 0) : min, Math.min(opts.pct ? 100 : max, display))}
-          onChange={(e) => {
-            const n = Number(e.target.value);
-            onProp(selected.id, key, opts.pct ? n / 100 : n);
-          }}
+          className="flex-1 min-w-0"
+          min={lo} max={hi} step={st}
+          value={Math.max(lo, Math.min(hi, display))}
+          onChange={(e) => apply(opts.pct ? Number(e.target.value) / 100 : Number(e.target.value))}
         />
-        <span className="shrink-0 w-8 text-right text-[11px]" style={{ color: C.dim }}>{display}</span>
-        {opts.unit ? <span className="shrink-0 text-[10px]" style={{ color: C.dim }}>{opts.unit}</span> : null}
-        {opts.pro ? <ProBadge C={C} /> : null}
       </div>
     );
   };
 
-  /** 钳制 min/max 行（Properties 区）：左「最小」右「最大」+ 彩色圆点 + 数值输入 */
+  /** 一行：左侧「图标 + 标签」定宽对齐，右侧 1~2 个数值单元。 */
+  const rowEl = (icon: React.ReactNode, label: string, cells: React.ReactNode) => (
+    <div className="flex items-center gap-1.5">
+      <span className="shrink-0 w-[78px] flex items-center gap-1.5 text-[12px]" style={{ color: C.text }}>
+        <span className="w-4 shrink-0 flex items-center justify-center">{icon}</span>
+        <span className="truncate">{label}</span>
+      </span>
+      <div className="flex items-center gap-1.5 flex-1 min-w-0">{cells}</div>
+    </div>
+  );
+
+  /**
+   * 属性区钳制行（对齐 Spine）：数字 / 数字 / 彩色双手柄范围条 / 数字 / 数字。
+   * 双手柄分别代表 min（左）与 max（右），可拖动；两侧数字框同步显示 min/max。
+   */
   const renderClampRow = (
+    kind: TcPropKind,
+    label: string,
     minKey: 'minRotate' | 'minTranslateX' | 'minTranslateY' | 'minScaleX' | 'minScaleY' | 'minShearY',
     maxKey: 'maxRotate' | 'maxTranslateX' | 'maxTranslateY' | 'maxScaleX' | 'maxScaleY' | 'maxShearY',
-    icon: string,
-    label: string,
-    dot: string,
-    isDeg: boolean,
+    lo: number,
+    hi: number,
+    color: string,
   ) => {
-    const fmt = (x: number) => (Number.isFinite(x) ? String(Math.round(x * 10) / 10) : '∞');
-    const parse = (s: string): number => {
-      const t = s.trim();
-      if (t === '' || t === '∞' || t === '-∞' || t === 'infinity' || t === '-infinity') return Infinity;
-      const n = Number(s);
-      return isNaN(n) ? Infinity : n;
+    const minV = selected[minKey];
+    const maxV = selected[maxKey];
+    const pctOf = (v: number) => {
+      const t = (v - lo) / (hi - lo);
+      return Math.max(0, Math.min(1, Number.isFinite(t) ? t : 0));
+    };
+    const pMin = pctOf(minV);
+    const pMax = pctOf(maxV);
+    const numCls2 = 'w-12 shrink-0 rounded px-1 py-0.5 outline-none text-[12px]';
+    /** max 只允许 >= min（反向拖动时钳住） */
+    const setMin = (v: number) => onProp(selected.id, minKey, Math.min(v, maxV));
+    const setMax = (v: number) => onProp(selected.id, maxKey, Math.max(v, minV));
+    const dragHandle = (which: 'min' | 'max') => (e: React.PointerEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      const track = (e.currentTarget.parentElement as HTMLDivElement);
+      const move = (ev: PointerEvent) => {
+        const r = track.getBoundingClientRect();
+        const t = Math.max(0, Math.min(1, (ev.clientX - r.left) / Math.max(1, r.width)));
+        const v = Math.round((lo + t * (hi - lo)) * 10) / 10;
+        if (which === 'min') setMin(v); else setMax(v);
+      };
+      const up = () => {
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+      };
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
     };
     return (
-      <div key={minKey} className="flex items-center gap-1">
-        <span className="shrink-0 w-4 text-center text-[12px]" style={{ color: C.dim }}>{icon}</span>
-        <span className="shrink-0 w-10 text-[12px]" style={{ color: C.accent }}>{label}</span>
-        <span className="text-[10px] shrink-0" style={{ color: C.dim }}>最小</span>
-        <input
-          type="number"
-          className="w-11 shrink-0 rounded px-1 py-0.5 outline-none text-[12px]"
-          style={numStyle}
-          defaultValue={fmt(selected[minKey])}
-          onBlur={(e) => onProp(selected.id, minKey, parse(e.target.value))}
-          onKeyDown={blurOnEnter}
-        />
-        <span className="w-2.5 h-2.5 shrink-0 rounded-full" style={{ background: dot }} />
-        <span className="text-[10px] shrink-0" style={{ color: C.dim }}>最大</span>
-        <input
-          type="number"
-          className="w-11 shrink-0 rounded px-1 py-0.5 outline-none text-[12px]"
-          style={numStyle}
-          defaultValue={fmt(selected[maxKey])}
-          onBlur={(e) => onProp(selected.id, maxKey, parse(e.target.value))}
-          onKeyDown={blurOnEnter}
-        />
-        {isDeg ? <span className="shrink-0 text-[10px]" style={{ color: C.dim }}>°</span> : null}
+      <div className="flex items-center gap-1.5">
+        <span className="shrink-0 w-[78px] flex items-center gap-1.5 text-[12px]" style={{ color: C.text }}>
+          <span className="w-4 shrink-0 flex items-center justify-center"><TcPropIcon kind={kind} /></span>
+          <span className="truncate">{label}</span>
+        </span>
+        <input type="number" className={numCls2} style={numStyle} key={`min-l-${minV}`}
+          defaultValue={Math.round(minV * 10) / 10}
+          onBlur={(e) => { const n = Number(e.target.value); if (!isNaN(n)) setMin(n); }}
+          onKeyDown={blurOnEnter} />
+        <input type="number" className={numCls2} style={numStyle} key={`max-l-${maxV}`}
+          defaultValue={Math.round(maxV * 10) / 10}
+          onBlur={(e) => { const n = Number(e.target.value); if (!isNaN(n)) setMax(n); }}
+          onKeyDown={blurOnEnter} />
+        {/* 彩色双手柄范围条 */}
+        <div className="relative flex-1 min-w-0 h-4">
+          <div className="absolute left-0 right-0 top-1/2 -translate-y-1/2 h-1.5 rounded-sm" style={{ background: C.panel }} />
+          <div className="absolute top-1/2 -translate-y-1/2 h-1.5 rounded-sm"
+            style={{ left: `${pMin * 100}%`, width: `${Math.max(0, pMax - pMin) * 100}%`, background: color, opacity: 0.85 }} />
+          <div className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3.5 h-3.5 rounded-full cursor-ew-resize"
+            style={{ left: `${pMin * 100}%`, background: color, border: '1px solid rgba(0,0,0,0.5)' }}
+            onPointerDown={dragHandle('min')} />
+          <div className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3.5 h-3.5 rounded-full cursor-ew-resize"
+            style={{ left: `${pMax * 100}%`, background: color, border: '1px solid rgba(0,0,0,0.5)' }}
+            onPointerDown={dragHandle('max')} />
+        </div>
+        <input type="number" className={numCls2} style={numStyle} key={`min-r-${minV}`}
+          defaultValue={Math.round(minV * 10) / 10}
+          onBlur={(e) => { const n = Number(e.target.value); if (!isNaN(n)) setMin(n); }}
+          onKeyDown={blurOnEnter} />
+        <input type="number" className={numCls2} style={numStyle} key={`max-r-${maxV}`}
+          defaultValue={Math.round(maxV * 10) / 10}
+          onBlur={(e) => { const n = Number(e.target.value); if (!isNaN(n)) setMax(n); }}
+          onKeyDown={blurOnEnter} />
       </div>
     );
   };
+
+  /** 「匹配」按钮（对齐 Spine：黄色圆形图标 + 匹配）。
+   *  - kind='offset'：基于源/目标未约束姿态反推 offsetX/Y/Rotation/ScaleX/ScaleY/ShearY
+   *  - kind='props'：基于同一姿态反推 6 组 min/max（保持目标映射范围 max-min 不变） */
+  const matchBtn = (kind: 'offset' | 'props') => (
+    <span
+      role="button"
+      className="ml-auto flex items-center gap-1 shrink-0 rounded px-1.5 py-0.5 text-[11px]"
+      style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border, cursor: 'pointer' }}
+      title={kind === 'offset'
+        ? '匹配：基于源/目标当前姿态反推 6 个 Offset 值（不变 min/max 映射）'
+        : '匹配：基于源/目标当前姿态反推 6 组 min/max（保持目标映射范围不变）'}
+      onClick={(e) => { e.stopPropagation(); onMatch(selected.id, kind); }}
+    >
+      <svg width="13" height="13" viewBox="0 0 16 16">
+        <circle cx="8" cy="8" r="7" fill="#E8C33A" />
+        <rect x="3.1" y="9.2" width="9.8" height="2" rx="1" fill="#3a3a3a" />
+        <circle cx="5.1" cy="5.4" r="1.3" fill="#3a3a3a" />
+      </svg>
+      匹配
+    </span>
+  );
+
+  /** 选项行里的单个勾选框（本地 / 相加 / 钳制） */
+  const optCheck = (key: 'local' | 'additive' | 'clamped', label: string) => (
+    <label className="flex items-center gap-1 text-[12px] shrink-0" style={{ color: C.text, cursor: 'pointer' }}>
+      <input type="checkbox" checked={selected[key]} onChange={(e) => onFlag(selected.id, key, e.target.checked)} />
+      {label}
+    </label>
+  );
 
   return (
     <div style={{ borderTop: '1px solid ' + C.border, background: C.panelDk, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
@@ -4608,7 +4771,6 @@ function TransformConstraintsSectionPropsBlock(props: TransformConstraintsSectio
             title="在画布/树里拾取源骨（或点击 ✎ 下拉更换）"
             onClick={(e) => { e.stopPropagation(); setPickSource(!pickSource); }}
           >✎</button>
-          <ProBadge C={C} />
         </div>
         {/* 目标：被约束的骨（Spine JSON bones[0]） */}
         <div className="flex items-center gap-1">
@@ -4640,100 +4802,100 @@ function TransformConstraintsSectionPropsBlock(props: TransformConstraintsSectio
             title="删除该变换约束"
             onClick={(e) => { e.stopPropagation(); onRemove(selected.id); usePixiBonesStore.getState().selectSection('constraints'); }}
           >✕</button>
-          <ProBadge C={C} />
         </div>
 
-        {/* ── 偏移 Offset（可折叠；PRO + 匹配 占位） ── */}
-        {foldBtn(offsetOpen, () => setOffsetOpen(!offsetOpen), '偏移',
-          <span className="ml-auto flex items-center gap-1 shrink-0">
-            <span
-              className="rounded px-1.5 text-[11px]"
-              style={{ background: C.panel, color: C.dim, border: '1px solid ' + C.border, cursor: 'not-allowed' }}
-              title="匹配源骨骼当前值（PRO，暂未实现）"
-            >匹配</span>
-            <ProBadge C={C} />
-          </span>)}
+        {/* ── 偏移 Offset（可折叠；4 行：旋转 / 移动 / 缩放 / 倾斜Y，对齐 Spine） ── */}
+        {foldBtn(offsetOpen, () => setOffsetOpen(!offsetOpen), '偏移', matchBtn('offset'))}
         {offsetOpen && (
           <div className="flex flex-col gap-1.5">
-            {renderNumRow('offsetX', '↔', '平移X', -9999, 9999, 1, { signed: true })}
-            {renderNumRow('offsetY', '↕', '平移Y', -9999, 9999, 1, { signed: true })}
-            {renderNumRow('offsetRotation', '🔄', '旋转', -180, 180, 1, { signed: true, unit: '°' })}
-            {renderNumRow('offsetScaleX', '🟥', '缩放X', 0, 3, 0.01, { unit: 'x' })}
-            {renderNumRow('offsetScaleY', '🟥', '缩放Y', 0, 3, 0.01, { unit: 'x' })}
-            {renderNumRow('offsetShearY', '📐', '倾斜Y', -180, 180, 1, { signed: true, unit: '°' })}
+            {rowEl(<TcPropIcon kind="rotate" />, '旋转',
+              numCell('offsetRotation', -180, 180, 1, { signed: true }))}
+            {rowEl(<TcPropIcon kind="move" />, '移动', <>
+              {numCell('offsetX', -9999, 9999, 1, { signed: true })}
+              {numCell('offsetY', -9999, 9999, 1, { signed: true })}
+            </>)}
+            {rowEl(<TcPropIcon kind="scale" />, '缩放', <>
+              {numCell('offsetScaleX', 0, 3, 0.01)}
+              {numCell('offsetScaleY', 0, 3, 0.01)}
+            </>)}
+            {rowEl(<TcPropIcon kind="shear" />, '倾斜 Y',
+              numCell('offsetShearY', -180, 180, 1, { signed: true }))}
           </div>
         )}
 
-        {/* ── 混合 Mix（可折叠；PRO 占位） ── */}
+        {/* ── 混合 Mix（可折叠；链接滑块：勾选后六个 Mix 值同步） ── */}
         {foldBtn(mixOpen, () => setMixOpen(!mixOpen), '混合',
-          <span className="ml-auto flex items-center gap-1 shrink-0">
-            <span
-              className="rounded px-1.5 text-[11px]"
-              style={{ background: C.panel, color: C.dim, border: '1px solid ' + C.border, cursor: 'not-allowed' }}
-              title="匹配源骨骼当前值（PRO，暂未实现）"
-            >匹配</span>
-            <ProBadge C={C} />
+          <span
+            role="button"
+            className="ml-auto flex items-center gap-1 shrink-0 text-[12px]"
+            style={{ color: C.text, cursor: 'pointer' }}
+            title="链接滑块：勾选后旋转 / 移动(X,Y) / 缩放(X,Y) / 倾斜混合值一起变动"
+            onClick={(e) => { e.stopPropagation(); setLinkMix(!linkMix); }}
+          >
+            <span className="w-3 text-center text-[13px]" style={{ color: linkMix ? '#ffffff' : 'transparent' }}>✓</span>
+            链接滑块
           </span>)}
         {mixOpen && (
           <div className="flex flex-col gap-1.5">
-            {/* signed：Spine 允许负 Mix（反向跟随），负值必须能输入 */}
-            {renderNumRow('rotateMix', '🔄', '旋转', 0, 1, 0.01, { pct: true, signed: true })}
-            {renderNumRow('translateMix', '↔', '平移', 0, 1, 0.01, { pct: true, signed: true })}
-            {renderNumRow('scaleMix', '📐', '缩放', 0, 1, 0.01, { pct: true, signed: true })}
-            {renderNumRow('shearMix', '➗', '倾斜', 0, 1, 0.01, { pct: true, signed: true })}
+            {/* signed：Spine 允许负 Mix（反向跟随）；mix：参与链接滑块联动 */}
+            {rowEl(<TcPropIcon kind="rotate" />, '旋转',
+              numCell('rotateMix', 0, 1, 0.01, { pct: true, signed: true, mix: true }))}
+            {rowEl(<TcPropIcon kind="move" />, '移动', <>
+              {numCell('translateMixX', 0, 1, 0.01, { pct: true, signed: true, mix: true })}
+              {numCell('translateMixY', 0, 1, 0.01, { pct: true, signed: true, mix: true })}
+            </>)}
+            {rowEl(<TcPropIcon kind="scale" />, '缩放', <>
+              {numCell('scaleMixX', 0, 1, 0.01, { pct: true, signed: true, mix: true })}
+              {numCell('scaleMixY', 0, 1, 0.01, { pct: true, signed: true, mix: true })}
+            </>)}
+            {rowEl(<TcPropIcon kind="shear" />, '倾斜 Y',
+              numCell('shearMix', 0, 1, 0.01, { pct: true, signed: true, mix: true }))}
           </div>
         )}
 
-        {/* ── 属性 Properties（可折叠；PRO + 匹配 占位） ── */}
-        {foldBtn(propsOpen, () => setPropsOpen(!propsOpen), '属性',
-          <span className="ml-auto flex items-center gap-1 shrink-0">
-            <span
-              className="rounded px-1.5 text-[11px]"
-              style={{ background: C.panel, color: C.dim, border: '1px solid ' + C.border, cursor: 'not-allowed' }}
-              title="匹配源骨骼当前值（PRO，暂未实现）"
-            >匹配</span>
-            <ProBadge C={C} />
-          </span>)}
+        {/* ── 属性 Properties（可折叠；6 行彩色双手柄范围条 + 选项行） ── */}
+        {foldBtn(propsOpen, () => setPropsOpen(!propsOpen), '属性', matchBtn('props'))}
         {propsOpen && (
           <div className="flex flex-col gap-1.5">
-            {renderClampRow('minRotate', 'maxRotate', '🔄', '旋转', '#4FB8F8', true)}
-            {renderClampRow('minTranslateX', 'maxTranslateX', '↔', '平移X', '#4FB8F8', false)}
-            {renderClampRow('minTranslateY', 'maxTranslateY', '↕', '平移Y', '#4FB8F8', false)}
-            {renderClampRow('minScaleX', 'maxScaleX', '🟥', '缩放X', '#E61E1E', false)}
-            {renderClampRow('minScaleY', 'maxScaleY', '🟥', '缩放Y', '#E61E1E', false)}
-            {renderClampRow('minShearY', 'maxShearY', '📐', '倾斜Y', '#F0A020', true)}
-            {/* 选项行：☐本地 ☐相加 ☐钳制 */}
-            <div className="flex items-center gap-3 pt-0.5">
-              <label className="flex items-center gap-1 text-[12px]" style={{ color: C.text, cursor: 'pointer' }}>
-                <input type="checkbox" checked={selected.local} onChange={(e) => onFlag(selected.id, 'local', e.target.checked)} />
-                本地
-              </label>
-              <label className="flex items-center gap-1 text-[12px]" style={{ color: C.text, cursor: 'pointer' }}>
-                <input type="checkbox" checked={selected.additive} onChange={(e) => onFlag(selected.id, 'additive', e.target.checked)} />
-                相加
-              </label>
-              <label className="flex items-center gap-1 text-[12px]" style={{ color: C.text, cursor: 'pointer' }}>
-                <input type="checkbox" checked={selected.clamped} onChange={(e) => onFlag(selected.id, 'clamped', e.target.checked)} />
-                钳制
-              </label>
+            {renderClampRow('rotate', '旋转', 'minRotate', 'maxRotate', 0, 100, '#7AC943')}
+            {renderClampRow('moveX', '平移X', 'minTranslateX', 'maxTranslateX', 0, 100, '#4FB8F8')}
+            {renderClampRow('moveY', '平移Y', 'minTranslateY', 'maxTranslateY', 0, 100, '#4FB8F8')}
+            {renderClampRow('scaleX', '缩放X', 'minScaleX', 'maxScaleX', 0, 1, '#E61E1E')}
+            {renderClampRow('scaleY', '缩放Y', 'minScaleY', 'maxScaleY', 0, 1, '#E61E1E')}
+            {renderClampRow('shear', '倾斜 Y', 'minShearY', 'maxShearY', 0, 100, '#F0A020')}
+            {/* 选项行：选项 本地 / 相加 / 钳制 */}
+            <div
+              className="flex items-center gap-3 mt-0.5 rounded-sm px-1.5 py-1"
+              style={{ background: C.panel, borderTop: '1px solid ' + C.border }}
+            >
+              <span className="shrink-0 flex items-center gap-1 text-[12px]" style={{ color: C.text }}>
+                <svg width="13" height="13" viewBox="0 0 16 16">
+                  <rect x="1.6" y="1.6" width="12.8" height="12.8" rx="2" fill="none" stroke={C.dim} strokeWidth="1.4" />
+                  <path d="M4.6 5.4h6.8M4.6 8h6.8M4.6 10.6h4" stroke={C.dim} strokeWidth="1.3" strokeLinecap="round" />
+                </svg>
+                选项
+              </span>
+              {optCheck('local', '本地')}
+              {optCheck('additive', '相加')}
+              {optCheck('clamped', '钳制')}
             </div>
           </div>
         )}
 
-        {/* ── 底部动作栏：+ 新建…[PRO] / 皮肤…[PRO 禁用] / ◄► 占位 ── */}
+        {/* ── 底部动作栏：+ 新建… / 皮肤…（禁用） / ◄► 占位 ── */}
         <div className="flex items-center gap-1.5 pt-1.5 border-t" style={{ borderColor: C.border }}>
           <button
             className="flex-1 rounded px-2 py-1 text-[12px] shrink-0"
             style={{ background: C.panel, color: C.text, border: '1px solid ' + C.border, cursor: 'pointer' }}
             onClick={() => usePixiBonesStore.getState().addTransformConstraint(selected.boneId, selected.sourceBoneId)}
             title="以当前 源→目标 新建一条变换约束"
-          >+ 新建<ProBadge C={C} /></button>
+          >+ 新建</button>
           <button
             className="rounded px-2 py-1 text-[12px] shrink-0 opacity-60"
             style={{ background: C.panel, color: C.dim, border: '1px solid ' + C.border, cursor: 'not-allowed' }}
             disabled
-            title="皮肤（PRO 功能，暂不支持）"
-          >皮肤…<ProBadge C={C} /></button>
+            title="皮肤（暂不支持）"
+          >皮肤…</button>
           <button
             className="w-7 h-6 shrink-0 flex items-center justify-center rounded text-[14px]"
             style={{ background: 'transparent', border: '1px solid ' + C.border, color: C.dim, cursor: 'pointer' }}

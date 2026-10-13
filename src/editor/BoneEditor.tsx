@@ -140,8 +140,10 @@ function applyTransformConstraintsToSkeleton(
       source,
       target,
       rotateMix: c.rotateMix,
-      translateMix: c.translateMix,
-      scaleMix: c.scaleMix,
+      translateMixX: c.translateMixX,
+      translateMixY: c.translateMixY,
+      scaleMixX: c.scaleMixX,
+      scaleMixY: c.scaleMixY,
       shearMix: c.shearMix,
       offsetX: c.offsetX,
       offsetY: c.offsetY,
@@ -255,9 +257,30 @@ export function BoneEditor() {
           moveZone?: 'green' | 'red' | 'center';
           /** 约束轴的世界角度（弧度），仅 moveZone 非 center 时有意义 */
           axisAngle?: number;
+          /** 拖动开始时本骨的世界位置（用于反推 local：worldTarget = startBoneWorld + Δ）。 */
+          startBoneWorldX: number;
+          startBoneWorldY: number;
+          /** 拖动开始时父级世界矩阵的 2×2 线性部分 + 平移（parentMat = null → 根骨）。 */
+          isRoot: boolean;
+          pma: number; pmb: number; pmc: number; pmd: number;
+          pmtx: number; pmty: number;
         }
       | { kind: 'rotate'; boneId: string; startRot: number; startScreen: { x: number; y: number } }
-      | { kind: 'root-move'; boneId: string; startLocal: { x: number; y: number }; startScreen: { x: number; y: number }; moveZone?: 'green' | 'red' | 'center'; axisAngle?: number }
+      | {
+          kind: 'root-move';
+          boneId: string;
+          startLocal: { x: number; y: number };
+          startScreen: { x: number; y: number };
+          moveZone?: 'green' | 'red' | 'center';
+          axisAngle?: number;
+          /** 拖动开始时本骨的世界位置（用于反推 local：worldTarget = startBoneWorld + Δ）。 */
+          startBoneWorldX: number;
+          startBoneWorldY: number;
+          /** 拖动开始时父级世界矩阵的 2×2 线性部分 + 平移（parentMat = null → 根骨）。 */
+          isRoot: boolean;
+          pma: number; pmb: number; pmc: number; pmd: number;
+          pmtx: number; pmty: number;
+        }
       | { kind: 'pan'; startScreen: { x: number; y: number }; startPan: { x: number; y: number } }
       | { kind: 'create-from'; parentId: string; startWorld: { x: number; y: number }; startScreen: { x: number; y: number }; preview: Gfx; fromBone: boolean; fromCmdSelect?: boolean }
       | {
@@ -3234,11 +3257,25 @@ export function BoneEditor() {
                     originScreen: { x: jt.x, y: jt.y },
                   };
                 } else {
+                  // ★ 抓取父级世界矩阵 + 本骨世界位置（与 'tip' 同源逻辑，根骨直接 world=local）
+                  const startBoneR = boneById.get(node.id);
+                  const startParentR = startBoneR?.parent ?? null;
+                  const parentMatR = startParentR ? startParentR.worldMatrix.elements : null;
+                  const wmR = startBoneR ? startBoneR.worldMatrix.elements : null;
                   dragState = {
                     kind: 'root-move',
                     boneId: node.id,
                     startLocal: { x: fresh.x, y: fresh.y },
                     startScreen: { x: ev.global.x, y: ev.global.y },
+                    startBoneWorldX: wmR ? wmR[6] : 0,
+                    startBoneWorldY: wmR ? wmR[7] : 0,
+                    isRoot: parentMatR === null,
+                    pma: parentMatR ? parentMatR[0] : 1,
+                    pmb: parentMatR ? parentMatR[1] : 0,
+                    pmc: parentMatR ? parentMatR[3] : 0,
+                    pmd: parentMatR ? parentMatR[4] : 1,
+                    pmtx: parentMatR ? parentMatR[6] : 0,
+                    pmty: parentMatR ? parentMatR[7] : 0,
                   };
                 }
                 return;
@@ -3340,11 +3377,25 @@ export function BoneEditor() {
                 // 拖动开始前先快照一次 history（撤销能回到拖之前的位置）
                 // pointermove 期间直接改 state 不入栈，避免一次拖出 N 条 history
                 store.pushHistory();
+                // 抓取拖动开始时的父级世界矩阵 + 本骨世界位置（与 moveHandle 同源逻辑）
+                const startBone2 = boneById.get(node.id);
+                const startParent2 = startBone2?.parent ?? null;
+                const parentMat2 = startParent2 ? startParent2.worldMatrix.elements : null;
+                const wm2 = startBone2 ? startBone2.worldMatrix.elements : null;
                 dragState = {
                   kind: 'tip',
                   boneId: node.id,
                   startLocal: { x: fresh.x, y: fresh.y },
                   startScreen: { x: ev.global.x, y: ev.global.y },
+                  startBoneWorldX: wm2 ? wm2[6] : 0,
+                  startBoneWorldY: wm2 ? wm2[7] : 0,
+                  isRoot: parentMat2 === null,
+                  pma: parentMat2 ? parentMat2[0] : 1,
+                  pmb: parentMat2 ? parentMat2[1] : 0,
+                  pmc: parentMat2 ? parentMat2[3] : 0,
+                  pmd: parentMat2 ? parentMat2[4] : 1,
+                  pmtx: parentMat2 ? parentMat2[6] : 0,
+                  pmty: parentMat2 ? parentMat2[7] : 0,
                 };
               }
             });
@@ -3391,6 +3442,11 @@ export function BoneEditor() {
                 store.pushHistory();
                 const { lx, ly } = moveLocalOf(ev.global.x, ev.global.y);
                 const zone = detectMoveZone(lx, ly);
+                // ★ 抓取父级世界矩阵 + 本骨世界位置（与 'tip' 同源，零长子骨也能像普通子骨一样自由拖）
+                const startBoneRM = boneById.get(node.id);
+                const startParentRM = startBoneRM?.parent ?? null;
+                const parentMatRM = startParentRM ? startParentRM.worldMatrix.elements : null;
+                const wmRM = startBoneRM ? startBoneRM.worldMatrix.elements : null;
                 dragState = {
                   kind: 'root-move',
                   boneId: node.id,
@@ -3399,6 +3455,15 @@ export function BoneEditor() {
                   moveZone: zone,
                   // 红箭头 = 沿骨方向（手柄 rotation）；绿箭头 = 垂直骨方向（+90°）
                   axisAngle: zone === 'green' ? move.rotation + Math.PI / 2 : move.rotation,
+                  startBoneWorldX: wmRM ? wmRM[6] : 0,
+                  startBoneWorldY: wmRM ? wmRM[7] : 0,
+                  isRoot: parentMatRM === null,
+                  pma: parentMatRM ? parentMatRM[0] : 1,
+                  pmb: parentMatRM ? parentMatRM[1] : 0,
+                  pmc: parentMatRM ? parentMatRM[3] : 0,
+                  pmd: parentMatRM ? parentMatRM[4] : 1,
+                  pmtx: parentMatRM ? parentMatRM[6] : 0,
+                  pmty: parentMatRM ? parentMatRM[7] : 0,
                 };
               });
               ikLayer.addChild(move);
@@ -3629,6 +3694,20 @@ export function BoneEditor() {
               const dx = ev.global.x - mh.x;
               const dy = ev.global.y - mh.y;
               const zone = detectMoveZone(dx * c - dy * s, dx * s + dy * c);
+              // ★ 抓取拖动开始时「父骨骼的世界矩阵」+「本骨当前世界位置」：
+              //   拖动期间直接用 worldΔ 推进 B 的世界位置，再反变换回 local 写回 store。
+              //   这样父骨的 rotation / scale / 祖父骨旋转 全部由矩阵承担，
+              //   不会出现「B 移动时受 A 影响」（旧实现只用 A.rotation 三角旋转反推，
+              //   父链有非单位缩放 / 父级有父级 时会算错 → B 拖动视觉上抖 / 偏移）。
+              const startBone = boneById.get(node.id);
+              const startParent = startBone?.parent ?? null;
+              const parentMat = startParent ? startParent.worldMatrix.elements : null;
+              let startBoneWorldX = 0, startBoneWorldY = 0;
+              if (startBone) {
+                const wm = startBone.worldMatrix.elements;
+                startBoneWorldX = wm[6];
+                startBoneWorldY = wm[7];
+              }
               dragState = {
                 kind: 'tip',
                 boneId: node.id,
@@ -3637,6 +3716,18 @@ export function BoneEditor() {
                 moveZone: zone,
                 // 红箭头 = 沿骨方向（手柄 rotation）；绿箭头 = 垂直骨方向（+90°）
                 axisAngle: zone === 'green' ? mh.rotation + Math.PI / 2 : mh.rotation,
+                // 「是否根骨」= 父骨骼矩阵不存在（根骨没有父级）；根骨直接 world→local 1:1。
+                isRoot: parentMat === null,
+                // 父级世界矩阵的 2×2 部分 + tx,ty（解 linear 方程用）
+                pma: parentMat ? parentMat[0] : 1,
+                pmb: parentMat ? parentMat[1] : 0,
+                pmc: parentMat ? parentMat[3] : 0,
+                pmd: parentMat ? parentMat[4] : 1,
+                pmtx: parentMat ? parentMat[6] : 0,
+                pmty: parentMat ? parentMat[7] : 0,
+                // B 拖动开始时的世界位置
+                startBoneWorldX,
+                startBoneWorldY,
               };
             });
             ikLayer.addChild(moveHandle);
@@ -3864,20 +3955,33 @@ export function BoneEditor() {
             dxWorld = proj * ax;
             dyWorld = proj * ay;
           }
-          // 世界 delta → 父骨骼 local delta（反旋转父骨骼的 rotation）
-          const dragNode = findBone(st.bones, dragState.boneId);
-          const parentRotDeg = dragNode && dragNode.parentId !== null
-            ? (findBone(st.bones, dragNode.parentId)?.rotation ?? 0)
-            : 0;
-          const parentRotRad = parentRotDeg * (Math.PI / 180);
-          const cos = Math.cos(-parentRotRad);
-          const sin = Math.sin(-parentRotRad);
-          const localDx = dxWorld * cos - dyWorld * sin;
-          const localDy = dxWorld * sin + dyWorld * cos;
+          // ★ 用拖动开始时抓取的「父骨骼世界矩阵」反推 local：
+          //   worldTarget = startBoneWorld + (dxWorld, dyWorld)
+          //   localTarget = parentWorld⁻¹ × (worldTarget - parentWorld.tx)
+          //   这样无论父链是否有旋转 / 缩放 / 祖父骨旋转，B 的世界位置都跟手光标走，
+          //   与 Spine 行为一致（不再「B 移动时受 A 影响」）。
+          // 世界 delta → 父骨骼 local delta（用抓取的父级世界矩阵反推，与 Spine 一致）
+          const worldTargetX = dragState.startBoneWorldX + dxWorld;
+          const worldTargetY = dragState.startBoneWorldY + dyWorld;
+          let newX: number, newY: number;
+          if (dragState.isRoot) {
+            newX = worldTargetX;
+            newY = worldTargetY;
+          } else {
+            const det = dragState.pma * dragState.pmd - dragState.pmb * dragState.pmc;
+            if (Math.abs(det) < 1e-9) {
+              newX = dragState.startLocal.x + dxWorld;
+              newY = dragState.startLocal.y + dyWorld;
+            } else {
+              const inv = 1 / det;
+              const rx = worldTargetX - dragState.pmtx;
+              const ry = worldTargetY - dragState.pmty;
+              newX = (dragState.pmd * rx - dragState.pmc * ry) * inv;
+              newY = (-dragState.pmb * rx + dragState.pma * ry) * inv;
+            }
+          }
           // 拖动期间直接写 state，不走 moveBone（moveBone 会入栈 history，导致一次拖出 N 条）
           const boneId = dragState.boneId;
-          const newX = dragState.startLocal.x + localDx;
-          const newY = dragState.startLocal.y + localDy;
           usePixiBonesStore.setState((s) => ({
             bones: s.bones.map((n) => (n.id === boneId ? { ...n, x: newX, y: newY } : n)),
           }));
@@ -3905,7 +4009,9 @@ export function BoneEditor() {
             bones: s.bones.map((n) => (n.id === boneId ? { ...n, rotation: newRot } : n)),
           }));
         } else if (dragState.kind === 'root-move') {
-          // 根骨移动：改变自身 local (x,y)，整棵骨骼树跟着走
+          // 根骨 / 零长度骨移动：拖动 B 在世界空间走，再用父级世界矩阵反推 local 写回。
+          //   旧实现只用 dxScreen/sx 直接加到 local.x/y → 父链一旦有旋转/缩放/祖父骨旋转
+          //   就完全错位（用户反馈：零长子骨拖动时「受父骨影响」）。
           const sx = root.scale.x;
           const sy = root.scale.y;
           let dxScreen = ev.global.x - dragState.startScreen.x;
@@ -3920,8 +4026,30 @@ export function BoneEditor() {
             dxScreen = proj * ax;
             dyScreen = proj * ay;
           }
-          const newX = dragState.startLocal.x + (sx !== 0 ? dxScreen / sx : 0);
-          const newY = dragState.startLocal.y + (sy !== 0 ? dyScreen / sy : 0);
+          const dxWorld = sx !== 0 ? dxScreen / sx : 0;
+          const dyWorld = sy !== 0 ? dyScreen / sy : 0;
+          let newX: number, newY: number;
+          if (dragState.isRoot) {
+            // 根骨：local = world（无父级变换）
+            newX = dragState.startLocal.x + dxWorld;
+            newY = dragState.startLocal.y + dyWorld;
+          } else {
+            // 子骨：worldTarget = startBoneWorld + (dxWorld, dyWorld)，
+            //      然后 parentWorld⁻¹ × (worldTarget − parent.tx) 反推 local。
+            const worldTargetX = dragState.startBoneWorldX + dxWorld;
+            const worldTargetY = dragState.startBoneWorldY + dyWorld;
+            const det = dragState.pma * dragState.pmd - dragState.pmb * dragState.pmc;
+            if (Math.abs(det) < 1e-9) {
+              newX = dragState.startLocal.x + dxWorld;
+              newY = dragState.startLocal.y + dyWorld;
+            } else {
+              const inv = 1 / det;
+              const rx = worldTargetX - dragState.pmtx;
+              const ry = worldTargetY - dragState.pmty;
+              newX = (dragState.pmd * rx - dragState.pmc * ry) * inv;
+              newY = (-dragState.pmb * rx + dragState.pma * ry) * inv;
+            }
+          }
           const boneId = dragState.boneId;
           usePixiBonesStore.setState((s) => ({
             bones: s.bones.map((n) => (n.id === boneId ? { ...n, x: newX, y: newY } : n)),

@@ -573,11 +573,11 @@ function PathConstraintPickOverlay() {
 }
 
 // =================================================================================
-//  变换约束创建流程（仿 Spine）
-//    1. 选中骨（= 目标）→ 属性面板「新建」→「约束 → 变换约束」→ 进入拾取模式
-//       （tcPickBoneId = 目标骨 id）
-//    2. 屏幕上方显示横幅「新建变换约束：选择源骨」；鼠标旁显示 PICK
-//    3. 点击画布骨骼 / 层级树骨行 = 拾取源骨（tcPickSourceBoneId 非 null）→ 弹命名对话框
+//  变换约束创建流程（用户工作流：先选=源，后拾=目标）
+//    1. 选中骨（= 源骨）→ 属性面板「新建」→「约束 → 变换约束」→ 进入拾取模式
+//       （tcPickBoneId = 源骨 id；banner 提示「选择目标骨」）
+//    2. 屏幕上方显示横幅「新建变换约束：选择目标骨」；鼠标旁显示 PICK
+//    3. 点击画布骨骼 / 层级树骨行 = 拾取目标骨（tcPickSourceBoneId 非 null）→ 弹命名对话框
 //    4. 确认 → addTransformConstraint(目标, 源, name) → 清拾取态 → 选中新约束
 //    默认名 = `${源骨名}-to-${目标骨名}`（store 侧兜底）
 // =================================================================================
@@ -597,8 +597,12 @@ function TcPickOverlay() {
 
   if (tcPickSourceBoneId) {
     // 已拾取源骨 → 弹命名对话框
-    const targetName = bones.find((b) => b.id === tcPickBoneId)?.name ?? '';
-    const sourceName = bones.find((b) => b.id === tcPickSourceBoneId)?.name ?? '';
+    // ★ 用户工作流：先选中的骨 = 源骨（提供变换），后拾取的骨 = 目标骨（被约束）。
+    //   store 字段名 tcPickBoneId = 源骨，tcPickSourceBoneId = 目标骨。
+    //   addTransformConstraint 签名是 (boneId, sourceBoneId, name)，
+    //   即 (目标, 源, 名字)，所以这里传参顺序是 (tcPickSourceBoneId, tcPickBoneId)。
+    const sourceName = bones.find((b) => b.id === tcPickBoneId)?.name ?? '';
+    const targetName = bones.find((b) => b.id === tcPickSourceBoneId)?.name ?? '';
     const defaultName = `${sourceName}-to-${targetName}`;
     return (
       <PromptDialog
@@ -613,7 +617,8 @@ function TcPickOverlay() {
         onConfirm={(value) => {
           const s = usePixiBonesStore.getState();
           const name = value.trim() || defaultName;
-          const id = s.addTransformConstraint(s.tcPickBoneId!, s.tcPickSourceBoneId!, name);
+          // (目标骨, 源骨, 名字) — store addTransformConstraint 第一参数是被约束的 boneId
+          const id = s.addTransformConstraint(s.tcPickSourceBoneId!, s.tcPickBoneId!, name);
           s.cancelTransformConstraintPick();
           if (id) s.selectConstraint(id);
         }}
@@ -646,7 +651,7 @@ function TcPickOverlay() {
             boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
           }}
         >
-          新建变换约束：选择源骨
+          新建变换约束：选择目标骨
         </div>
       </div>
       {/* 鼠标旁 PICK 文字（对齐 Spine：出现在指针左侧） */}
